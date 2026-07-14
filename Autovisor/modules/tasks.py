@@ -3,9 +3,7 @@ import json
 import os
 import random
 import re
-import traceback
-import http.client
-from urllib.parse import urlsplit
+import http.client  # 兼容外部通过 tasks.http.client 注入连接实现
 
 from playwright.async_api import Page
 from pygetwindow import Win32Window
@@ -15,33 +13,36 @@ from modules.utils import get_video_attr, display_window, get_browser_window, hi
 from playwright._impl._errors import TargetClosedError
 from modules.logger import Logger
 from modules.floating_widget import inject_widget, update_widget_question
+from modules import question_bank_client as _question_bank_client
+from modules.question_bank_client import (
+    _build_model_query_prompt,
+    _detect_question_kind,
+    _extract_answer_from_json,
+    _extract_last_balanced_json,
+    _is_model_error,
+    _match_option,
+    _normalize_qb,
+)
 
 logger = Logger()
+QB_URL = os.environ.get("QB_URL", "http://127.0.0.1:8083/query")
+QB_TIMEOUT = 15
 
 
-def _extract_last_balanced_json(text: str):
-    """从文本末尾提取最后一个平衡的 JSON 对象片段"""
-    bytes_text = text.encode('utf-8')
-    end = None
-    depth = 0
-    i = len(bytes_text)
-    while i > 0:
-        i -= 1
-        b = bytes_text[i]
-        if end is None:
-            if b == ord('}'):
-                end = i
-                depth = 1
-                continue
-        else:
-            if b == ord('}'):
-                depth += 1
-            elif b == ord('{'):
-                depth -= 1
-                if depth == 0:
-                    start = i
-                    return text[start:end+1]
-    return None
+def _question_bank_endpoint():
+    return _question_bank_client._question_bank_endpoint(QB_URL)
+
+
+def query_question_bank(title, options_text=None, query_type=None):
+    """兼容旧入口，并把运行时覆盖的题库地址传给独立客户端。"""
+    return _question_bank_client.query_question_bank(
+        title,
+        options_text,
+        query_type,
+        qb_url=QB_URL,
+        timeout=QB_TIMEOUT,
+        logger_instance=logger,
+    )
 
 
 def clean_html_tags(text):
@@ -217,418 +218,9 @@ async def status_ocr_stream(
         except Exception:
             continue
 
-# ============================================================
-# 题库查询
-# ============================================================
-
-QB_URL = os.environ.get("QB_URL", "http://127.0.0.1:8083/query")
-QB_TIMEOUT = 15
+# 题库查询实现已拆分至 modules.question_bank_client；本模块顶部保留兼容入口。
 
 
-def _question_bank_endpoint():
-    """解析题库地址，不在模块导入阶段发起网络连接。"""
-    endpoint = urlsplit(QB_URL)
-    if endpoint.scheme not in {"http", "https"} or not endpoint.hostname:
-        raise ValueError(f"无效题库URL: {QB_URL}")
-    port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
-    path = endpoint.path or "/query"
-    if endpoint.query:
-        path = f"{path}?{endpoint.query}"
-    connection_class = (
-        http.client.HTTPSConnection if endpoint.scheme == "https" else http.client.HTTPConnection
-    )
-    return connection_class, endpoint.hostname, port, path
-
-
-def _normalize_qb(text):
-    """去除标点和多余空白，统一小写"""
-    if not text:
-        return ""
-    text = re.sub(r'[^一-鿿\w\s]', '', text)
-    text = re.sub(r'\s+', '', text)
-    return text.lower()
-
-
-def _match_option(answer_text, options):
-    """将题库答案匹配到选项文本，返回匹配到的选项索引列表"""
-    if not answer_text or not options:
-        return []
-
-    # 先尝试 JSON 解析
-    ans_parsed = None
-    try:
-        parsed = json.loads(answer_text)
-        if isinstance(parsed, dict):
-            ans_parsed = parsed.get("answer", answer_text)
-    except (json.JSONDecodeError, Exception):
-        pass
-    
-    if ans_parsed:
-        answer_text = str(ans_parsed)
-    
-    # 分割多选答案 (用 ### 分隔)
-    parts = [p.strip() for p in answer_text.split("###") if p.strip()]
-    if not parts:
-        parts = [answer_text.strip()]
-    
-    # 常见判断题答案标准化
-    judge_map = {"正确": "对", "错误": "错", "是": "对", "否": "错", "true": "对", "false": "错",
-                 "yes": "对", "no": "错", "right": "对", "wrong": "错"}
-
-    matched_indices = []
-    for part in parts:
-        if not part:
-            continue
-        
-        # 判断题特殊处理
-        part_mapped = judge_map.get(part.lower(), part)
-        
-        part_norm = _normalize_qb(part_mapped)
-        if not part_norm:
-            continue
-
-        best_idx = -1
-        best_score = 0
-        for i, opt in enumerate(options):
-            if i in matched_indices:
-                continue
-            opt_norm = _normalize_qb(opt)
-            if not opt_norm:
-                continue
-            # 选项含答案文本 或 答案含选项文本
-            if part_norm in opt_norm:
-                score = len(part_norm) / max(len(opt_norm), 1)
-            elif opt_norm in part_norm:
-                score = len(opt_norm) / max(len(part_norm), 1)
-            else:
-                continue
-            if score > best_score:
-                best_score = score
-                best_idx = i
-                if score > 0.95:
-                    break
-
-        if best_idx >= 0:
-            matched_indices.append(best_idx)
-
-    # 如果按文本匹配不到，尝试匹配 ABCD/123 等选项字母
-    if not matched_indices:
-        for part in parts:
-            part_upper = part.strip().upper()
-            if len(part_upper) <= 2:
-                for i, opt in enumerate(options):
-                    if i in matched_indices:
-                        continue
-                    opt_stripped = opt.strip()
-                    # 选项格式 "A.xxx" "A、xxx" "A)" "A " "(A)"
-                    for prefix in [opt_stripped[0], opt_stripped[:2]]:
-                        cleaned = prefix.upper().rstrip(".、)） ")
-                        if cleaned == part_upper:
-                            matched_indices.append(i)
-                            break
-                    if i in matched_indices:
-                        break
-
-    return matched_indices
-
-
-def _detect_question_kind(query_type: str) -> str:
-    """检测题目类型（参考ZError-2.2.4的实现）"""
-    if not query_type:
-        return ""
-    
-    trimmed = query_type.strip().lower()
-    
-    if "single" in trimmed or "单选" in query_type or "单项选择" in query_type:
-        return "single"
-    elif "multiple" in trimmed or "多选" in query_type or "多项选择" in query_type:
-        return "multiple"
-    elif "judgement" in trimmed or "judgment" in trimmed or "判断" in query_type:
-        return "judgement"
-    elif "completion" in trimmed or "填空" in query_type or "简答" in query_type or "名词解释" in query_type:
-        return "completion"
-    return ""
-
-
-def _build_model_query_prompt(title: str, options_text: str = None, query_type: str = None) -> str:
-    """构建AI查询提示词（参考ZError-2.2.4的build_model_query_prompt）"""
-    q = "请先分析我给出的问题，给出简要的思考过程，如果问题比较复杂，给出详细思考过程。最后将答案用JSON的格式回答我，格式{\"answer\":\"答案\"}。"
-    q += "如果是选择题，请返回对应选项的内容，不要返回选项字母或选项序号。"
-    
-    kind = _detect_question_kind(query_type)
-    if kind:
-        kind_mapping = {
-            "single": "单选",
-            "multiple": "多选", 
-            "judgement": "判断",
-            "completion": "填空"
-        }
-        q += f"题目类型：{kind_mapping.get(kind, kind)}题。"
-        
-        if kind == "single":
-            q += "这是单选题，请返回正确选项的内容，不要返回选项字母、选项序号或无关说明。"
-        elif kind == "multiple":
-            q += "这是多选题，请返回所有正确选项的内容，不要返回选项字母、选项序号。如果有多个正确选项，请使用\"###\"连接每个选项内容。"
-        elif kind == "judgement":
-            q += "这是判断题，请只回答\"正确\"或\"错误\"，不要添加任何其他内容。"
-        elif kind == "completion":
-            q += "这是一道填空题或者简答题，也有可能是名词解释。如果有多个空，请将每个空的答案使用\"###\"连接。"
-    
-    q += f"题目：{title}"
-    
-    if options_text and options_text.strip():
-        q += f"，选项：{options_text.strip()}"
-    
-    return q
-
-
-def _extract_answer_from_json(response_text: str) -> str:
-    """从AI响应中提取答案（完全兼容ZError-2.2.4格式）
-    
-    提取策略（按优先级）：
-    1. 去除markdown代码块标记（```json 或 ```）
-    2. 直接解析整个文本为JSON
-    3. 从末尾提取最后一个平衡的JSON对象片段
-    4. 使用正则在混合文本中捕获answer字段
-    5. 回退：返回原始内容
-    
-    支持处理拼写错误：answer 和 anwser
-    """
-    if not response_text:
-        return ""
-    
-    # 1) 去除可能的 markdown 代码块标记
-    cleaned = response_text.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
-    elif cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
-    cleaned = cleaned.strip()
-    
-    # 提取答案的内部工具函数
-    def extract_field_from_value(parsed):
-        if isinstance(parsed, dict):
-            if "answer" in parsed and parsed["answer"]:
-                return str(parsed["answer"])
-            if "anwser" in parsed and parsed["anwser"]:  # 处理拼写错误
-                return str(parsed["anwser"])
-        return None
-    
-    # 2) 首先尝试直接解析整个文本为 JSON
-    try:
-        parsed = json.loads(cleaned)
-        ans = extract_field_from_value(parsed)
-        if ans:
-            return ans
-    except (json.JSONDecodeError, Exception):
-        pass
-    
-    # 3) 失败则从末尾尝试提取最后一个平衡的 JSON 对象片段
-    json_str = _extract_last_balanced_json(cleaned)
-    if json_str:
-        try:
-            parsed = json.loads(json_str)
-            ans = extract_field_from_value(parsed)
-            if ans:
-                return ans
-        except (json.JSONDecodeError, Exception):
-            pass
-    
-    # 4) 使用正则在混合文本中直接捕获 answer 字段
-    pattern = r'(?s)\{\s*"(?:answer|anwser)"\s*:\s*"(.*?)"[\s\S]*?\}'
-    match = re.search(pattern, cleaned)
-    if match:
-        ans = match.group(1)
-        return ans
-    
-    # 5) 回退：返回原始内容
-    return response_text.strip()
-
-
-def _is_model_error(response_text: str) -> str:
-    """检测AI响应是否包含错误（参考ZError-2.2.4的实现）
-    
-    返回值：
-    - 空字符串：无错误
-    - 非空字符串：错误信息
-    """
-    if not response_text:
-        return ""
-    
-    # 去除可能的 markdown 代码块标记
-    cleaned = response_text.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
-    elif cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
-    cleaned = cleaned.strip()
-    
-    # 检查错误前缀
-    if cleaned.startswith("错误:") or cleaned.startswith("Error:"):
-        return cleaned
-    
-    # 检查JSON格式的错误
-    if "\"error\"" in cleaned:
-        try:
-            parsed = json.loads(cleaned)
-            if isinstance(parsed, dict) and "error" in parsed:
-                error = parsed["error"]
-                if isinstance(error, dict) and "message" in error:
-                    return str(error["message"])
-                return str(error)
-        except (json.JSONDecodeError, Exception):
-            # 尝试从末尾提取JSON
-            json_str = _extract_last_balanced_json(cleaned)
-            if json_str:
-                try:
-                    parsed = json.loads(json_str)
-                    if isinstance(parsed, dict) and "error" in parsed:
-                        error = parsed["error"]
-                        if isinstance(error, dict) and "message" in error:
-                            return str(error["message"])
-                        return str(error)
-                except (json.JSONDecodeError, Exception):
-                    pass
-    
-    return ""
-
-
-def query_question_bank(title, options_text=None, query_type=None):
-    """调用题库服务器查询答案，返回 (answer_text, is_ai) 或 (None, False)
-    
-    兼容多种响应格式:
-    - ZError-2.2.4: {"code": 1, "data": [{"question": "...", "answer": "...", "is_ai": true}]}
-    - ZError-2.2.4错误: {"code": 0, "message": "错误信息"} 或 HTTP状态码500/408
-    - 题库服务器: {"success": true, "data": [{"answer": "...", "is_ai": false}]}
-    - 其他自定义格式
-    
-    参考ZError-2.2.4的API设计：
-    - 先查询数据库，未找到则调用AI模型
-    - AI响应格式为JSON: {"answer":"答案"}
-    - 多选题答案用"###"分隔
-    - 检测到URL时发送视觉分析请求（带__URL_QUESTION__前缀）
-    - 超时处理：普通题目30秒，URL题目120秒
-    """
-    params = {"title": title}
-    if options_text:
-        params["options"] = options_text
-    if query_type:
-        params["query_type"] = query_type
-    body = json.dumps(params).encode("utf-8")
-    connection_class, host, port, query_path = _question_bank_endpoint()
-    
-    max_retries = 5
-    for attempt in range(max_retries):
-        conn = None
-        resp = None
-        try:
-            conn = connection_class(host, port, timeout=QB_TIMEOUT)
-            conn.request(
-                "POST",
-                query_path,
-                body=body,
-                headers={"Content-Type": "application/json", "Connection": "close"},
-            )
-            resp = conn.getresponse()
-            status_code = resp.status
-            
-            # 检查HTTP状态码
-            if status_code >= 400:
-                logger.warn(f"题库返回错误状态码: {status_code}")
-                if attempt < max_retries - 1:
-                    import time
-                    wait = 2 ** attempt
-                    logger.warn(f"重试({attempt+1}/{max_retries}, 等待{wait}s)")
-                    time.sleep(wait)
-                    continue
-                return None, False
-            
-            data = json.loads(resp.read().decode("utf-8"))
-
-            # 检查ZError错误格式: {"code": 0, "message": "..."}
-            if "code" in data and data.get("code") == 0:
-                error_msg = data.get("message", "未知错误")
-                logger.warn(f"题库返回错误: {error_msg}")
-                return None, False
-            
-            items = None
-            # 兼容ZError格式: {"code": 1, "data": [...]}
-            if "code" in data and data.get("code") == 1 and data.get("data"):
-                raw_data = data["data"]
-                items = [raw_data] if isinstance(raw_data, dict) else raw_data
-            # 兼容旧版题库格式: {"success": true, "data": [...]}
-            elif data.get("success") and data.get("data"):
-                raw_data = data["data"]
-                items = [raw_data] if isinstance(raw_data, dict) else raw_data
-            # 兼容其他格式：直接包含data字段
-            elif "data" in data and data.get("data"):
-                raw_data = data["data"]
-                items = [raw_data] if isinstance(raw_data, dict) else raw_data
-
-            if items:
-                item = items[0]
-                answer = item.get("answer", "")
-                is_ai = item.get("is_ai", False)
-                
-                # 检查答案是否包含模型错误
-                if answer:
-                    error_msg = _is_model_error(answer)
-                    if error_msg:
-                        logger.warn(f"模型返回错误: {error_msg[:50]}")
-                        return None, False
-                
-                # 如果答案是JSON格式，提取answer字段
-                if answer:
-                    answer = _extract_answer_from_json(answer)
-                
-                # 检查是否为"题目不完整"响应
-                if answer and "题目不完整" in answer:
-                    logger.warn("AI检测到题目不完整")
-                    return None, False
-                
-                if answer and answer.strip():
-                    logger.info(f"题库查询成功: {answer[:50]}...")
-                    return answer, is_ai
-                logger.warn("题库返回空答案")
-            else:
-                logger.warn(f"题库未找到答案，响应: {str(data)[:100]}")
-            return None, False
-        except (ConnectionRefusedError, ConnectionResetError, OSError) as e:
-            if attempt < max_retries - 1:
-                import time
-                wait = 2 ** attempt
-                logger.warn(f"题库连接失败(重试{attempt+1}/{max_retries}, 等{wait}s): {e}")
-                time.sleep(wait)
-            else:
-                logger.warn(f"题库连接失败: {e} (URL: {QB_URL})")
-                import traceback
-                logger.write_log(f"题库连接详细错误: {traceback.format_exc()[:300]}\n")
-        except Exception as e:
-            if attempt < max_retries - 1:
-                import time
-                wait = 2 ** attempt
-                logger.write_log(f"题库查询异常(重试{attempt+1}/{max_retries}, 等{wait}s): {e}\n")
-                time.sleep(wait)
-            else:
-                logger.write_log(f"题库查询异常: {e}\n")
-                import traceback
-                logger.write_log(f"详细错误: {traceback.format_exc()[:300]}\n")
-        finally:
-            if resp:
-                try:
-                    resp.close()
-                except Exception:
-                    pass
-            if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-    return None, False
 
 
 async def task_monitor(tasks: list[asyncio.Task]) -> None:
