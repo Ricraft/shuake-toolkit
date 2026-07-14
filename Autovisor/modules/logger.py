@@ -2,6 +2,8 @@ import os
 import sys
 import threading
 import time
+from collections import deque
+from pathlib import Path
 
 
 # 全局替换 sys.stdout，使其在 GBK 终端上遇到无法编码的字符时自动替换
@@ -42,60 +44,120 @@ if sys.stdout and hasattr(sys.stdout, 'encoding') and sys.stdout.encoding and sy
 # 单例模式日志器
 class Logger:
     _instance = None
-    _lock = threading.Lock()  # 线程安全锁
+    _instance_lock = threading.Lock()
+    _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+    _MAX_RECENT_ENTRIES = 2000
 
     def __new__(cls):
-        with cls._lock:
+        with cls._instance_lock:
             if cls._instance is None:
                 cls._instance = super(Logger, cls).__new__(cls)
                 cls._instance._init()
         return cls._instance
 
     def _init(self):
-        os.makedirs("logs", exist_ok=True)  # 创建日志文件夹
+        self._write_lock = threading.RLock()
+        self._recent_entries = deque(maxlen=self._MAX_RECENT_ENTRIES)
         self._configured = False
+        self._account_id = None
+        self._log_dir = self._DEFAULT_LOG_DIR
+        self.filename = ""
+        self._last_write_error = None
         self.configure(os.getenv("AUTOVISOR_ACCOUNT_ID"))
-        self.text = ""
 
-    def configure(self, account_id=None):
-        """为本次进程选择不会与其他账号碰撞的日志文件。"""
-        if self._configured:
-            return
-        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-        account_suffix = f"_Account_{account_id}" if account_id not in (None, "") else ""
-        self.filename = f"logs/Log{account_suffix}_{timestamp}_{os.getpid()}.txt"
-        self._configured = True
+    @property
+    def text(self):
+        """兼容旧调用：只返回最近的有界日志窗口。"""
+        with self._write_lock:
+            return "".join(self._recent_entries)
+
+    @text.setter
+    def text(self, value):
+        with self._write_lock:
+            self._recent_entries.clear()
+            if value:
+                self._recent_entries.append(str(value))
+
+    def configure(
+        self,
+        account_id=None,
+        *,
+        log_dir=None,
+        force=False,
+        clear=False,
+    ):
+        """选择日志文件；未写入前允许补充真实账号 ID。"""
+        normalized_account = (
+            str(account_id) if account_id not in (None, "") else None
+        )
+        target_dir = Path(log_dir).resolve() if log_dir else self._DEFAULT_LOG_DIR
+        with self._write_lock:
+            same_target = (
+                self._configured
+                and normalized_account == self._account_id
+                and target_dir == self._log_dir
+            )
+            if same_target and not force:
+                return self.filename
+            if self._configured and self._recent_entries and not force:
+                return self.filename
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+            unique_suffix = time.time_ns() % 1_000_000
+            account_suffix = (
+                f"_Account_{normalized_account}" if normalized_account else ""
+            )
+            filename = (
+                f"Log{account_suffix}_{timestamp}_{os.getpid()}_"
+                f"{unique_suffix:06d}.txt"
+            )
+            self._log_dir = target_dir
+            self.filename = str((target_dir / filename).resolve())
+            self._account_id = normalized_account
+            self._configured = True
+            self._last_write_error = None
+            if clear:
+                self._recent_entries.clear()
+            return self.filename
 
     def write_log(self, msg):
         date = time.strftime("%H:%M:%S", time.localtime())
-        self.text += f"[{date}] {msg}"
+        entry = f"[{date}] {msg}"
+        with self._write_lock:
+            if not self._configured:
+                self.configure()
+            self._recent_entries.append(entry)
+            try:
+                with open(self.filename, "a", encoding="utf-8") as log_file:
+                    log_file.write(entry)
+                    log_file.flush()
+                self._last_write_error = None
+            except OSError as exc:
+                # 日志磁盘异常不能反向打断刷课主流程。
+                self._last_write_error = exc
 
     def save(self, inform=True):
-        with open(self.filename, "w", encoding="utf-8") as f:
-            f.write(self.text)
+        with self._write_lock:
+            if not self._configured:
+                self.configure()
+            try:
+                Path(self.filename).touch(exist_ok=True)
+            except OSError as exc:
+                self._last_write_error = exc
         if inform:
             print(f"日志文件已保存至: {self.filename}")
 
+    def _emit(self, level, msg, shift=False):
+        prefix = f"\n[{level}]" if shift else f"[{level}]"
+        print(f"{prefix} {msg}", flush=True)
+        self.write_log(f"[{level}] {msg}\n")
+
     def info(self, msg, shift=False):
-        if shift:
-            text = f"\n[INFO] {msg}"
-        else:
-            text = f"[INFO] {msg}"
-        print(text, flush=True)
-        self.write_log(f"[INFO] {msg}\n")
+        self._emit("INFO", msg, shift)
 
     def warn(self, msg, shift=False):
-        if shift:
-            text = f"\n[WARN] {msg}"
-        else:
-            text = f"[WARN] {msg}"
-        print(text, flush=True)
-        self.write_log(f"[WARN] {msg}\n")
+        self._emit("WARN", msg, shift)
 
     def error(self, msg, shift=False):
-        if shift:
-            text = f"\n[ERROR] {msg}"
-        else:
-            text = f"[ERROR] {msg}"
-        print(text, flush=True)
-        self.write_log(f"[ERROR] {msg}\n")
+        self._emit("ERROR", msg, shift)

@@ -481,7 +481,8 @@ def run(
     global config, logger, event_loop_verify, event_loop_answer
 
     logger = Logger()
-    logger.configure(account_id)
+    # 每次显式运行都使用独立文件，避免同一解释器重复运行时混入旧会话。
+    logger.configure(account_id, force=True, clear=True)
     event_loop_verify = asyncio.Event()
     event_loop_answer = asyncio.Event()
     exit_code = 0
