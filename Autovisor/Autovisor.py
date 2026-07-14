@@ -47,6 +47,7 @@ from modules.lesson_navigation import (
     pending_course_cards,
 )
 from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
+from modules.national_test_flow import NationalTestOutcome, NationalTestSession
 from modules.progress import get_course_progress, show_course_progress, move_mouse_meeting_class
 from modules.utils import optimize_page, get_lesson_name, get_filtered_class, get_video_attr, hide_window, \
     get_browser_window, bring_console_to_front, save_cookies, load_cookies, \
@@ -504,9 +505,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             logger.info(f"锁定未完成节次: {lesson.get('section', '')} / {title} ({lesson['progress']}%)")
             
             # 测试卡片：在点击前设置监听器
-            test_handler = None
-            new_page = None
-            original_page = page  # 保存原始页面引用
+            test_session = None
             if lesson.get('type') == 'test':
                 # 测验重试次数限制（按测验key独立计数）
                 test_retry_count = navigation.begin_test_attempt(lesson_key)
@@ -514,22 +513,15 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                     logger.warn(f"测验 '{title}' 重试超限({navigation.test_retry_limit})，永久跳过", shift=True)
                     continue
                 
-                test_handler = TestResponseHandler()
-                test_handler.setup_listener(page.context)
+                test_session = NationalTestSession(
+                    page,
+                    config.course_urls[0],
+                    logger,
+                    TestResponseHandler(),
+                    handle_test_page,
+                )
+                test_session.prepare()
                 logger.info(f"已设置测试响应监听器，准备点击测试卡片: {title}")
-                
-                # 同时监听新页面
-                async def wait_for_new_page():
-                    nonlocal new_page
-                    try:
-                        new_page = await page.context.wait_for_event("page", timeout=8000)
-                        logger.info(f"检测到新页面打开: {new_page.url}")
-                    except Exception:
-                        logger.write_log("未检测到新页面\n")
-                
-                new_page_task = asyncio.create_task(wait_for_new_page())
-            else:
-                new_page_task = None
             
             # 【修复】点击卡片前确保页面在课程列表页
             try:
@@ -544,6 +536,8 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                     lesson = find_course_card(pending_lessons, lesson_key)
                     if lesson is None:
                         logger.warn(f"重新导航后未找到卡片:{title}", shift=True)
+                        if test_session:
+                            await test_session.cancel()
                         continue
                     card_id = lesson["card_id"]
                     title = lesson["title"]
@@ -552,138 +546,19 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             
             if not await click_card_by_id(page, card_id, title, is_in_iframe):
                 logger.warn(f"未能定位卡片:{title}, 本轮跳过.", shift=True)
-                if test_handler:
-                    test_handler.remove_listener()
-                if new_page_task:
-                    new_page_task.cancel()
+                if test_session:
+                    await test_session.cancel()
                 await page.wait_for_timeout(1000)
                 continue
             
             # 测试卡片：等待响应并处理答题
             if lesson.get('type') == 'test':
                 logger.info(f"已点击测试卡片，等待页面加载和API响应...")
-                
-                # 等待新页面检测完成
-                if new_page_task:
-                    try:
-                        await new_page_task
-                    except Exception:
-                        pass
-                
-                # 确定工作页面
-                work_page = new_page if new_page else page
-                logger.info(f"工作页面URL: {work_page.url}")
-                
-                # 等待页面完全加载（不刷新，避免登录重定向）
-                await work_page.wait_for_load_state("networkidle")
-                logger.info(f"页面加载完成，URL: {work_page.url}")
-                
-                # 如果lookHomework已经返回了题目数据，检查是否已完成
-                if test_handler.questions_data:
-                    if test_handler.is_completed:
-                        logger.info(f"测试已完成（lookHomework），跳过答题")
-                        test_handler.remove_listener()
-                        if new_page:
-                            try:
-                                await new_page.close()
-                                logger.info("已关闭测试页面")
-                            except Exception:
-                                pass
-                        page = original_page
-                        # 【修复】强制 reload 清理 CDP 状态，避免触发视频页反debug
-                        try:
-                            await page.reload(wait_until="domcontentloaded")
-                            await page.wait_for_timeout(1500)
-                            if "study/index" not in page.url and "wisdom-mooc" not in page.url:
-                                await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                                await page.wait_for_timeout(1500)
-                        except Exception:
-                            try:
-                                await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                                await page.wait_for_timeout(1500)
-                            except Exception:
-                                pass
-                        navigation.mark_attempted(lesson_key, test_completed=True)
-                        continue
-                    else:
-                        logger.info(f"doHomework已返回 {len(test_handler.questions_data)} 道题目")
-                else:
-                    # 尝试点击"开始做题"按钮触发doHomework
-                    try:
-                        start_btn = work_page.locator("button:has-text('开始做题'), button:has-text('开始做'), a:has-text('开始做题'), a:has-text('开始做'), .start-btn, [class*='start']").first
-                        if await start_btn.count() > 0:
-                            logger.info("找到开始做题按钮，点击...")
-                            await start_btn.click(timeout=5000)
-                            await work_page.wait_for_load_state("networkidle")
-                    except Exception as e:
-                        logger.write_log(f"未找到开始做题按钮: {e}\n")
-                    
-                    # 等待doHomework响应
-                    got_questions = await test_handler.wait_for_questions(timeout=20)
-                    if got_questions:
-                        logger.info(f"成功捕获题目数据")
-                        if test_handler.is_completed:
-                            logger.info("测试已完成，跳过答题")
-                            test_handler.remove_listener()
-                            if new_page:
-                                try:
-                                    await new_page.close()
-                                    logger.info("已关闭测试页面")
-                                except Exception:
-                                    pass
-                            page = original_page
-                            # 【修复】强制 reload 清理 CDP 状态，避免触发视频页反debug
-                            try:
-                                await page.reload(wait_until="domcontentloaded")
-                                await page.wait_for_timeout(1500)
-                                if "study/index" not in page.url and "wisdom-mooc" not in page.url:
-                                    await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                                    await page.wait_for_timeout(1500)
-                            except Exception:
-                                try:
-                                    await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                                    await page.wait_for_timeout(1500)
-                                except Exception:
-                                    pass
-                            navigation.mark_attempted(lesson_key, test_completed=True)
-                            continue
-
-                # 处理答题（只要有题目数据就执行）
-                if test_handler.questions_data:
-                    await handle_test_page(work_page, test_handler.questions_data, auto_submit=True, manual_submit=True)
-                else:
-                    logger.warn("没有题目数据，跳过答题")
-                
-                # 清理监听器
-                test_handler.remove_listener()
-                
-                # 如果打开了新页面，关闭它
-                if new_page:
-                    try:
-                        await new_page.close()
-                        logger.info("已关闭测试页面")
-                    except Exception:
-                        pass
-                
-                # 恢复原始页面引用
-                page = original_page
-                
-                # 【修复】强制 reload 清理 CDP 状态，避免触发视频页反debug
-                try:
-                    logger.info("测验处理后 force reload 清理CDP状态", shift=True)
-                    await page.reload(wait_until="domcontentloaded")
-                    await page.wait_for_timeout(1500)
-                    if "study/index" not in page.url and "wisdom-mooc" not in page.url:
-                        await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                        await page.wait_for_timeout(1500)
-                except Exception:
-                    try:
-                        await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                        await page.wait_for_timeout(1500)
-                    except Exception:
-                        pass
-                
-                navigation.mark_attempted(lesson_key)
+                outcome = await test_session.process()
+                navigation.mark_attempted(
+                    lesson_key,
+                    test_completed=outcome is NationalTestOutcome.COMPLETED,
+                )
                 continue
             
             await page.wait_for_timeout(1000)
