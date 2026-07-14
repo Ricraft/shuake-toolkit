@@ -40,6 +40,12 @@ _ensure_simplejson_compat()
 from modules.logger import Logger
 from modules.configs import Config
 from modules.course_session import CourseSession
+from modules.lesson_navigation import (
+    LessonNavigationState,
+    SelectionReason,
+    find_course_card,
+    pending_course_cards,
+)
 from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
 from modules.progress import get_course_progress, show_course_progress, move_mouse_meeting_class
 from modules.utils import optimize_page, get_lesson_name, get_filtered_class, get_video_attr, hide_window, \
@@ -441,10 +447,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                 break
         
         start_time = time.time()
-        tried_keys: set = set()
-        skipped_tests: set = set()
-        test_retry_map: dict[str, int] = {}
-        test_retry_limit = 5
+        navigation = LessonNavigationState(test_retry_limit=5)
         consecutive_lessons = 0
         loop_count = 0
         
@@ -458,7 +461,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             await close_popup(page, logger)
             
             all_cards, summary, is_in_iframe = await scan_national_wisdom_cards(page)
-            pending_lessons = [c for c in all_cards if c["progress"] < 100]
+            pending_lessons = pending_course_cards(all_cards)
             
             logger.info(
                 f"整页统计: 总卡片 {summary['total']} | 未完成 {summary['pending']} | 已完成 {summary['done']}",
@@ -483,28 +486,16 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                 logger.info(f"当前课程已达时限:{config.limitMaxTime}min", shift=True)
                 return
             
-            lesson = None
-            for candidate in pending_lessons:
-                if candidate["key"] not in tried_keys and candidate["key"] not in skipped_tests:
-                    lesson = candidate
-                    break
+            selection = navigation.choose(pending_lessons)
+            lesson = selection.lesson
             if lesson is None:
-                # 检查是否只剩被永久跳过的测验，若是则退出
-                non_skipped = [c for c in pending_lessons if c["key"] not in skipped_tests]
-                if not non_skipped:
-                    logger.info("所有未完成项均已跳过，退出", shift=True)
-                    break
-                # 还有视频项未完成，清空 tried_keys 重试
-                non_test = [c for c in non_skipped if c.get('type') != 'test']
-                if not non_test:
-                    # 只剩测验且全部尝试过，退出
-                    logger.info("所有剩余项均为测验且已尝试，退出", shift=True)
-                    break
+                if selection.reason is SelectionReason.NO_CANDIDATES:
+                    logger.info("所有未完成项均已处理或跳过，退出", shift=True)
+                else:
+                    logger.info("所有剩余测验均已达到重试上限，退出", shift=True)
+                break
+            if selection.reason is SelectionReason.ROUND_RESET:
                 logger.info("所有可尝试项均尝试过，清空记录重新开始", shift=True)
-                tried_keys.clear()
-                for candidate in non_skipped:
-                    lesson = candidate
-                    break
             
             title = lesson["title"]
             card_id = lesson["card_id"]
@@ -518,11 +509,9 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             original_page = page  # 保存原始页面引用
             if lesson.get('type') == 'test':
                 # 测验重试次数限制（按测验key独立计数）
-                test_retry_count = test_retry_map.get(lesson_key, 0) + 1
-                test_retry_map[lesson_key] = test_retry_count
-                if test_retry_count > test_retry_limit:
-                    logger.warn(f"测验 '{title}' 重试超限({test_retry_limit})，永久跳过", shift=True)
-                    skipped_tests.add(lesson_key)
+                test_retry_count = navigation.begin_test_attempt(lesson_key)
+                if test_retry_count is None:
+                    logger.warn(f"测验 '{title}' 重试超限({navigation.test_retry_limit})，永久跳过", shift=True)
                     continue
                 
                 test_handler = TestResponseHandler()
@@ -550,20 +539,14 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                     await page.wait_for_timeout(1500)
                     # 重新扫描
                     all_cards, summary, is_in_iframe = await scan_national_wisdom_cards(page)
-                    pending_lessons = [c for c in all_cards if c["progress"] < 100]
+                    pending_lessons = pending_course_cards(all_cards)
                     # 重新查找当前卡片
-                    found = False
-                    for c in pending_lessons:
-                        if c["key"] == lesson_key:
-                            lesson = c
-                            card_id = c["card_id"]
-                            title = c["title"]
-                            is_in_iframe = is_in_iframe
-                            found = True
-                            break
-                    if not found:
+                    lesson = find_course_card(pending_lessons, lesson_key)
+                    if lesson is None:
                         logger.warn(f"重新导航后未找到卡片:{title}", shift=True)
                         continue
+                    card_id = lesson["card_id"]
+                    title = lesson["title"]
             except Exception:
                 pass
             
@@ -620,8 +603,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                                 await page.wait_for_timeout(1500)
                             except Exception:
                                 pass
-                        tried_keys.add(lesson_key)
-                        test_retry_map.pop(lesson_key, None)
+                        navigation.mark_attempted(lesson_key, test_completed=True)
                         continue
                     else:
                         logger.info(f"doHomework已返回 {len(test_handler.questions_data)} 道题目")
@@ -663,8 +645,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                                     await page.wait_for_timeout(1500)
                                 except Exception:
                                     pass
-                            tried_keys.add(lesson_key)
-                            test_retry_map.pop(lesson_key, None)
+                            navigation.mark_attempted(lesson_key, test_completed=True)
                             continue
 
                 # 处理答题（只要有题目数据就执行）
@@ -702,7 +683,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                     except Exception:
                         pass
                 
-                tried_keys.add(lesson_key)
+                navigation.mark_attempted(lesson_key)
                 continue
             
             await page.wait_for_timeout(1000)
@@ -766,7 +747,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             lesson_elapsed = (time.time() - lesson_start) / 60
             logger.write_log(f"\"{title}\" 本课学习用时: {lesson_elapsed:.1f}min\n")
             
-            tried_keys.add(lesson_key)
+            navigation.mark_attempted(lesson_key)
             consecutive_lessons += 1
             
             # 检查视频是否真正播放完成
@@ -809,10 +790,6 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                 return
             
             # 播放完成，尝试连播或回课程页
-            
-            if len(tried_keys) >= len(all_cards):
-                logger.info("所有课程均已尝试一轮，清空重试记录", shift=True)
-                tried_keys.clear()
             
             # 每节课完成后返回课程列表重新扫描，确保进度记录正确
             consecutive_lessons = 0

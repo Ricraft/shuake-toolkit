@@ -38,12 +38,13 @@
 17. 新增 `CourseKind`、`CourseProfile` 和 `CourseSession`，课程域名识别、标题提取、页面初始化及 `working_loop` 参数映射改为集中维护；URL 查询参数不再能误判课程类型。
 18. `tasks.py` 的视频优化、播放和跳题流程改用统一课程分类，移除多处散落的域名字符串判断。
 19. 使用内置浏览器对智慧树公开登录页做只读选择器审计；登录按钮选择器由命中 7 个元素的 `.wall-sub-btn` 收紧为登录面板内唯一的 `.wall-main .wall-sub-btn`，主模式与刷题模式共用选择器常量。
+20. 新增无 Playwright 依赖的 `LessonNavigationState`，统一全国共享课的未完成卡片过滤、按键定位、尝试轮次和测验重试状态；修复“只剩测验时首次尝试后直接退出、配置的重试上限无法生效”的逻辑问题。
 
 ## 仍需优先处理的问题
 
 ### P0/P1：直接影响正确性
 
-- `Autovisor/Autovisor.py` 的 `working_loop` 仍约 900 行、分支复杂度极高。入口处的课程识别与页面初始化已经拆出，但卡片扫描、测验、视频和重试状态仍混在一起，任何站点改版都可能造成跨流程回归。
+- `Autovisor/Autovisor.py` 的 `working_loop` 仍约 880 行、分支复杂度极高。入口处课程识别、页面初始化和全国共享课导航状态已经拆出，但页面扫描、测验处理和视频播放仍混在一起，任何站点改版都可能造成跨流程回归。
 - FastAPI Dashboard 的 `/api/tasks/start` 与 `/api/tasks/stop` 没有创建或终止真实进程，接口成功响应不能代表任务真的运行。
 - 核心更新的官方 GitHub 下载尚无发布方校验和/签名验证。TLS 能保证传输对端，但不能替代制品签名。
 - 保存“全部设置”虽然单文件已原子化，但 Yatori、Autovisor、题库三个文件仍不是跨文件事务；中途磁盘错误可能只更新一部分。
@@ -58,7 +59,7 @@
 
 ## 推荐的下一轮拆分顺序
 
-1. 在现有 `CourseProfile`/`CourseSession` 基础上，继续把普通课、共享课、见面课的扫描与导航从 `working_loop` 拆成独立适配器。
+1. 在现有 `CourseProfile`/`CourseSession` 和 `LessonNavigationState` 基础上，继续把普通课、共享课、见面课的页面扫描与执行流程拆成独立适配器。
 2. 将启动器继续拆为 `config_service`、`process_supervisor`、`question_bank_controller`、`course_catalog`、`update_controller`。
 3. 为课程适配器增加录制 HTML/API 响应的契约测试，覆盖站点改版而不修改真实账号状态。
 4. 拆分 `tasks.py` 的题库客户端、答题、测试抓取和视频后台任务。
@@ -67,6 +68,6 @@
 ## 验证状态
 
 - 自研 Python 文件均通过 Python 3.13 语法编译检查。
-- 仓库根目录收集的 48 项测试全部通过，覆盖启动器状态、题库 HTTP 策略、Dashboard API、配置归一化、账号隔离、并发队列、自定义题库 URL、课程类型映射、课程会话和登录页选择器契约。
+- 仓库根目录收集的 55 项测试全部通过，覆盖启动器状态、题库 HTTP 策略、Dashboard API、配置归一化、账号隔离、并发队列、自定义题库 URL、课程类型映射、课程会话、卡片导航状态和登录页选择器契约。
 - 单账号与多账号 CLI 冒烟通过，`--help` 不再触发题库网络连接。
 - Chrome 扩展插件仍在初始化阶段报 `Cannot redefine property: process`；内置浏览器插件可以正常导航、读取 DOM 和截图，并已完成公开登录页的只读选择器核验。未提交账号密码，也没有将真实登录、播放或答题标记为通过。
