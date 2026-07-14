@@ -50,11 +50,11 @@ from modules.lesson_navigation import (
 from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
 from modules.meeting_course_flow import run_meeting_course
 from modules.national_test_flow import NationalTestOutcome, NationalTestSession
+from modules.normal_course_flow import run_normal_course
 from modules.progress import get_course_progress, show_course_progress
-from modules.utils import optimize_page, get_lesson_name, get_filtered_class, get_video_attr, hide_window, \
+from modules.utils import optimize_page, get_lesson_name, get_video_attr, hide_window, \
     get_browser_window, bring_console_to_front, save_cookies, load_cookies, \
-    scan_national_wisdom_cards, click_card_by_id, APPLY_VIDEO_SETTINGS_JS, \
-    scan_normal_class_tests, detect_test_in_current_lesson
+    scan_national_wisdom_cards, click_card_by_id, APPLY_VIDEO_SETTINGS_JS
 from modules.slider import slider_verify
 from modules.async_utils import cancel_background_tasks
 from modules.tasks import video_optimize, play_video, skip_questions, wait_for_verify, activate_window, task_monitor, handle_test_page, TestResponseHandler
@@ -627,263 +627,21 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             is_hike_class=is_hike_class,
             is_national_wisdom=is_national_wisdom,
         )
-    # 普通课程使用原有逻辑
+    # 普通课程
     else:
-        await page.wait_for_selector(".clearfix.video, .chapter-test", state="attached")
-        
-        # 等待页面加载并关闭可能出现的弹窗（学前必读等）
-        await page.wait_for_timeout(2000)
-        for _ in range(5):
-            closed = await close_popup(page, logger)
-            if closed:
-                await page.wait_for_timeout(500)
-            else:
-                break
-        
-        # 【新增】扫描测验项
-        logger.info("扫描课程列表中的测验项...")
-        test_items = await scan_normal_class_tests(page, is_new_version)
-        incomplete_tests = [t for t in test_items if not t['completed']]
-        
-        if incomplete_tests:
-            logger.info(f"发现 {len(incomplete_tests)} 个未完成的测验")
-        
-        to_learn_class = await get_filtered_class(page, is_new_version, is_hike_class, is_national_wisdom)
-        learning = True if len(to_learn_class) > 0 else False
-        start_time = time.time()
-        cur_index = 0
-        loop_count = 0
-        max_loop = 200
-        test_retry_count = 0
-        test_retry_limit = 5
-
-        while True:
-            loop_count += 1
-            if loop_count > max_loop:
-                logger.warn(f"循环次数超限({max_loop})，强制退出")
-                break
-
-            # 先尝试关闭弹窗（学前必读等）
-            await close_popup(page, logger)
-            
-            # 【关键修改】：每次循环都重新获取最新的节点列表，防止 DOM 刷新导致旧节点 detached
-            all_class = await get_filtered_class(page, is_new_version, is_hike_class, is_national_wisdom, include_all=not learning)
-            
-            if cur_index >= len(all_class):
-                logger.info("本页课程列表已遍历完毕。")
-                break
-
-            course = all_class[cur_index]
-            
-            # 【新增】检测当前项是否是测验（通过class判断）
-            try:
-                course_class = await course.get_attribute('class')
-            except Exception:
-                logger.warn("获取课程class属性失败，跳过该课程")
-                cur_index += 1
-                continue
-            is_test_item = 'chapter-test' in (course_class or '')
-            
-            if is_test_item:
-                # 获取测验标题
-                test_title_el = course.locator(".name").first
-                test_title = await test_title_el.text_content() if await test_title_el.count() > 0 else "平时测试"
-                logger.info(f"检测到测验项: {test_title.strip()}")
-                
-                # 检查是否已完成
-                is_completed = await course.locator("b.finish").count() > 0
-                if is_completed:
-                    logger.info("测验已完成，跳过")
-                    cur_index += 1
-                    test_retry_count = 0
-                    continue
-                
-                # 测验重试次数限制
-                test_retry_count += 1
-                if test_retry_count > test_retry_limit:
-                    logger.warn(f"测验重试超限({test_retry_limit})，强制跳过")
-                    test_retry_count = 0
-                    cur_index += 1
-                    continue
-                
-                # 设置响应监听器
-                test_handler = TestResponseHandler()
-                test_handler.setup_listener(page.context)
-                
-                # 监听新页面打开
-                new_page = None
-                original_page = page
-                
-                async def wait_for_new_page():
-                    nonlocal new_page
-                    try:
-                        new_page = await page.context.wait_for_event("page", timeout=8000)
-                        logger.info(f"检测到新页面打开: {new_page.url}")
-                    except Exception:
-                        logger.write_log("未检测到新页面\n")
-                
-                new_page_task = asyncio.create_task(wait_for_new_page())
-                
-                # 点击测验项
-                logger.info("点击测验项...")
-                try:
-                    await course.click()
-                except Exception as e:
-                    logger.warn(f"点击测验项失败: {str(e)[:50]}，跳过")
-                    test_handler.remove_listener()
-                    cur_index += 1
-                    continue
-                
-                # 等待新页面检测完成
-                try:
-                    await new_page_task
-                except Exception:
-                    pass
-                
-                # 确定工作页面
-                work_page = new_page if new_page else page
-                logger.info(f"工作页面URL: {work_page.url}")
-                
-                # 等待页面加载
-                await work_page.wait_for_load_state("domcontentloaded")
-                await work_page.wait_for_timeout(2000)
-                
-                # 等待题目数据
-                logger.info("等待题目数据...")
-                got_questions = await test_handler.wait_for_questions(timeout=20)
-                
-                if got_questions and test_handler.questions_data:
-                    if test_handler.is_completed:
-                        logger.info("测验已完成（API确认），跳过")
-                        test_handler.remove_listener()
-                        if new_page:
-                            try:
-                                await new_page.close()
-                            except Exception:
-                                pass
-                        cur_index += 1
-                        test_retry_count = 0
-                        continue
-                    else:
-                        logger.info(f"开始处理测验，共 {len(test_handler.questions_data)} 题")
-                        # 处理答题
-                        await handle_test_page(work_page, test_handler.questions_data, auto_submit=True)
-                        test_handler.remove_listener()
-                        
-                        # 如果打开了新页面，关闭它
-                        if new_page:
-                            try:
-                                await new_page.close()
-                                logger.info("已关闭测验页面")
-                            except Exception:
-                                pass
-                        
-                        # 恢复原始页面引用
-                        page = original_page
-                        
-                        # 返回课程列表
-                        logger.info("答题完成，返回课程列表...")
-                        try:
-                            await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                            logger.info("已返回课程列表页面")
-                        except Exception as e:
-                            logger.warn(f"返回课程列表失败: {str(e)[:50]}")
-                        
-                        await page.wait_for_timeout(2000)
-                        
-                        try:
-                            await optimize_page(page, config, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class)
-                            logger.info("页面优化完成")
-                        except Exception as e:
-                            logger.warn(f"页面优化失败: {str(e)[:50]}")
-                        
-                        # 答题成功后重置测验重试计数
-                        test_retry_count = 0
-                        
-                        # 不增加 cur_index，直接 continue 重新扫描
-                        # 这样可以确保课程状态是最新的
-                        logger.info("继续处理下一个课程...")
-                        continue
-                else:
-                    logger.warn("未能获取测验题目数据，尝试手动处理")
-                    test_handler.remove_listener()
-                    if new_page:
-                        try:
-                            await new_page.close()
-                        except Exception:
-                            pass
-                    page = original_page
-                    await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                    await page.wait_for_timeout(2000)
-                    await optimize_page(page, config, is_new_version, is_hike_class, is_national_wisdom)
-                
-                cur_index += 1
-                continue
-            
-            # 测验重试计数复位（遇到正常视频项说明测验已处理完毕）
-            test_retry_count = 0
-            
-            # 原有的视频处理逻辑
-            try:
-                await course.click()
-            except Exception as e:
-                logger.warn(f"点击课程失败: {str(e)[:50]}，跳过该课程")
-                cur_index += 1
-                continue
-
-            await page.wait_for_selector(".current_play", state="attached")
-            await page.wait_for_timeout(500)
-            
-            # 关闭可能出现的弹窗（学前必读等）
-            await close_popup(page, logger)
-
-            title = await get_lesson_name(page, is_hike_class, is_national_wisdom)
-            logger.info(f"正在学习:{title}")
-            page.set_default_timeout(10000)
-            await page.wait_for_selector("video", state="attached")
-            await page.evaluate(config.remove_pause)
-            if learning:
-                await learning_loop(page, start_time, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class)
-            else:
-                await review_loop(page, start_time, is_hike_class)
-
-            try:
-                if "current_play" in await all_class[cur_index].get_attribute('class'):
-                    cur_index += 1
-            except Exception as e:
-                logger.warn(f"获取课程状态失败: {str(e)[:50]}，强制推进")
-                cur_index += 1
-            reachTimeLimit = await check_time_limit(page, start_time, all_class, title, is_hike_class)
-            if reachTimeLimit:
-                return
+        return await run_normal_course(
+            page,
+            config,
+            logger,
+            close_popup=close_popup,
+            learning_loop=learning_loop,
+            review_loop=review_loop,
+            handler_factory=TestResponseHandler,
+            answer_handler=handle_test_page,
+            is_new_version=is_new_version,
+        )
 
 
-async def check_time_limit(page: Page, start_time, all_class, title, is_hike_class) -> bool:
-    reachTimeLimit = False
-    page.set_default_timeout(24 * 3600 * 1000)
-    time_period = (time.time() - start_time) / 60
-    if 0 < config.limitMaxTime <= time_period:
-        logger.info(f"当前课程已达时限:{config.limitMaxTime}min", shift=True)
-        logger.info("即将进入下门课程!")
-        reachTimeLimit = True
-    else:
-        if is_hike_class:
-            class_name = await all_class[-1].get_attribute('class')
-            if "active" in class_name:
-                logger.info("已学完本课程全部内容!", shift=True)
-                print("==" * 10)
-            else:
-                logger.info(f"\"{title}\" 已完成!", shift=True)
-                logger.info(f"本次课程已学习:{time_period:.1f} min")
-        else:
-            class_name = await all_class[-1].get_attribute('class')
-            if "current_play" in class_name:
-                logger.info("已学完本课程全部内容!", shift=True)
-                print("==" * 10)
-            else:
-                logger.info(f"\"{title}\" 已完成!", shift=True)
-                logger.info(f"本次课程已学习:{time_period:.1f} min")
-    return reachTimeLimit
 
 
 async def main():
