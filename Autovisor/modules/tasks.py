@@ -22,6 +22,7 @@ from modules.question_bank_client import (
     _match_option,
     _normalize_qb,
 )
+from modules.test_capture import TestResponseHandler
 from modules.video_tasks import activate_window, play_video, task_monitor, video_optimize
 
 logger = Logger()
@@ -446,128 +447,7 @@ async def wait_for_verify(page: Page, config, event_loop) -> None:
             continue
 
 
-class TestResponseHandler:
-    """测试响应处理器，用于在点击测试卡片前设置监听器"""
-    def __init__(self):
-        self.questions_data = None
-        self.questions_event = asyncio.Event()
-        self._handler = None
-        self._context = None
-        self._debug_count = 0
-        self._source = None  # 记录数据来源: "doHomework" 或 "lookHomework"
-
-    def _parse_questions_from_body(self, body):
-        """从响应体中解析题目数据"""
-        rt = body.get("rt")
-        if not rt:
-            return None
-        exam_base = rt.get("examBase") or rt
-        parts = exam_base.get("workExamParts", [])
-        all_q = []
-        for part in parts:
-            for q in part.get("questionDtos", []):
-                all_q.append({
-                    "name": q.get("name", ""),
-                    "type": (q.get("questionType") or {}).get("name", ""),
-                    "type_id": (q.get("questionType") or {}).get("id"),
-                    "options": [(o.get("id"), o.get("content", "")) for o in (q.get("questionOptions") or [])],
-                    "score": q.get("questionScore", ""),
-                    "eid": q.get("eid", ""),
-                })
-        return all_q if all_q else None
-
-    @property
-    def is_completed(self):
-        """测试是否已完成（lookHomework表示已完成）"""
-        return self._source == "lookHomework"
-
-    def setup_listener(self, context, clear_data=True):
-        """设置响应监听器 - context级别 + 所有page级别兜底"""
-        self._context = context
-        if clear_data:
-            self.questions_data = None
-            self.questions_event.clear()
-            self._source = None
-        self._debug_count = 0
-        self._page_handlers = {}
-
-        async def on_response(response):
-            if self.questions_data:
-                return
-            self._debug_count += 1
-            url = response.url
-            is_target = any(kw in url for kw in ["doHomework", "lookHomework"])
-            if is_target:
-                logger.info(f"[响应监听] #{self._debug_count} 命中目标: {url[:100]}")
-            
-            if not is_target:
-                return
-            try:
-                if response.status != 200:
-                    logger.warn(f"目标响应状态码: {response.status}")
-                    return
-                    
-                body = await response.json()
-                logger.info(f"响应体keys: {list(body.keys())}")
-                questions = self._parse_questions_from_body(body)
-                if questions:
-                    self.questions_data = questions
-                    self._source = "doHomework" if "doHomework" in url else "lookHomework"
-                    logger.info(f"从 {self._source} 拦截到 {len(self.questions_data)} 道题目")
-                    self.questions_event.set()
-                else:
-                    logger.warn(f"响应中未找到题目数据 (keys: {list(body.keys())}, has rt: {'rt' in body})")
-            except Exception as e:
-                logger.warn(f"解析响应失败: {e}")
-
-        self._handler = on_response
-
-        context.on("response", self._handler)
-
-        for p in context.pages:
-            try:
-                p.on("response", self._handler)
-                self._page_handlers[id(p)] = p
-                logger.info(f"已为页面注册监听器: {p.url[:60]}")
-            except Exception:
-                pass
-
-        async def on_new_page(new_page):
-            logger.info(f"新页面打开，注册监听器: {new_page.url[:60]}")
-            new_page.on("response", self._handler)
-            self._page_handlers[id(new_page)] = new_page
-
-        context.on("page", on_new_page)
-        self._new_page_handler = on_new_page
-
-        logger.info(f"已设置响应监听器 (context + {len(self._page_handlers)} pages)")
-
-    async def wait_for_questions(self, timeout: float = 25) -> bool:
-        """等待题目数据，返回是否成功"""
-        logger.info(f"开始等待题目数据，当前已捕获 {self._debug_count} 个响应")
-        try:
-            await asyncio.wait_for(self.questions_event.wait(), timeout=timeout)
-            return self.questions_data is not None
-        except asyncio.TimeoutError:
-            logger.warn(f"等待响应超时({timeout}s)，共捕获 {self._debug_count} 个响应")
-            return False
-
-    def remove_listener(self):
-        if self._context and self._handler:
-            try:
-                self._context.remove_listener("response", self._handler)
-            except Exception:
-                pass
-            for pid, p in list(self._page_handlers.items()):
-                try:
-                    p.remove_listener("response", self._handler)
-                except Exception:
-                    pass
-            self._page_handlers.clear()
-            try:
-                self._context.remove_listener("page", self._new_page_handler)
-            except Exception:
-                pass
+# 测验响应监听器已拆分至 modules.test_capture，并在本模块顶部兼容导出。
 
 
 async def handle_test_page(page: Page, questions_data: list, auto_submit: bool = False, manual_submit: bool = False) -> bool:

@@ -28,10 +28,8 @@ from playwright.async_api import async_playwright, Playwright, Page, BrowserCont
 from modules.logger import Logger
 from modules.configs import Config
 from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
-from modules.tasks import (
-    TestResponseHandler,
-    handle_test_page,
-)
+from modules.tasks import handle_test_page
+from modules.test_capture import TestResponseHandler
 from modules.utils import (
     save_cookies,
     load_cookies,

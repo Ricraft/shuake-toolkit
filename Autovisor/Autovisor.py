@@ -51,7 +51,14 @@ from modules.utils import get_video_attr, hide_window, \
     is_playwright_window
 from modules.slider import slider_verify
 from modules.async_utils import cancel_background_tasks
-from modules.tasks import video_optimize, play_video, skip_questions, wait_for_verify, activate_window, task_monitor, handle_test_page, TestResponseHandler
+from modules.tasks import skip_questions, wait_for_verify, handle_test_page
+from modules.test_capture import TestResponseHandler
+from modules.video_tasks import (
+    activate_window,
+    play_video,
+    task_monitor,
+    video_optimize,
+)
 from modules import installer
 
 # 获取全局事件循环
