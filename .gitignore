@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+.pytest_cache/
+.venv/
+venv/
+
+# 运行时依赖（installer.py 自动下载）
+runtime_deps/
+node_modules/
+
+# 日志
+logs/
+page_snapshots/
+
+# 运行时数据缓存
+zhs_course.json
+course_cache.json
+题库缓存.db
+*.db
+
+# 敏感配置（含账号/API Key 等）
+configs.ini
+Yatori/config.yaml
+qb_config.json
+launcher_preferences.json
+res/cookies.json
+res/cookies_*.json
+
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+*.exe
+*.zip
+*.bak
+
+# 编辑器 / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 备份
+_backup/

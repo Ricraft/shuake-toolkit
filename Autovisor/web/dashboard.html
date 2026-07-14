@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autovisor Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --primary: #111111;
+    --primary-active: #242424;
+    --brand-accent: #3b82f6;
+    --badge-orange: #fb923c;
+    --badge-pink: #ec4899;
+    --badge-violet: #8b5cf6;
+    --badge-emerald: #34d399;
+    --canvas: #ffffff;
+    --surface-soft: #f8f9fa;
+    --surface-card: #f5f5f5;
+    --surface-strong: #e5e7eb;
+    --surface-dark: #101010;
+    --surface-dark-elevated: #1a1a1a;
+    --hairline: #e5e7eb;
+    --hairline-soft: #f3f4f6;
+    --ink: #111111;
+    --body: #374151;
+    --muted: #6b7280;
+    --muted-soft: #898989;
+    --on-primary: #ffffff;
+    --on-dark: #ffffff;
+    --on-dark-soft: #a1a1aa;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --error: #ef4444;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--canvas);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Layout */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 240px;
+    background: var(--canvas);
+    border-right: 1px solid var(--hairline);
+    display: flex;
+    flex-direction: column;
+    padding: 24px 16px;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 50;
+  }
+  .sidebar-logo {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    padding: 0 12px 24px;
+  }
+  .nav-group { margin-bottom: 24px; }
+  .nav-group-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    padding: 0 12px 8px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--muted);
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: none;
+    background: none;
+    width: 100%;
+  }
+  .nav-item:hover { background: var(--surface-soft); color: var(--ink); }
+  .nav-item.active { background: var(--surface-card); color: var(--ink); }
+  .nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; }
+
+  .main {
+    flex: 1;
+    margin-left: 240px;
+    display: flex;
+    flex-direction: column;
+  }
+  .topbar {
+    height: 64px;
+    border-bottom: 1px solid var(--hairline);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 32px;
+    background: var(--canvas);
+    position: sticky;
+    top: 0;
+    z-index: 40;
+  }
+  .topbar-title { font-size: 18px; font-weight: 600; }
+  .topbar-actions { display: flex; align-items: center; gap: 12px; }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    background: var(--surface-soft);
+    color: var(--muted);
+  }
+  .status-badge.running { background: #dcfce7; color: #166534; }
+  .status-badge.running::before {
+    content: '';
+    width: 6px; height: 6px; border-radius: 50%; background: var(--success); animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .content { padding: 32px; max-width: 1200px; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* Cards */
+  .card {
+    background: var(--canvas);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    padding: 24px;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .card-title { font-size: 16px; font-weight: 600; }
+  .card-subtitle { font-size: 14px; color: var(--muted); margin-top: 2px; }
+
+  /* Stats Grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--surface-card);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .stat-card-value {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }
+  .stat-card-label {
+    font-size: 13px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  /* Buttons */
+  .btn-primary {
+    background: var(--primary);
+    color: var(--on-primary);
+    border: none;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 10px 18px;
+    height: 40px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: background 0.15s;
+  }
+  .btn-primary:hover { background: var(--primary-active); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-secondary {
+    background: var(--canvas);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 10px 18px;
+    height: 40px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: border-color 0.15s;
+  }
+  .btn-secondary:hover { border-color: var(--muted); }
+  .btn-danger {
+    background: var(--error);
+    color: #fff;
+    border: none;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 10px 18px;
+    height: 40px;
+    cursor: pointer;
+  }
+
+  /* Form Elements */
+  .form-group { margin-bottom: 16px; }
+  .form-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+  .form-input, .form-select, .form-textarea {
+    width: 100%;
+    background: var(--canvas);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    transition: border-color 0.15s;
+  }
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    outline: none;
+    border-color: var(--ink);
+  }
+  .form-textarea { min-height: 120px; resize: vertical; }
+
+  /* Tables */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th {
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .data-table td {
+    padding: 12px;
+    font-size: 14px;
+    border-bottom: 1px solid var(--hairline-soft);
+    color: var(--body);
+  }
+  .data-table tr:hover td { background: var(--surface-soft); }
+
+  /* Logs */
+  .log-container {
+    background: var(--surface-dark);
+    border-radius: 12px;
+    padding: 16px;
+    font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--on-dark-soft);
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .log-entry { margin-bottom: 2px; }
+  .log-time { color: var(--muted-soft); }
+  .log-info { color: var(--badge-emerald); }
+  .log-warn { color: var(--warning); }
+  .log-error { color: var(--error); }
+
+  /* Toast */
+  .toast-container {
+    position: fixed;
+    top: 80px;
+    right: 24px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .toast {
+    background: var(--canvas);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 12px 16px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    animation: slideIn 0.2s ease;
+    min-width: 240px;
+  }
+  .toast.success { border-left: 3px solid var(--success); }
+  .toast.error { border-left: 3px solid var(--error); }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  /* Progress bar */
+  .progress-bar {
+    height: 8px;
+    background: var(--hairline);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+  }
+
+  /* Responsive */
+  @media (max-width: 1024px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .stats-grid { grid-template-columns: 1fr; }
+    .content { padding: 20px; }
+    .topbar { padding: 0 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">Autovisor</div>
+    <nav>
+      <div class="nav-group">
+        <div class="nav-group-title">概览</div>
+        <button class="nav-item active" data-page="overview" onclick="switchPage('overview')">
+          <span class="nav-icon">◧</span> 仪表盘
+        </button>
+        <button class="nav-item" data-page="courses" onclick="switchPage('courses')">
+          <span class="nav-icon">▶</span> 课程
+        </button>
+        <button class="nav-item" data-page="logs" onclick="switchPage('logs')">
+          <span class="nav-icon">≡</span> 日志
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title">设置</div>
+        <button class="nav-item" data-page="config" onclick="switchPage('config')">
+          <span class="nav-icon">⚙</span> 配置
+        </button>
+        <button class="nav-item" data-page="accounts" onclick="switchPage('accounts')">
+          <span class="nav-icon">👤</span> 账号
+        </button>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-title" id="page-title">仪表盘</div>
+      <div class="topbar-actions">
+        <span class="status-badge" id="status-badge">已停止</span>
+        <button class="btn-primary" id="btn-start" onclick="startTask()">▶ 启动</button>
+        <button class="btn-danger" id="btn-stop" style="display:none;" onclick="stopTask()">⏹ 停止</button>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- Overview Page -->
+      <div class="page active" id="page-overview">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-card-value" id="stat-sessions">0</div>
+            <div class="stat-card-label">总会话</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-value" id="stat-videos">0</div>
+            <div class="stat-card-label">视频完成</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-value" id="stat-tests">0</div>
+            <div class="stat-card-label">测验完成</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-value" id="stat-rate">92%</div>
+            <div class="stat-card-label">答题正确率</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 24px;">
+          <div class="card-header">
+            <div>
+              <div class="card-title">当前任务</div>
+              <div class="card-subtitle" id="task-subtitle">无运行中任务</div>
+            </div>
+          </div>
+          <div id="task-progress-container" style="display:none;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:14px;">
+              <span id="task-name">-</span>
+              <span id="task-uptime">00:00:00</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-bar-fill" id="task-progress" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">最近日志</div>
+            <button class="btn-secondary" onclick="switchPage('logs')">查看全部</button>
+          </div>
+          <div class="log-container" id="recent-logs" style="max-height: 240px;">
+            <div class="log-entry"><span class="log-time">--:--:--</span> 等待数据...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Courses Page -->
+      <div class="page" id="page-courses">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">课程列表</div>
+            <button class="btn-secondary" onclick="refreshCourses()">刷新</button>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr><th>ID</th><th>名称</th><th>链接</th><th>进度</th><th>状态</th></tr>
+            </thead>
+            <tbody id="courses-table">
+              <tr><td colspan="5" style="text-align:center; color:var(--muted);">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Logs Page -->
+      <div class="page" id="page-logs">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">实时日志</div>
+            <div style="display:flex; gap:8px;">
+              <button class="btn-secondary" onclick="clearLogs()">清空</button>
+              <button class="btn-secondary" onclick="refreshLogs()">刷新</button>
+            </div>
+          </div>
+          <div class="log-container" id="full-logs">
+            <div class="log-entry"><span class="log-time">--:--:--</span> 等待数据...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Config Page -->
+      <div class="page" id="page-config">
+        <div class="card" style="max-width: 640px;">
+          <div class="card-header">
+            <div class="card-title">应用配置</div>
+            <button class="btn-primary" onclick="saveConfig()">保存配置</button>
+          </div>
+          <form id="config-form" onsubmit="event.preventDefault(); saveConfig();">
+            <div class="form-group">
+              <label class="form-label">浏览器驱动</label>
+              <select class="form-select" id="cfg-driver">
+                <option value="edge">Microsoft Edge</option>
+                <option value="chrome">Google Chrome</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">浏览器路径 (可选)</label>
+              <input type="text" class="form-input" id="cfg-exe-path" placeholder="C:\\Program Files\\...\\chrome.exe">
+            </div>
+            <div class="form-group">
+              <label class="form-label">最大学习时长 (分钟)</label>
+              <input type="number" class="form-input" id="cfg-limit-time" step="1" min="0">
+            </div>
+            <div class="form-group">
+              <label class="form-label">播放倍速</label>
+              <input type="number" class="form-input" id="cfg-limit-speed" step="0.1" min="1" max="2">
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                <input type="checkbox" id="cfg-auto-captcha"> 启用自动验证码
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                <input type="checkbox" id="cfg-hide-window"> 自动隐藏窗口
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                <input type="checkbox" id="cfg-sound-off"> 自动静音
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">课程链接 (每行一个)</label>
+              <textarea class="form-textarea" id="cfg-course-urls" placeholder="https://lc.zhihuishu.com/..."></textarea>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Accounts Page -->
+      <div class="page" id="page-accounts">
+        <div class="card" style="max-width: 480px;">
+          <div class="card-header">
+            <div class="card-title">账号信息</div>
+            <button class="btn-primary" onclick="saveAccount()">保存</button>
+          </div>
+          <form onsubmit="event.preventDefault(); saveAccount();">
+            <div class="form-group">
+              <label class="form-label">用户名 / 手机号</label>
+              <input type="text" class="form-input" id="acc-username">
+            </div>
+            <div class="form-group">
+              <label class="form-label">密码</label>
+              <input type="password" class="form-input" id="acc-password">
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// ============================================================
+// API Client
+// ============================================================
+const API_BASE = ''
+
+async function api(method, path, body) {
+  const url = `${API_BASE}/api${path}`;
+  const options = { method, headers: {} };
+  if (body) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+  try {
+    const res = await fetch(url, options);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || data.message || 'Request failed');
+    return data;
+  } catch (err) {
+    showToast(err.message, 'error');
+    throw err;
+  }
+}
+
+const get = (path) => api('GET', path);
+const post = (path, body) => api('POST', path, body);
+
+// ============================================================
+// UI State
+// ============================================================
+let currentPage = 'overview';
+let statusPollInterval = null;
+let logPollInterval = null;
+
+function switchPage(page) {
+  currentPage = page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(`page-${page}`).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const nav = document.querySelector(`.nav-item[data-page="${page}"]`);
+  if (nav) nav.classList.add('active');
+
+  const titles = {
+    overview: '仪表盘',
+    courses: '课程',
+    logs: '日志',
+    config: '配置',
+    accounts: '账号',
+  };
+  document.getElementById('page-title').textContent = titles[page] || page;
+
+  if (page === 'courses') refreshCourses();
+  if (page === 'config') loadConfig();
+  if (page === 'accounts') loadAccount();
+}
+
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// ============================================================
+// Status & Polling
+// ============================================================
+async function updateStatus() {
+  try {
+    const { data } = await get('/status');
+    const badge = document.getElementById('status-badge');
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+
+    if (data.is_running) {
+      badge.textContent = '运行中';
+      badge.classList.add('running');
+      btnStart.style.display = 'none';
+      btnStop.style.display = 'inline-flex';
+    } else {
+      badge.textContent = '已停止';
+      badge.classList.remove('running');
+      btnStart.style.display = 'inline-flex';
+      btnStop.style.display = 'none';
+    }
+
+    // Update task card
+    const taskContainer = document.getElementById('task-progress-container');
+    const taskSubtitle = document.getElementById('task-subtitle');
+    if (data.is_running && data.current_task) {
+      taskContainer.style.display = 'block';
+      taskSubtitle.textContent = `任务: ${data.current_task}`;
+      document.getElementById('task-name').textContent = data.current_task;
+      document.getElementById('task-uptime').textContent = formatDuration(data.uptime_seconds);
+    } else {
+      taskContainer.style.display = 'none';
+      taskSubtitle.textContent = '无运行中任务';
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function formatDuration(seconds) {
+  const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+async function updateStats() {
+  try {
+    const { data } = await get('/stats');
+    document.getElementById('stat-sessions').textContent = data.total_sessions || 0;
+    document.getElementById('stat-videos').textContent = data.total_videos || 0;
+    document.getElementById('stat-tests').textContent = data.total_tests || 0;
+    document.getElementById('stat-rate').textContent = Math.round((data.success_rate || 0) * 100) + '%';
+  } catch (e) { /* ignore */ }
+}
+
+async function updateLogs() {
+  try {
+    const { data } = await get('/logs?limit=50');
+    renderLogs(data.logs, 'recent-logs');
+    if (currentPage === 'logs') {
+      renderLogs(data.logs, 'full-logs');
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function renderLogs(logs, containerId) {
+  const container = document.getElementById(containerId);
+  if (!logs || logs.length === 0) {
+    container.innerHTML = '<div class="log-entry"><span class="log-time">--:--:--</span> 暂无日志</div>';
+    return;
+  }
+  container.innerHTML = logs.map(log => {
+    const time = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '--:--:--';
+    const levelClass = log.level === 'ERROR' ? 'log-error' : log.level === 'WARN' ? 'log-warn' : 'log-info';
+    return `<div class="log-entry"><span class="log-time">[${time}]</span> <span class="${levelClass}">${log.level}</span> ${escapeHtml(log.message)}</div>`;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function clearLogs() {
+  document.getElementById('full-logs').innerHTML = '<div class="log-entry"><span class="log-time">--:--:--</span> 日志已清空</div>';
+}
+
+function refreshLogs() { updateLogs(); }
+
+// ============================================================
+// Task Control
+// ============================================================
+async function startTask() {
+  try {
+    await post('/tasks/start', { mode: 'single' });
+    showToast('任务已启动');
+    updateStatus();
+  } catch (e) { /* handled by api */ }
+}
+
+async function stopTask() {
+  try {
+    await post('/tasks/stop', {});
+    showToast('任务已停止');
+    updateStatus();
+  } catch (e) { /* handled by api */ }
+}
+
+// ============================================================
+// Courses
+// ============================================================
+async function refreshCourses() {
+  try {
+    const { data } = await get('/courses');
+    const tbody = document.getElementById('courses-table');
+    if (!data.courses || data.courses.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--muted);">暂无课程</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.courses.map(c => `
+      <tr>
+        <td>${c.id}</td>
+        <td>${escapeHtml(c.name)}</td>
+        <td style="max-width:300px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(c.url)}</td>
+        <td>${c.progress}%</td>
+        <td><span style="text-transform:capitalize;">${c.status}</span></td>
+      </tr>
+    `).join('');
+  } catch (e) { /* ignore */ }
+}
+
+// ============================================================
+// Config
+// ============================================================
+async function loadConfig() {
+  try {
+    const { data } = await get('/config');
+    document.getElementById('cfg-driver').value = data.driver || 'edge';
+    document.getElementById('cfg-exe-path').value = data.exe_path || '';
+    document.getElementById('cfg-limit-time').value = data.limit_max_time || 30;
+    document.getElementById('cfg-limit-speed').value = data.limit_speed || 1.5;
+    document.getElementById('cfg-auto-captcha').checked = data.enable_auto_captcha !== false;
+    document.getElementById('cfg-hide-window').checked = !!data.enable_hide_window;
+    document.getElementById('cfg-sound-off').checked = data.sound_off !== false;
+    document.getElementById('cfg-course-urls').value = (data.course_urls || []).join('\n');
+  } catch (e) { /* ignore */ }
+}
+
+async function saveConfig() {
+  try {
+    const body = {
+      driver: document.getElementById('cfg-driver').value,
+      exe_path: document.getElementById('cfg-exe-path').value || null,
+      limit_max_time: parseFloat(document.getElementById('cfg-limit-time').value) || 30,
+      limit_speed: parseFloat(document.getElementById('cfg-limit-speed').value) || 1.5,
+      enable_auto_captcha: document.getElementById('cfg-auto-captcha').checked,
+      enable_hide_window: document.getElementById('cfg-hide-window').checked,
+      sound_off: document.getElementById('cfg-sound-off').checked,
+      course_urls: document.getElementById('cfg-course-urls').value.split('\n').map(s => s.trim()).filter(Boolean),
+    };
+    await post('/config', body);
+    showToast('配置已保存');
+  } catch (e) { /* handled by api */ }
+}
+
+// ============================================================
+// Account
+// ============================================================
+async function loadAccount() {
+  try {
+    const { data } = await get('/config');
+    document.getElementById('acc-username').value = data.username || '';
+    document.getElementById('acc-password').value = '';
+  } catch (e) { /* ignore */ }
+}
+
+async function saveAccount() {
+  try {
+    const body = {
+      username: document.getElementById('acc-username').value,
+      password: document.getElementById('acc-password').value,
+    };
+    await post('/config', body);
+    showToast('账号已保存');
+  } catch (e) { /* handled by api */ }
+}
+
+// ============================================================
+// Init
+// ============================================================
+function init() {
+  updateStatus();
+  updateStats();
+  updateLogs();
+  statusPollInterval = setInterval(updateStatus, 2000);
+  logPollInterval = setInterval(updateLogs, 3000);
+}
+
+init();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>统一启动器 2026</title>
+    <script>
+        (function() {
+            // 在阻塞 CDN 脚本加载前，立即捕获 pywebview 桥接状态
+            var pv = window.pywebview;
+            window._pvReady = !!(pv && pv.api);
+            window.addEventListener('pywebviewready', function() {
+                window._pvReady = true;
+            });
+            // 轮询保底: 某些 pywebview 版本在页面加载完成后才注入桥接
+            if (!window._pvReady) {
+                var pvTimer = setInterval(function() {
+                    if (window.pywebview && window.pywebview.api) {
+                        window._pvReady = true;
+                        clearInterval(pvTimer);
+                    }
+                }, 200);
+                setTimeout(function() { clearInterval(pvTimer); }, 60000);
+            }
+        })();
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="styles.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-icon">
+                <i class="fas fa-rocket"></i>
+            </div>
+            <div>
+                <div class="brand-text">统一启动器</div>
+                <div class="brand-sub">Launcher 2026</div>
+            </div>
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-label">导航</div>
+            <div class="nav-item active" data-view="dashboard" onclick="switchView('dashboard', this)">
+                <i class="fas fa-border-all"></i>
+                <span>中控台</span>
+            </div>
+            <div class="nav-item" data-view="settings" onclick="switchView('settings', this)">
+                <i class="fas fa-sliders"></i>
+                <span>核心设置</span>
+            </div>
+            <div class="nav-item" data-view="questionbank" onclick="switchView('questionbank', this)">
+                <i class="fas fa-database"></i>
+                <span>题库设置</span>
+            </div>
+            <div class="nav-item" data-view="preferences" onclick="switchView('preferences', this)">
+                <i class="fas fa-gear"></i>
+                <span>软件设置</span>
+            </div>
+            <div class="nav-item" data-view="about" onclick="switchView('about', this)">
+                <i class="fas fa-circle-info"></i>
+                <span>关于</span>
+            </div>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="status-line">
+                <div class="status-pulse"></div>
+                <span id="sidebar-status">正在连接后端...</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Wrapper -->
+    <div class="main-wrapper">
+        <!-- Top Header -->
+        <header class="top-header">
+            <div class="header-title" id="page-title">中控台</div>
+            <div class="header-actions">
+                <button class="icon-btn" onclick="toggleTheme()" title="切换主题">
+                    <i class="fas fa-moon" id="theme-icon"></i>
+                </button>
+                <button class="icon-btn" onclick="showBgModal()" title="自定义背景">
+                    <i class="fas fa-image"></i>
+                </button>
+                <button class="icon-btn" onclick="showExitModal()" title="退出">
+                    <i class="fas fa-power-off"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- ===== DASHBOARD ===== -->
+            <div id="view-dashboard" class="view-page active">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title"><i class="fas fa-border-all" style="margin-right: 12px;"></i>中控台</h1>
+                        <p class="section-subtitle">统一管理 Yatori 与 Autovisor 核心，实时监控运行状态</p>
+                    </div>
+                    <button id="btn-start-all" class="btn btn-primary btn-pill" onclick="saveAndPerform('start_all')">
+                        <i class="fas fa-play"></i>
+                        一键启动全部
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+                    <!-- Yatori Card -->
+                    <div class="glass-card core-card">
+                        <div class="core-card-header">
+                            <div class="flex items-center gap-3">
+                                <div class="core-icon yatori">
+                                    <i class="fas fa-cube"></i>
+                                </div>
+                                <div class="core-info">
+                                    <h3>通用平台</h3>
+                                    <span id="yatori-version">Yatori Core</span>
+                                </div>
+                            </div>
+                            <span id="yatori-ready" class="status-badge idle">检测中</span>
+                        </div>
+
+                        <div class="core-status-row">
+                            <div id="yatori-dot" class="status-dot"></div>
+                            <span id="yatori-status" class="text-sm font-medium" style="color: var(--text-muted);">未启动</span>
+                        </div>
+
+                        <div class="core-actions">
+                            <button id="yatori-action-btn" class="btn btn-primary flex-1" onclick="handleCoreAction('yatori')">
+                                <i class="fas fa-power-off"></i> 启动核心
+                            </button>
+                            <button class="btn btn-outline" onclick="openSettingsTab('yatori')">
+                                <i class="fas fa-folder-open"></i> 配置
+                            </button>
+                            <button class="btn btn-outline" onclick="performAction('show_update_dialog')">
+                                <i class="fas fa-cloud-arrow-down"></i> 更新
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Autovisor Card -->
+                    <div class="glass-card core-card">
+                        <div class="core-card-header">
+                            <div class="flex items-center gap-3">
+                                <div class="core-icon autovisor">
+                                    <i class="fas fa-tree"></i>
+                                </div>
+                                <div class="core-info">
+                                    <h3>智慧树专区</h3>
+                                    <span id="autovisor-version">Autovisor Core</span>
+                                </div>
+                            </div>
+                            <span id="autovisor-ready" class="status-badge idle">检测中</span>
+                        </div>
+
+                        <div class="flex items-center justify-between">
+                            <div class="core-status-row">
+                                <div id="autovisor-dot" class="status-dot"></div>
+                                <span id="autovisor-status" class="text-sm font-medium" style="color: var(--text-muted);">未启动</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <label class="switch">
+                                    <input id="dashboard-autovisor-multi" type="checkbox" onchange="syncAutovisorMulti(this.checked)">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="text-xs" style="color: var(--text-muted);">多账号</span>
+                            </div>
+                        </div>
+
+                        <div class="core-actions">
+                            <button id="autovisor-action-btn" class="btn btn-primary flex-1" onclick="handleCoreAction('autovisor')">
+                                <i class="fas fa-power-off"></i> 启动核心
+                            </button>
+                            <button class="btn btn-outline" onclick="openSettingsTab('autovisor')">
+                                <i class="fas fa-folder-open"></i> 配置
+                            </button>
+                            <button class="btn btn-outline" onclick="performAction('check_autovisor_update')">
+                                <i class="fas fa-cloud-arrow-down"></i> 更新
+                            </button>
+                            <button class="btn btn-outline" onclick="performAction('install_autovisor_update')">
+                                <i class="fas fa-download"></i> 安装
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Question Bank Card -->
+                <div class="glass-card core-card mb-5" style="min-height: auto; cursor: pointer;" onclick="switchView('questionbank')">
+                    <div class="core-card-header">
+                        <div class="flex items-center gap-3">
+                            <div class="core-icon qb">
+                                <i class="fas fa-database"></i>
+                            </div>
+                            <div class="core-info">
+                                <h3>题库服务器</h3>
+                                <span id="qb-version">本地缓存 + AI 兜底</span>
+                            </div>
+                        </div>
+                        <span id="qb-ready" class="status-badge idle">未启动</span>
+                    </div>
+
+                    <div class="flex items-center justify-between flex-wrap gap-3">
+                        <div class="core-status-row">
+                            <div id="qb-dot" class="status-dot"></div>
+                            <span id="qb-status" class="text-sm font-medium" style="color: var(--text-muted);">未启动</span>
+                            <span class="text-xs" style="color: var(--text-ghost);">|</span>
+                            <span id="qb-stats" class="text-xs" style="color: var(--text-muted);">题库: 0 条 (AI缓存: 0)</span>
+                        </div>
+                        <span id="qb-port-display" class="text-xs font-mono" style="color: var(--text-ghost);">端口: 8083</span>
+                    </div>
+
+                    <div class="core-actions" onclick="event.stopPropagation()">
+                        <button id="qb-action-btn" class="btn btn-primary" onclick="toggleQuestionBank()">
+                            <i class="fas fa-power-off"></i> 启动题库
+                        </button>
+                        <button class="btn btn-outline" onclick="switchView('questionbank')">
+                            <i class="fas fa-gear"></i> 题库设置
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Console -->
+                <div class="glass-card">
+                    <div class="flex justify-between items-center flex-wrap gap-3 mb-1">
+                        <div class="flex items-center gap-2">
+                            <i class="fas fa-terminal text-xs" style="color: var(--text-muted);"></i>
+                            <h3 class="font-bold text-sm">系统控制台</h3>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <div class="pill-tabs">
+                                <div class="pill-tab active" data-log-tab="system" onclick="switchConsoleTab(this)">系统</div>
+                                <div class="pill-tab" data-log-tab="yatori" onclick="switchConsoleTab(this)">Yatori</div>
+                                <div class="pill-tab" data-log-tab="autovisor" onclick="switchConsoleTab(this)">Autovisor</div>
+                            </div>
+                            <button class="btn btn-ghost btn-sm" onclick="exportLogs()" title="导出日志">
+                                <i class="fas fa-download"></i>
+                            </button>
+                            <button class="btn btn-ghost btn-sm" onclick="performAction('clear_logs')">
+                                <i class="fas fa-trash-can"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="console-output" class="console-box">等待日志输出...</div>
+                </div>
+            </div>
+
+            <!-- ===== SETTINGS ===== -->
+            <div id="view-settings" class="view-page">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">核心设置</h1>
+                        <p class="section-subtitle">保存后会直接写入 config.yaml 和 configs.ini</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button class="btn btn-outline btn-pill" onclick="performAction('show_settings_dir', currentConfigTab)">
+                            <i class="fas fa-folder-open"></i> 打开目录
+                        </button>
+                        <button id="btn-save-settings" class="btn btn-primary btn-pill" onclick="saveSettings()">
+                            <i class="fas fa-floppy-disk"></i> 保存配置
+                        </button>
+                    </div>
+                </div>
+
+                <div class="pill-tabs mb-5">
+                    <div class="pill-tab active" id="tab-btn-yatori" onclick="switchConfigTab('yatori')">Yatori 通用配置</div>
+                    <div class="pill-tab" id="tab-btn-autovisor" onclick="switchConfigTab('autovisor')">Autovisor 智慧树配置</div>
+                </div>
+
+                <!-- Yatori Config -->
+                <div id="config-yatori" class="flex flex-col gap-5">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div class="glass-card flex flex-col gap-4">
+                            <h3 class="font-bold text-sm flex items-center gap-2">
+                                <i class="fas fa-sliders text-xs" style="color: var(--accent-primary);"></i> 常规全局设置
+                            </h3>
+                            <div class="flex justify-between items-center gap-4">
+                                <span class="text-sm" style="color: var(--text-secondary);">日志详细级别</span>
+                                <div class="select-wrapper w-40">
+                                    <select id="y-log-level" class="input-field">
+                                        <option value="INFO">INFO</option>
+                                        <option value="DEBUG">DEBUG</option>
+                                        <option value="WARN">WARN</option>
+                                        <option value="ERROR">ERROR</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                            </div>
+                            <div class="flex justify-between items-center gap-4">
+                                <span class="text-sm" style="color: var(--text-secondary);">日志显示模式</span>
+                                <div class="select-wrapper w-40">
+                                    <select id="y-log-model" class="input-field">
+                                        <option value="0">精简模式</option>
+                                        <option value="1">详细模式</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                            </div>
+                            <div class="flex justify-between items-center gap-4">
+                                <span class="text-sm" style="color: var(--text-secondary);">Web 模式</span>
+                                <div class="select-wrapper w-40">
+                                    <select id="y-web-model" class="input-field">
+                                        <option value="0">默认</option>
+                                        <option value="1">增强</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                            </div>
+                            <label class="flex items-center gap-3 text-sm cursor-pointer" style="color: var(--text-secondary);">
+                                <input id="y-completion-tone" type="checkbox" class="accent-indigo-500"> 完成时播放提示音
+                            </label>
+                            <label class="flex items-center gap-3 text-sm cursor-pointer" style="color: var(--text-secondary);">
+                                <input id="y-color-log" type="checkbox" class="accent-indigo-500"> 启用彩色日志
+                            </label>
+                            <label class="flex items-center gap-3 text-sm cursor-pointer" style="color: var(--text-secondary);">
+                                <input id="y-log-out-file" type="checkbox" class="accent-indigo-500"> 记录日志到文件
+                            </label>
+                        </div>
+
+                        <div class="glass-card flex flex-col gap-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="font-bold text-sm flex items-center gap-2">
+                                    <i class="fas fa-envelope text-xs" style="color: var(--accent-primary);"></i> SMTP 邮件通知
+                                </h3>
+                                <label class="switch"><input id="y-email-sw" type="checkbox"><span class="slider"></span></label>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">SMTP 服务器</span>
+                                <input id="y-smtp-host" type="text" class="input-field" placeholder="smtp.qq.com">
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">SMTP 端口</span>
+                                <input id="y-smtp-port" type="number" class="input-field" placeholder="465">
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">用户名 / 邮箱</span>
+                                <input id="y-email-user" type="text" class="input-field" placeholder="name@example.com">
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">授权码 / 密码</span>
+                                <input id="y-email-password" type="password" class="input-field">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card flex flex-col gap-4">
+                        <h3 class="font-bold text-sm flex items-center gap-2">
+                            <i class="fas fa-brain text-xs" style="color: var(--accent-primary);"></i> AI 模型配置
+                        </h3>
+                        <p class="text-xs" style="color: var(--text-muted);">只有在账号选择自动考试时才会用到这里的模型配置</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="input-group">
+                                <span class="input-label">AI 提供商</span>
+                                <div class="select-wrapper">
+                                    <select id="y-ai-type" class="input-field" onchange="syncYatoriAiField()">
+                                        <option value="SILICON">硅基流动</option>
+                                        <option value="DEEPSEEK">DeepSeek</option>
+                                        <option value="CHATGLM">ChatGLM(智谱)</option>
+                                        <option value="TONGYI">TONGYI（通义千问）</option>
+                                        <option value="XINGHUO">XINGHUO（星火大模型）</option>
+                                        <option value="DOUBAO">DOUBAO（豆包）</option>
+                                        <option value="METAAI">METAAI</option>
+                                        <option value="OPENAI">OpenAI</option>
+                                        <option value="OTHER">其他模型</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">AI 接口地址</span>
+                                <input id="y-ai-url" type="text" class="input-field" placeholder="https://dashscope.aliyuncs.com/api/v1" oninput="onYatoriUrlInput()">
+                                <p id="y-ai-url-preview" class="text-xs font-mono mt-1" style="color: var(--text-muted);">Preview: -</p>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label" style="display: flex; align-items: center; gap: 0.5rem;">
+                                    模型名称
+                                    <button class="btn btn-outline btn-sm" id="y-fetch-models-btn" onclick="fetchYatoriModelList()" style="margin-left: auto; font-size: 0.75rem; padding: 0.25rem 0.5rem;">
+                                        <i class="fas fa-sync-alt" id="y-fetch-icon"></i>
+                                        <i class="fas fa-spinner fa-spin" id="y-fetch-loading" style="display: none;"></i>
+                                        获取模型
+                                    </button>
+                                </span>
+                                <input id="y-ai-model" type="text" class="input-field" placeholder="输入或选择模型" list="y-model-list" autocomplete="off">
+                                <datalist id="y-model-list"></datalist>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">API Key</span>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <input id="y-ai-api-key" type="password" class="input-field" style="flex: 1;">
+                                    <button class="btn btn-outline btn-sm" onclick="toggleYatoriApiKeyVisibility()" title="显示/隐藏">
+                                        <i class="fas fa-eye" id="y-ai-key-icon"></i>
+                                    </button>
+                                    <button class="btn btn-primary btn-sm" id="y-test-ai-btn" onclick="testYatoriAIConnectivity()">
+                                        <i class="fas fa-plug"></i>
+                                        <i class="fas fa-spinner fa-spin" id="y-test-loading" style="display: none;"></i>
+                                        测试
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="y-test-result" style="display: none; margin-top: 0.5rem; padding: 0.75rem 1rem; border-radius: var(--radius-md); font-size: 0.875rem;">
+                            <i class="fas" id="y-test-result-icon"></i>
+                            <span id="y-test-result-message"></span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card flex flex-col gap-4">
+                        <div class="flex justify-between items-center">
+                            <h3 class="font-bold text-sm flex items-center gap-2">
+                                <i class="fas fa-users text-xs" style="color: var(--accent-primary);"></i> 学习账号管理
+                            </h3>
+                            <button class="btn btn-primary btn-sm" onclick="addYatoriAccount()">
+                                <i class="fas fa-plus"></i> 添加账号
+                            </button>
+                        </div>
+                        <p class="text-xs" style="color: var(--text-muted);">提示：平台类型决定登录方式。英华学堂、海旗科技建议填写站点地址；包含课程和排除课程按课程名关键词逐行匹配。</p>
+                        <div id="yatori-accounts" class="flex flex-col gap-4"></div>
+                    </div>
+                </div>
+
+                <!-- Autovisor Config -->
+                <div id="config-autovisor" class="flex flex-col gap-5" style="display:none;">
+                    <div class="glass-card flex flex-col gap-4">
+                        <h3 class="font-bold text-sm flex items-center gap-2">
+                            <i class="fas fa-desktop text-xs" style="color: var(--accent-tertiary);"></i> 运行环境设置
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="input-group">
+                                <span class="input-label">首选浏览器</span>
+                                <div class="select-wrapper">
+                                    <select id="a-browser-driver" class="input-field">
+                                        <option value="Chrome">Google Chrome</option>
+                                        <option value="Edge">Microsoft Edge</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">浏览器路径</span>
+                                <div class="flex gap-2">
+                                    <input id="a-browser-path" type="text" class="input-field">
+                                    <button class="btn btn-outline btn-sm" onclick="detectBrowserPath()">自动识别</button>
+                                    <button class="btn btn-outline btn-sm" onclick="browseBrowserPath()">浏览</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <label class="switch"><input id="a-multi-mode" type="checkbox" onchange="syncAutovisorMulti(this.checked)"><span class="slider"></span></label>
+                            <span class="text-sm" style="color: var(--text-secondary);">启用多账号模式</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card flex flex-col gap-4">
+                        <div class="flex justify-between items-center">
+                            <h3 class="font-bold text-sm flex items-center gap-2">
+                                <i class="fas fa-users text-xs" style="color: var(--accent-tertiary);"></i> 智慧树账号管理
+                            </h3>
+                            <button class="btn btn-primary btn-sm" onclick="addAutovisorAccount()">
+                                <i class="fas fa-plus"></i> 添加账号
+                            </button>
+                        </div>
+                        <div id="autovisor-accounts" class="flex flex-col gap-4"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== QUESTION BANK ===== -->
+            <div id="view-questionbank" class="view-page">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">智能题库中心</h1>
+                        <p class="section-subtitle">本地题库服务器管理 · AI 智能答题 · 数据安全存储</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="qb-status-indicator" id="qb-indicator">
+                            <span class="qb-status-dot" id="qb-dot"></span>
+                            <span class="qb-status-text" id="qb-page-status">已停止</span>
+                        </div>
+                        <button id="qb-page-btn" class="btn btn-primary btn-glow" onclick="toggleQuestionBank()">
+                            <i class="fas fa-power-off"></i> 启动服务
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                    <!-- 左侧：主要配置区 -->
+                    <div class="lg:col-span-8 flex flex-col gap-5">
+                        <!-- 服务器状态卡片 -->
+                        <div class="glass-card qb-hero-card">
+                            <div class="qb-hero-content">
+                                <div class="qb-hero-icon" id="qb-hero-icon">
+                                    <i class="fas fa-database"></i>
+                                </div>
+                                <div class="qb-hero-info">
+                                    <h3>本地题库服务器</h3>
+                                    <p id="qb-server-desc">服务已停止，点击右上角按钮启动</p>
+                                    <div class="qb-hero-meta">
+                                        <span class="qb-meta-item">
+                                            <i class="fas fa-plug"></i>
+                                            <span id="qb-port-display">端口: 8083</span>
+                                        </span>
+                                        <span class="qb-meta-item">
+                                            <i class="fas fa-shield-alt"></i>
+                                            本地安全存储
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 连接配置 -->
+                        <div class="glass-card qb-config-card">
+                            <div class="qb-card-header">
+                                <i class="fas fa-sliders-h"></i>
+                                <span>连接配置</span>
+                            </div>
+                            <div class="qb-config-grid">
+                                <div class="qb-input-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-link"></i>
+                                        题库 API 地址
+                                    </label>
+                                    <div class="qb-input-wrap">
+                                        <input id="y-api-url" type="text" class="qb-input" value="http://127.0.0.1:8083/query" readonly>
+                                        <button class="qb-copy-btn" onclick="copyApiUrl()" title="复制地址">
+                                            <i class="fas fa-copy"></i>
+                                        </button>
+                                    </div>
+                                    <p class="qb-hint">Yatori 考试模式选择"外部题库"时使用此地址，AutoVisor 答题默认启用</p>
+                                </div>
+                                <div class="qb-input-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-network-wired"></i>
+                                        服务端口
+                                    </label>
+                                    <input id="y-qb-port" type="number" class="qb-input" value="8083" min="1024" max="65535" onchange="autoSaveQbSettings()">
+                                    <p class="qb-hint">修改后需重启服务生效</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- AI 模型配置 -->
+                        <div class="glass-card qb-ai-card">
+                            <div class="qb-card-header">
+                                <i class="fas fa-brain"></i>
+                                <span>AI 模型配置</span>
+                                <span class="qb-badge">智能答题</span>
+                            </div>
+                            <p class="qb-section-desc">配置 AI 模型用于自动回答未命中本地题库的问题</p>
+                            <div class="qb-ai-grid">
+                                <div class="qb-input-group qb-input-full">
+                                    <label class="qb-label">
+                                        <i class="fas fa-robot"></i>
+                                        AI 提供商
+                                    </label>
+                                    <div class="qb-select-wrap">
+                                        <select id="qb-ai-type" class="qb-input" onchange="syncQbAiField();autoSaveQbSettings()">
+                                            <option value="SILICON">硅基流动 (SiliconFlow)</option>
+                                            <option value="DEEPSEEK">DeepSeek</option>
+                                            <option value="CHATGLM">智谱 AI (ChatGLM)</option>
+                                            <option value="TONGYI">通义千问 (TONGYI)</option>
+                                            <option value="XINGHUO">讯飞星火 (XINGHUO)</option>
+                                            <option value="DOUBAO">豆包 (DOUBAO)</option>
+                                            <option value="METAAI">Meta AI</option>
+                                            <option value="OPENAI">OpenAI</option>
+                                            <option value="OTHER">其他模型</option>
+                                        </select>
+                                        <i class="fas fa-chevron-down qb-select-icon"></i>
+                                    </div>
+                                </div>
+                                <div class="qb-input-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-server"></i>
+                                        API 接口地址
+                                    </label>
+                                    <input id="qb-ai-url" type="text" class="qb-input" placeholder="https://api.example.com/v1" oninput="onQbUrlInput();autoSaveQbSettings()">
+                                    <p class="qb-hint" id="qb-ai-url-hint">选择提供商后自动填充默认地址</p>
+                                </div>
+                                <div class="qb-input-group qb-model-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-cube"></i>
+                                        模型名称
+                                        <button class="qb-fetch-models-text-btn" id="qb-fetch-models-btn" onclick="fetchModelList()" title="获取可用模型列表">
+                                            <i class="fas fa-sync-alt" id="qb-fetch-icon"></i>
+                                            <i class="fas fa-spinner fa-spin" id="qb-fetch-loading" style="display: none;"></i>
+                                            <span>获取模型</span>
+                                        </button>
+                                    </label>
+                                    <div class="qb-model-select-wrap">
+                                        <input id="qb-ai-model" type="text" class="qb-input" placeholder="输入或选择模型" list="qb-model-list" autocomplete="off" oninput="autoSaveQbSettings()">
+                                        <datalist id="qb-model-list"></datalist>
+                                    </div>
+                                    <p class="qb-hint">可手动输入模型ID，或点击"获取模型"后从列表中选择</p>
+                                </div>
+                                <div class="qb-input-group qb-input-full">
+                                    <label class="qb-label">
+                                        <i class="fas fa-key"></i>
+                                        API Key
+                                    </label>
+                                    <div class="qb-input-wrap">
+                                        <input id="qb-ai-api-key" type="password" class="qb-input" placeholder="sk-xxxxxxxxxxxxxxxx" oninput="autoSaveQbSettings()">
+                                        <button class="qb-toggle-pwd" onclick="toggleQbApiKeyVisibility()" title="显示/隐藏">
+                                            <i class="fas fa-eye" id="qb-ai-key-icon"></i>
+                                        </button>
+                                    </div>
+                                    <div class="qb-key-actions">
+                                        <p class="qb-hint">您的 API Key 仅保存在本地，不会上传到服务器</p>
+                                        <button class="qb-test-btn" id="qb-test-ai-btn" onclick="testAIConnectivity()">
+                                            <i class="fas fa-plug"></i>
+                                            <span>测试连通性</span>
+                                            <i class="fas fa-spinner fa-spin qb-test-loading" id="qb-test-loading" style="display: none;"></i>
+                                        </button>
+                                    </div>
+                                    <div class="qb-test-result" id="qb-test-result" style="display: none;">
+                                        <i class="fas" id="qb-test-icon"></i>
+                                        <span id="qb-test-message"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 数据统计卡片 -->
+                        <div class="glass-card qb-stats-card">
+                            <div class="qb-card-header">
+                                <i class="fas fa-chart-pie"></i>
+                                <span>数据概览</span>
+                                <span class="qb-stats-update" id="qb-last-update">刚刚更新</span>
+                            </div>
+                            <div class="qb-stats-grid">
+                                <div class="qb-stat-item">
+                                    <div class="qb-stat-icon qb-stat-total">
+                                        <i class="fas fa-archive"></i>
+                                    </div>
+                                    <div class="qb-stat-info">
+                                        <div class="qb-stat-value" id="qb-stat-total">0</div>
+                                        <div class="qb-stat-label">总题库数</div>
+                                    </div>
+                                </div>
+                                <div class="qb-stat-item">
+                                    <div class="qb-stat-icon qb-stat-ai">
+                                        <i class="fas fa-robot"></i>
+                                    </div>
+                                    <div class="qb-stat-info">
+                                        <div class="qb-stat-value" id="qb-stat-ai">0</div>
+                                        <div class="qb-stat-label">AI 缓存</div>
+                                    </div>
+                                </div>
+                                <div class="qb-stat-item">
+                                    <div class="qb-stat-icon qb-stat-hit">
+                                        <i class="fas fa-pen"></i>
+                                    </div>
+                                    <div class="qb-stat-info">
+                                        <div class="qb-stat-value" id="qb-stat-local">0</div>
+                                        <div class="qb-stat-label">手动录入</div>
+                                    </div>
+                                </div>
+                                <div class="qb-stat-item">
+                                    <div class="qb-stat-icon qb-stat-query">
+                                        <i class="fas fa-search"></i>
+                                    </div>
+                                    <div class="qb-stat-info">
+                                        <div class="qb-stat-value" id="qb-stat-query">0</div>
+                                        <div class="qb-stat-label">今日查询</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 高级设置 -->
+                        <div class="glass-card qb-advanced-card">
+                            <div class="qb-card-header">
+                                <i class="fas fa-cogs"></i>
+                                <span>高级设置</span>
+                            </div>
+                            <div class="qb-advanced-grid">
+                                <div class="qb-input-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-redo"></i>
+                                        最大重试次数
+                                    </label>
+                                    <input id="qb-max-retries" type="number" class="qb-input" value="3" min="1" max="10">
+                                    <p class="qb-hint">AI请求失败时的最大重试次数</p>
+                                </div>
+                                <div class="qb-input-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-clock"></i>
+                                        请求超时(秒)
+                                    </label>
+                                    <input id="qb-timeout" type="number" class="qb-input" value="30" min="5" max="120">
+                                    <p class="qb-hint">单次AI请求的超时时间</p>
+                                </div>
+                                <div class="qb-input-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-thermometer-half"></i>
+                                        随机性 (Temperature)
+                                    </label>
+                                    <input id="qb-temperature" type="number" class="qb-input" value="0.7" min="0" max="2" step="0.1">
+                                    <p class="qb-hint">控制AI回答的创造性，越低越保守</p>
+                                </div>
+                                <div class="qb-input-group">
+                                    <label class="qb-label">
+                                        <i class="fas fa-save"></i>
+                                        自动保存间隔(分钟)
+                                    </label>
+                                    <input id="qb-save-interval" type="number" class="qb-input" value="5" min="1" max="60">
+                                    <p class="qb-hint">题库数据自动保存到本地的时间间隔</p>
+                                </div>
+                                <div class="qb-toggle-group qb-input-full">
+                                    <label class="qb-toggle-item">
+                                        <input type="checkbox" id="qb-auto-start" checked onchange="autoSaveQbSettings()">
+                                        <span class="qb-toggle-slider"></span>
+                                        <span class="qb-toggle-label">
+                                            <i class="fas fa-play-circle"></i>
+                                            启动器打开时自动启动题库服务
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="qb-toggle-group qb-input-full">
+                                    <label class="qb-toggle-item">
+                                        <input type="checkbox" id="qb-log-enabled" checked>
+                                        <span class="qb-toggle-slider"></span>
+                                        <span class="qb-toggle-label">
+                                            <i class="fas fa-file-alt"></i>
+                                            启用查询日志记录
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：操作面板 -->
+                    <div class="lg:col-span-4 flex flex-col gap-5">
+                        <!-- 快速操作 -->
+                        <div class="glass-card qb-actions-card">
+                            <div class="qb-card-header">
+                                <i class="fas fa-bolt"></i>
+                                <span>快速操作</span>
+                            </div>
+                            <div class="qb-actions-list">
+                                <button class="qb-action-btn" onclick="performAction('deduplicate_question_bank')">
+                                    <div class="qb-action-icon qb-action-danger">
+                                        <i class="fas fa-filter"></i>
+                                    </div>
+                                    <div class="qb-action-info">
+                                        <span class="qb-action-title">去重整理</span>
+                                        <span class="qb-action-desc">清理重复的题目数据</span>
+                                    </div>
+                                </button>
+                                <button class="qb-action-btn" onclick="performAction('clear_question_bank')">
+                                    <div class="qb-action-icon qb-action-danger">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </div>
+                                    <div class="qb-action-info">
+                                        <span class="qb-action-title">清空缓存</span>
+                                        <span class="qb-action-desc">删除所有 AI 缓存数据</span>
+                                    </div>
+                                </button>
+                                <button class="qb-action-btn" onclick="performAction('export_question_bank')">
+                                    <div class="qb-action-icon qb-action-export">
+                                        <i class="fas fa-file-export"></i>
+                                    </div>
+                                    <div class="qb-action-info">
+                                        <span class="qb-action-title">导出数据</span>
+                                        <span class="qb-action-desc">备份题库到本地文件</span>
+                                    </div>
+                                </button>
+                                <button class="qb-action-btn" onclick="performAction('import_question_bank')">
+                                    <div class="qb-action-icon qb-action-import">
+                                        <i class="fas fa-file-import"></i>
+                                    </div>
+                                    <div class="qb-action-info">
+                                        <span class="qb-action-title">导入数据</span>
+                                        <span class="qb-action-desc">从文件恢复题库</span>
+                                    </div>
+                                </button>
+                                <button class="qb-action-btn" onclick="saveQbSettings().then(r => r?.ok && showToast('题库配置已保存', 'success'))">
+                                    <div class="qb-action-icon qb-action-save">
+                                        <i class="fas fa-save"></i>
+                                    </div>
+                                    <div class="qb-action-info">
+                                        <span class="qb-action-title">保存配置</span>
+                                        <span class="qb-action-desc" id="qb-save-status">AI配置将自动保存</span>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 使用指南 -->
+                        <div class="glass-card qb-guide-card">
+                            <div class="qb-card-header">
+                                <i class="fas fa-book-open"></i>
+                                <span>使用指南</span>
+                            </div>
+                            <div class="qb-guide-list">
+                                <div class="qb-guide-item">
+                                    <div class="qb-guide-num">1</div>
+                                    <p>启动题库服务器，确保服务正常运行</p>
+                                </div>
+                                <div class="qb-guide-item">
+                                    <div class="qb-guide-num">2</div>
+                                    <p>在 Yatori 考试模式中选择"外部题库"（AutoVisor 答题默认启用）</p>
+                                </div>
+                                <div class="qb-guide-item">
+                                    <div class="qb-guide-num">3</div>
+                                    <p>系统会自动查询本地题库并缓存 AI 回答</p>
+                                </div>
+                                <div class="qb-guide-item">
+                                    <div class="qb-guide-num">4</div>
+                                    <p>定期备份题库数据，避免意外丢失</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 安全提示 -->
+                        <div class="glass-card qb-security-card">
+                            <div class="qb-security-content">
+                                <i class="fas fa-shield-check"></i>
+                                <div>
+                                    <span class="qb-security-title">数据安全</span>
+                                    <p class="qb-security-desc">所有数据保存在本地，不会上传到任何第三方服务器</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== PREFERENCES ===== -->
+            <div id="view-preferences" class="view-page">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">软件设置</h1>
+                        <p class="section-subtitle">自定义启动器行为与外观偏好</p>
+                    </div>
+                </div>
+
+                <div class="flex flex-col gap-5 max-w-3xl">
+                    <div class="glass-card">
+                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                            <i class="fas fa-palette text-xs" style="color: var(--accent-primary);"></i> 外观主题
+                        </h3>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">界面主题</div>
+                                <div class="setting-desc">切换白天或黑夜模式，退出后会记住你的选择</div>
+                            </div>
+                            <button id="theme-toggle-btn" class="btn btn-outline btn-sm" onclick="toggleTheme()">
+                                <i class="fas fa-moon" id="theme-icon-pref"></i>
+                                <span id="theme-label">黑夜模式</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" id="bg-settings-card">
+                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                            <i class="fas fa-image text-xs" style="color: var(--accent-secondary);"></i> 背景设置
+                        </h3>
+                        <p class="text-xs mb-3" style="color: var(--text-muted);">选择预设背景或上传自定义图片作为界面背景</p>
+                        <div class="bg-preview-grid" id="bg-preview-grid">
+                            <div class="bg-preview-item active" data-bg="none" onclick="setBackground('none', this)">
+                                <span>默认</span>
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item" data-bg="gradient1" onclick="setBackground('gradient1', this)" style="background: linear-gradient(135deg, #0a0b0f 0%, #1a1a3e 50%, #0f2027 100%);">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item" data-bg="gradient2" onclick="setBackground('gradient2', this)" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item" data-bg="cyber-teal" onclick="setBackground('cyber-teal', this)" title="赛博青绿" style="background: repeating-linear-gradient(60deg, transparent, transparent 40px, rgba(0,229,160,0.04) 40px, rgba(0,229,160,0.04) 41px), repeating-linear-gradient(-60deg, transparent, transparent 80px, rgba(0,0,0,0.3) 80px, rgba(0,0,0,0.3) 81px), linear-gradient(135deg, #050f0c, #0d1a16, #020605);">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item" data-bg="hacker-amber" onclick="setBackground('hacker-amber', this)" title="骇客琥珀" style="background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,176,32,0.04) 2px, rgba(255,176,32,0.04) 4px), linear-gradient(160deg, #0f0d08, #1a1610, #080604);">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item" data-bg="midnight-aurora" onclick="setBackground('midnight-aurora', this)" title="午夜极光" style="background: radial-gradient(circle at center, rgba(79,195,247,0.06) 0px, rgba(79,195,247,0.06) 1px, transparent 1px, transparent 100%), linear-gradient(150deg, #060a12, #0c1420, #04060a); background-size: 24px 24px, 48px 48px; background-position: 0 0, 12px 12px;">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item" data-bg="custom" onclick="showCustomBgInput()">
+                                <i class="fas fa-plus"></i>
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                        </div>
+                        <div id="custom-bg-row" class="flex gap-2 mt-3" style="display:none;">
+                            <input id="custom-bg-url" type="text" class="input-field" placeholder="输入图片URL或点击右侧按钮选择本地文件">
+                            <button class="btn btn-primary btn-sm" onclick="applyCustomBackground()"><i class="fas fa-check"></i></button>
+                            <button class="btn btn-outline btn-sm" onclick="triggerBgFileInput()"><i class="fas fa-folder-open"></i></button>
+                        </div>
+                        <input type="file" id="bg-file-upload" accept="image/*" onchange="handleBgFileUpload(this)" style="display:none;">
+
+                        <!-- 毛玻璃模糊度设置 -->
+                        <div class="setting-row mt-4 pt-4" style="border-top: 1px solid var(--border);">
+                            <div class="setting-info">
+                                <div class="setting-title">毛玻璃模糊度</div>
+                                <div class="setting-desc">调节界面卡片毛玻璃效果的模糊程度</div>
+                            </div>
+                            <div class="flex items-center gap-3" style="min-width: 200px;">
+                                <input type="range" id="glass-blur-slider" min="0" max="40" step="2" value="16" class="opacity-slider" oninput="updateGlassBlur(this.value)">
+                                <span id="glass-blur-value" class="text-sm font-mono" style="color: var(--text-muted); min-width: 45px;">16px</span>
+                            </div>
+                        </div>
+
+                        <!-- 背景图片强度（仅自定义背景时生效） -->
+                        <div class="setting-row" id="overlay-strength-row" style="display:none;">
+                            <div class="setting-info">
+                                <div class="setting-title">背景图片强度</div>
+                                <div class="setting-desc">控制背景覆盖层的透明度和模糊程度，数值越低图片越清晰</div>
+                            </div>
+                            <div class="flex items-center gap-3" style="min-width: 200px;">
+                                <input type="range" id="overlay-strength-slider" min="0" max="100" step="5" value="70" class="opacity-slider" oninput="updateOverlayStrength(this.value)">
+                                <span id="overlay-strength-value" class="text-sm font-mono" style="color: var(--text-muted); min-width: 45px;">70%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                            <i class="fas fa-bolt text-xs" style="color: #f59e0b;"></i> 自动化行为
+                        </h3>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">开机自动启动</div>
+                                <div class="setting-desc">系统登录后自动运行统一启动器</div>
+                            </div>
+                            <label class="switch"><input id="pref-auto-start" type="checkbox" onchange="savePreference('autoStart', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">刷完自动关机</div>
+                                <div class="setting-desc">所有账号课程刷完后自动关闭计算机</div>
+                            </div>
+                            <label class="switch"><input id="pref-auto-shutdown" type="checkbox" onchange="savePreference('autoShutdown', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">启动后自动运行</div>
+                                <div class="setting-desc">启动器打开后自动开始刷课任务</div>
+                            </div>
+                            <label class="switch"><input id="pref-auto-run" type="checkbox" onchange="savePreference('autoRun', this.checked)"><span class="slider"></span></label>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                            <i class="fas fa-window-restore text-xs" style="color: var(--accent-primary);"></i> 窗口行为
+                        </h3>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">关闭时最小化</div>
+                                <div class="setting-desc">点击关闭按钮时最小化窗口而非退出程序</div>
+                            </div>
+                            <label class="switch"><input id="pref-minimize-tray" type="checkbox" onchange="savePreference('minimizeToTray', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">启动时最小化</div>
+                                <div class="setting-desc">启动器打开后自动最小化窗口</div>
+                            </div>
+                            <label class="switch"><input id="pref-start-minimized" type="checkbox" onchange="savePreference('startMinimized', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">置顶窗口</div>
+                                <div class="setting-desc">启动器窗口始终保持在最前端</div>
+                            </div>
+                            <label class="switch"><input id="pref-always-on-top" type="checkbox" onchange="savePreference('alwaysOnTop', this.checked)"><span class="slider"></span></label>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                            <i class="fas fa-bell text-xs" style="color: #ec4899;"></i> 通知与提示
+                        </h3>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">任务完成通知</div>
+                                <div class="setting-desc">刷课完成后显示桌面通知</div>
+                            </div>
+                            <label class="switch"><input id="pref-notify-complete" type="checkbox" onchange="savePreference('notifyOnComplete', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">出错时通知</div>
+                                <div class="setting-desc">运行出现异常时显示桌面通知</div>
+                            </div>
+                            <label class="switch"><input id="pref-notify-error" type="checkbox" onchange="savePreference('notifyOnError', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">声音提示</div>
+                                <div class="setting-desc">启用操作反馈音效</div>
+                            </div>
+                            <label class="switch"><input id="pref-sound-enabled" type="checkbox" onchange="savePreference('soundEnabled', this.checked)"><span class="slider"></span></label>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
+                            <i class="fas fa-shield-halved text-xs" style="color: var(--success);"></i> 隐私与安全
+                        </h3>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">记住窗口位置</div>
+                                <div class="setting-desc">下次启动时恢复上次关闭时的窗口位置与大小</div>
+                            </div>
+                            <label class="switch"><input id="pref-remember-geometry" type="checkbox" onchange="savePreference('rememberGeometry', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-title">自动清理日志</div>
+                                <div class="setting-desc">每次启动时自动清理超过 7 天的历史日志文件</div>
+                            </div>
+                            <label class="switch"><input id="pref-auto-clean-logs" type="checkbox" onchange="savePreference('autoCleanLogs', this.checked)"><span class="slider"></span></label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== ABOUT ===== -->
+            <div id="view-about" class="view-page">
+                <div class="text-center py-6 stagger-item">
+                    <div class="core-icon animate-float" style="width:72px;height:72px;margin:0 auto 1.5rem;background:var(--accent-gradient);border-radius:var(--radius-lg);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.75rem;box-shadow:0 8px 32px -8px var(--accent-glow);">
+                        <i class="fas fa-rocket"></i>
+                    </div>
+                    <h1 class="text-3xl font-extrabold tracking-tight mb-1">统一启动器 <span id="about-title-version" class="text-xl font-mono text-transparent bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text"></span></h1>
+                    <p id="about-version" class="font-mono text-sm mb-6" style="color: var(--text-muted);">正在读取版本信息...</p>
+                    <div class="flex gap-3 justify-center mb-8">
+                        <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="performAction('show_update_dialog')">
+                            <i class="fas fa-download"></i> 安装 Yatori 更新
+                        </button>
+                        <button class="btn btn-outline btn-pill" onclick="performAction('check_autovisor_update')">
+                            <i class="fas fa-cloud-arrow-down"></i> 检查 Autovisor 更新
+                        </button>
+                        <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="performAction('install_autovisor_update')">
+                            <i class="fas fa-download"></i> 安装更新
+                        </button>
+                    </div>
+                </div>
+
+                <div class="max-w-4xl mx-auto flex flex-col gap-5">
+                    <div class="glass-card spotlight-card stagger-item">
+                        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
+                            <i class="fas fa-code-branch text-xs" style="color: var(--accent-primary);"></i> 更新日志
+                        </h2>
+                        <div class="flex flex-col">
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.1.0 - 背景透明度调节</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">软件设置新增背景透明度滑块，自定义背景图片时可调节透明度</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.1.0 - 关于页感谢名单</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">新增 ZError 题库架构致谢</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.0.0 - 极简玻璃拟态 UI 重构</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">全新毛玻璃界面，支持暗色/亮色双主题，自定义背景图片</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.0.0 - 独立题库设置面板</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">题库服务器配置、统计与快捷操作集中管理</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.0.0 - 交互体验全面升级</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">微动效、状态反馈、页面切换动画精心打磨</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.0.0 - 多账号模式状态同步</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">修复控制面板与设置页多账号开关状态不一致的问题</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card spotlight-card stagger-item">
+                        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
+                            <i class="fas fa-heart text-xs" style="color: #ec4899;"></i> 感谢名单
+                        </h2>
+                        <p class="text-xs mb-4" style="color: var(--text-muted);">感谢以下开源项目与贡献者为统一启动器提供的支持</p>
+                        <div class="contributor-grid">
+                            <div class="contributor-card" data-tilt>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);">Y</div>
+                                <div><div class="text-sm font-semibold">Yatori</div><div class="text-xs" style="color:var(--text-muted);">通用刷课核心</div><div class="contributor-detail">开源刷课框架核心作者</div></div>
+                            </div>
+                            <div class="contributor-card" data-tilt>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#06b6d4,#3b82f6);">A</div>
+                                <div><div class="text-sm font-semibold">Autovisor</div><div class="text-xs" style="color:var(--text-muted);">智慧树核心</div><div class="contributor-detail">智慧树自动学习引擎</div></div>
+                            </div>
+                            <div class="contributor-card" data-tilt>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#f97316,#ea580c);">Z</div>
+                                <div><div class="text-sm font-semibold">ZError</div><div class="text-xs" style="color:var(--text-muted);">题库架构支持</div><div class="contributor-detail">题库API与数据架构设计</div></div>
+                            </div>
+                            <div class="contributor-card" data-tilt>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#f59e0b,#ef4444);">P</div>
+                                <div><div class="text-sm font-semibold">PyWebView</div><div class="text-xs" style="color:var(--text-muted);">桌面端框架</div><div class="contributor-detail">Python桌面端WebView框架</div></div>
+                            </div>
+                            <div class="contributor-card" data-tilt>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#10b981,#059669);">T</div>
+                                <div><div class="text-sm font-semibold">Tailwind CSS</div><div class="text-xs" style="color:var(--text-muted);">样式框架</div><div class="contributor-detail">Utility-first CSS框架</div></div>
+                            </div>
+                            <div class="contributor-card" data-tilt>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);">F</div>
+                                <div><div class="text-sm font-semibold">Font Awesome</div><div class="text-xs" style="color:var(--text-muted);">图标库</div><div class="contributor-detail">最流行的图标字体库</div></div>
+                            </div>
+                            <div class="contributor-card" data-tilt>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#ec4899,#db2777);">U</div>
+                                <div><div class="text-sm font-semibold">所有用户</div><div class="text-xs" style="color:var(--text-muted);">反馈与建议</div><div class="contributor-detail">感谢每一位用户的支持</div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card spotlight-card stagger-item">
+                        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
+                            <i class="fas fa-folder-tree text-xs" style="color: var(--success);"></i> 核心路径
+                        </h2>
+                        <div id="about-paths" class="font-mono text-sm whitespace-pre-wrap" style="color: var(--text-secondary); line-height: 1.8;"></div>
+                        <div class="flex gap-3 mt-5 flex-wrap">
+                            <button class="btn btn-outline btn-sm" onclick="performAction('open_config_dir', 'yatori')">
+                                <i class="fas fa-folder-open"></i> Yatori 目录
+                            </button>
+                            <button class="btn btn-outline btn-sm" onclick="performAction('open_config_dir', 'autovisor')">
+                                <i class="fas fa-folder-open"></i> Autovisor 目录
+                            </button>
+                            <button class="btn btn-outline btn-sm" onclick="performAction('open_config_generator')">
+                                <i class="fas fa-wand-magic-sparkles"></i> 配置生成器
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-wrap" class="toast-wrap"></div>
+
+    <!-- Exit Confirmation Modal -->
+    <div id="exit-modal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-icon"><i class="fas fa-door-open"></i></div>
+            <div class="modal-title">确认退出</div>
+            <div class="modal-desc">你确定要退出统一启动器吗？<br>如果有正在运行的刷课任务，退出后将会停止。</div>
+            <div class="modal-actions">
+                <button class="btn btn-outline" onclick="hideExitModal()">取消</button>
+                <button class="btn btn-danger" onclick="confirmExit()"><i class="fas fa-power-off"></i> 确认退出</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Background Settings Modal -->
+    <div id="bg-modal" class="modal-overlay">
+        <div class="modal-box" style="width:520px;">
+            <div class="modal-icon" style="background:linear-gradient(135deg,rgba(59,130,246,0.15),rgba(139,92,246,0.1));color:var(--accent-primary);">
+                <i class="fas fa-image"></i>
+            </div>
+            <div class="modal-title">自定义背景</div>
+            <div class="modal-desc">选择预设背景图片或上传你自己的图片作为界面背景。</div>
+            <div class="bg-preview-grid" id="bg-modal-grid">
+                <div class="bg-preview-item active" data-bg="none" onclick="setBackgroundFromModal('none', this)">
+                    <span>默认</span>
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item" data-bg="gradient1" onclick="setBackgroundFromModal('gradient1', this)" style="background: linear-gradient(135deg, #0a0b0f 0%, #1a1a3e 50%, #0f2027 100%);">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item" data-bg="gradient2" onclick="setBackgroundFromModal('gradient2', this)" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item" data-bg="cyber-teal" onclick="setBackgroundFromModal('cyber-teal', this)" title="赛博青绿" style="background: repeating-linear-gradient(60deg, transparent, transparent 40px, rgba(0,229,160,0.04) 40px, rgba(0,229,160,0.04) 41px), repeating-linear-gradient(-60deg, transparent, transparent 80px, rgba(0,0,0,0.3) 80px, rgba(0,0,0,0.3) 81px), linear-gradient(135deg, #050f0c, #0d1a16, #020605);">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item" data-bg="hacker-amber" onclick="setBackgroundFromModal('hacker-amber', this)" title="骇客琥珀" style="background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,176,32,0.04) 2px, rgba(255,176,32,0.04) 4px), linear-gradient(160deg, #0f0d08, #1a1610, #080604);">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item" data-bg="midnight-aurora" onclick="setBackgroundFromModal('midnight-aurora', this)" title="午夜极光" style="background: radial-gradient(circle at center, rgba(79,195,247,0.06) 0px, rgba(79,195,247,0.06) 1px, transparent 1px, transparent 100%), linear-gradient(150deg, #060a12, #0c1420, #04060a); background-size: 24px 24px, 48px 48px; background-position: 0 0, 12px 12px;">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item" data-bg="custom" onclick="triggerCustomBgInModal()">
+                    <i class="fas fa-cloud-arrow-up"></i>
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+            </div>
+            <div id="modal-custom-bg-row" class="mt-3" style="display:none;">
+                <div class="flex gap-2">
+                    <input id="modal-custom-bg-url" type="text" class="input-field" placeholder="输入图片 URL 或点击浏览选择">
+                    <button class="btn btn-primary btn-sm" onclick="applyModalCustomBg()"><i class="fas fa-check"></i></button>
+                    <button class="btn btn-outline btn-sm" onclick="triggerBgFileInput()"><i class="fas fa-folder-open"></i></button>
+                </div>
+            </div>
+            <div class="modal-actions mt-4">
+                <button class="btn btn-outline btn-sm" onclick="resetBackground()"><i class="fas fa-rotate-left"></i> 恢复默认</button>
+                <button class="btn btn-primary btn-sm" onclick="hideBgModal()"><i class="fas fa-check"></i> 完成</button>
+            </div>
+        </div>
+    </div>
+
+
+    <input type="file" id="bg-file-input" accept="image/*" onchange="handleBgFileUpload(this)">
+
+    <!-- Shutdown Countdown Modal -->
+    <div id="shutdown-modal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-icon" style="background:linear-gradient(135deg,rgba(255,69,58,0.2),rgba(200,30,30,0.1));color:#ff453a;">
+                <i class="fas fa-power-off"></i>
+            </div>
+            <div class="modal-title">刷课任务已完成</div>
+            <div class="modal-desc" id="shutdown-countdown-text">系统将在 <span id="shutdown-countdown-sec">60</span> 秒后自动关机，请及时取消。</div>
+            <div class="modal-actions">
+                <button class="btn btn-danger" onclick="cancelShutdown()"><i class="fas fa-ban"></i> 取消关机</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

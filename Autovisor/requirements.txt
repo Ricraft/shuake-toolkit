@@ -1,0 +1,4 @@
+# Standalone Autovisor runtime. OpenCV and NumPy are loaded from runtime_deps.
+playwright>=1.52,<2
+PyGetWindow>=0.0.9,<1
+requests>=2.32,<3

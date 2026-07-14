@@ -1,0 +1,2086 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yatori-go-console 配置生成器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+        
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg-gray: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --radius-lg: 12px;
+            --radius-md: 8px;
+            --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+
+        body { 
+            font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, sans-serif; 
+            background-color: var(--bg-gray);
+            color: var(--text-main);
+            overflow-x: hidden;
+        }
+        
+        .yatori-main-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem 5rem;
+        }
+        
+        .yatori-header {
+            margin-bottom: 2.5rem;
+            text-align: left;
+            padding-left: 0.5rem;
+            border-left: 4px solid var(--primary);
+        }
+        
+        .yatori-header h1 {
+            font-size: 1.875rem;
+            font-weight: 700;
+            color: var(--text-main);
+            letter-spacing: -0.025em;
+        }
+
+        .yatori-section {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            margin-bottom: 1.25rem;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+        }
+
+        .yatori-section:hover {
+            border-color: #cbd5e1;
+        }
+        
+        .yatori-section-header {
+            display: flex;
+            align-items: center;
+            padding: 1.25rem 1.5rem;
+            cursor: pointer;
+            background: #fff;
+            user-select: none;
+        }
+        
+        .yatori-section-header i.chevron {
+            margin-right: 12px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        
+        .yatori-section-header.expanded i.chevron {
+            transform: rotate(90deg);
+            color: var(--primary);
+        }
+        
+        .yatori-section-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+        
+        .yatori-section-content {
+            padding: 0 1.5rem 1.5rem 1.5rem;
+            display: none;
+            border-top: 1px solid var(--border-color);
+            padding-top: 1.5rem;
+        }
+        
+        .yatori-section-content.expanded {
+            display: block;
+        }
+        
+        .yatori-form-row {
+            display: grid;
+            grid-template-columns: 180px 1fr;
+            align-items: center;
+            margin-bottom: 1.25rem;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 640px) {
+            .yatori-form-row {
+                grid-template-columns: 1fr;
+                gap: 0.5rem;
+            }
+            .yatori-label { text-align: left !important; padding-right: 0 !important; }
+        }
+        
+        .yatori-label {
+            text-align: right;
+            color: var(--text-main);
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        
+        .yatori-input, .yatori-select {
+            width: 100%;
+            padding: 0.625rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            font-size: 0.875rem;
+            background: #fff;
+            box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        }
+        
+        .yatori-input:focus, .yatori-select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        
+        .yatori-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 24px;
+        }
+        
+        .yatori-switch input { opacity: 0; width: 0; height: 0; }
+        
+        .yatori-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #cbd5e1;
+            border-radius: 24px;
+        }
+        
+        .yatori-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px; width: 18px;
+            left: 3px; bottom: 3px;
+            background-color: white;
+            border-radius: 50%;
+        }
+        
+        .yatori-switch input:checked + .yatori-slider { background-color: var(--primary); }
+        .yatori-switch input:checked + .yatori-slider:before { transform: translateX(24px); }
+        
+        .yatori-btn {
+            padding: 0.625rem 1.25rem;
+            border-radius: var(--radius-md);
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            border: none;
+        }
+        
+        .yatori-btn-primary { background: var(--primary); color: white; }
+        .yatori-btn-primary:hover { background: var(--primary-hover); }
+        .yatori-btn-secondary { background: #fff; color: var(--text-main); border: 1px solid var(--border-color); }
+        .yatori-btn-secondary:hover { border-color: #cbd5e1; }
+        .yatori-btn-danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .yatori-btn-danger:hover { background: #fee2e2; }
+        .yatori-btn-sm { padding: 0.375rem 0.75rem; font-size: 0.75rem; }
+
+        .yatori-user-card {
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            margin-bottom: 1.25rem;
+        }
+        
+        .yatori-user-header {
+            display: flex;
+            align-items: center;
+            padding: 1rem 1.25rem;
+            background: #fcfcfd;
+            cursor: pointer;
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        }
+        
+        .yatori-user-content {
+            padding: 1.5rem;
+            display: none;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        .yatori-user-content.expanded { display: block; }
+        
+        .yatori-tag-input {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 0.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            min-height: 42px;
+            background: #fff;
+        }
+        
+        .yatori-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            background: #eff6ff;
+            color: var(--primary);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .yatori-tag i { margin-left: 6px; cursor: pointer; }
+        .yatori-tag-input input { border: none; outline: none; flex: 1; min-width: 120px; font-size: 0.875rem; padding: 2px; }
+        
+        .tab-nav-wrapper {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            background: #fff;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 2rem;
+        }
+
+        .tab-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            display: flex;
+            padding: 0 1.5rem;
+        }
+        
+        .tab-btn {
+            padding: 1.25rem 1.5rem;
+            font-size: 0.9375rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .tab-btn.active {
+            border-bottom-color: var(--primary);
+            color: var(--primary);
+            font-weight: 600;
+        }
+        
+        .yatori-actions {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            padding: 1.25rem;
+            background: #fff;
+            border-top: 1px solid var(--border-color);
+            z-index: 30;
+        }
+        
+        .yatori-help-text { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.375rem; }
+
+        .modal-card {
+            background: white;
+            border-radius: var(--radius-lg);
+            box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+        }
+
+        pre#previewContent {
+            background: #0f172a;
+            color: #38bdf8;
+            line-height: 1.6;
+        }
+
+        .yatori-import-btn { position: absolute; right: 1.5rem; top: 0.75rem; }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .course-item {
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            padding: 0.5rem;
+            border-radius: var(--radius-md);
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div class="tab-nav-wrapper">
+        <div class="tab-container relative">
+            <div class="tab-btn active" onclick="switchTab('yatori')">
+                <i class="fas fa-robot"></i>
+                <span>Yatori (通用平台)</span>
+            </div>
+            <div class="tab-btn" onclick="switchTab('autovisor')">
+                <i class="fas fa-tree"></i>
+                <span>Autovisor (智慧树)</span>
+            </div>
+            
+            <!-- 导入配置按钮移至导航栏右侧 -->
+            <div class="yatori-import-btn">
+                <button onclick="importConfig()" class="yatori-btn yatori-btn-secondary yatori-btn-sm shadow-sm">
+                    <i class="fas fa-file-import"></i>导入本地配置
+                </button>
+                <input type="file" id="importFile" class="hidden" accept=".yaml,.yml,.ini" onchange="handleFileImport(event)">
+            </div>
+        </div>
+    </div>
+
+    <div class="yatori-main-wrapper">
+        <!-- Yatori 配置面板 -->
+        <div id="tab-yatori" class="tab-content active">
+            <div class="yatori-container">
+                <div class="yatori-header">
+                    <h1>Yatori 配置中心</h1>
+                    <p class="text-slate-500 text-sm mt-2">支持学习通、英华、学习公社等多个平台的自动化配置</p>
+                </div>
+
+                <!-- 基础设置 -->
+                <div class="yatori-section shadow-sm">
+                    <div class="yatori-section-header expanded" onclick="toggleSection('basic')">
+                        <i class="fas fa-chevron-right chevron"></i>
+                        <span class="yatori-section-title">常规全局设置</span>
+                    </div>
+                    <div class="yatori-section-content expanded" id="section-basic">
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">完成提示音</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" id="y-completionTone" checked>
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">彩色日志</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" id="y-colorLog" checked>
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">输出日志文件</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" id="y-logOutFileSw" checked>
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">日志详细级别</label>
+                            <div class="yatori-input-wrapper">
+                                <select class="yatori-select" id="y-logLevel">
+                                    <option value="INFO">INFO (推荐)</option>
+                                    <option value="DEBUG">DEBUG (调试)</option>
+                                    <option value="WARN">WARN</option>
+                                    <option value="ERROR">ERROR</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">日志显示模式</label>
+                            <div class="yatori-input-wrapper">
+                                <select class="yatori-select" id="y-logModel">
+                                    <option value="0">精简模式 (单视频提交)</option>
+                                    <option value="1">详细模式 (课程信息流)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 邮箱通知配置 -->
+                <div class="yatori-section shadow-sm">
+                    <div class="yatori-section-header" onclick="toggleSection('email')">
+                        <i class="fas fa-chevron-right chevron"></i>
+                        <span class="yatori-section-title">SMTP 邮件通知</span>
+                    </div>
+                    <div class="yatori-section-content" id="section-email">
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">启用邮件通知</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" id="y-emailSw">
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 ml-[180px] md:ml-0 md:pl-[180px]">
+                            <div class="space-y-2">
+                                <label class="text-xs font-semibold text-slate-500">SMTP 服务器</label>
+                                <input type="text" class="yatori-input" id="y-smtpHost" placeholder="smtp.qq.com">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-semibold text-slate-500">端口</label>
+                                <input type="text" class="yatori-input" id="y-smtpPort" placeholder="465">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-semibold text-slate-500">发件人邮箱</label>
+                                <input type="text" class="yatori-input" id="y-emailUser" placeholder="example@qq.com">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-semibold text-slate-500">授权码/密码</label>
+                                <input type="password" class="yatori-input" id="y-emailPass" placeholder="••••••••">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI 设置 -->
+                <div class="yatori-section shadow-sm">
+                    <div class="yatori-section-header" onclick="toggleSection('ai')">
+                        <i class="fas fa-chevron-right chevron"></i>
+                        <span class="yatori-section-title">AI 智能辅助答题</span>
+                    </div>
+                    <div class="yatori-section-content" id="section-ai">
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">AI 服务商</label>
+                            <div class="yatori-input-wrapper">
+                                <select class="yatori-select" id="y-aiType" onchange="onAiTypeChange()">
+                                    <option value="">不使用 AI (默认)</option>
+                                    <option value="DOUBAO">字节跳动 - 豆包</option>
+                                    <option value="TONGYI">阿里 - 通义千问</option>
+                                    <option value="DEEPSEEK">DeepSeek (深度求索)</option>
+                                    <option value="CHATGLM">智谱 AI - GLM</option>
+                                    <option value="XINGHUO">讯飞 - 星火</option>
+                                    <option value="OPENAI">OpenAI - ChatGPT</option>
+                                    <option value="SILICON">硅基流动 (SiliconFlow)</option>
+                                    <option value="OTHER">其他 (自定义 API)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row" id="y-aiUrlRow" style="display:none;">
+                            <label class="yatori-label">自定义接口</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="text" class="yatori-input" id="y-aiUrl" placeholder="https://api.example.com/v1">
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">模型 ID</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="text" class="yatori-input" id="y-model" placeholder="输入模型全称">
+                                <p class="yatori-help-text" id="y-modelHelp"></p>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">API Key</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="password" class="yatori-input" id="y-API_KEY" placeholder="sk-...">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 题库设置 -->
+                <div class="yatori-section shadow-sm">
+                    <div class="yatori-section-header" onclick="toggleSection('bank')">
+                        <i class="fas fa-chevron-right chevron"></i>
+                        <span class="yatori-section-title">外挂题库 API</span>
+                    </div>
+                    <div class="yatori-section-content" id="section-bank">
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">题库地址</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="text" class="yatori-input" id="y-bankUrl" value="http://localhost:8083" placeholder="http://localhost:8083">
+                                <p class="yatori-help-text">用于对接外部自建题库</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 用户设置 -->
+                <div class="yatori-section shadow-sm border-t-4 border-t-blue-500">
+                    <div class="yatori-section-header expanded" onclick="toggleSection('users')">
+                        <i class="fas fa-user-friends mr-3 text-blue-500"></i>
+                        <span class="yatori-section-title">学习账号管理</span>
+                    </div>
+                    <div class="yatori-section-content expanded bg-slate-50/50" id="section-users">
+                        <div id="yatori-users"></div>
+                        <div class="mt-6 flex justify-center">
+                            <button onclick="addYatoriUser()" class="yatori-btn yatori-btn-primary w-full max-w-xs shadow-md">
+                                <i class="fas fa-plus"></i>添加新学习账号
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Autovisor 配置面板 -->
+        <div id="tab-autovisor" class="tab-content">
+            <div class="yatori-container">
+                <div class="yatori-header" style="border-left-color: #10b981;">
+                    <h1 class="text-emerald-600">Autovisor 智慧树中心</h1>
+                    <p class="text-slate-500 text-sm mt-2">专为智慧树平台设计的 Playwright 自动化配置</p>
+                </div>
+
+                <!-- 全局设置 -->
+                <div class="yatori-section shadow-sm">
+                    <div class="yatori-section-header expanded" onclick="toggleAutovisorSection('global')">
+                        <i class="fas fa-chevron-right chevron"></i>
+                        <span class="yatori-section-title">运行环境设置</span>
+                    </div>
+                    <div class="yatori-section-content expanded" id="av-section-global">
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">最大并发数</label>
+                            <div class="yatori-input-wrapper flex items-center gap-4">
+                                <input type="number" class="yatori-input !w-24" id="av-maxConcurrent" value="3" min="1" max="10">
+                                <span class="text-xs text-slate-400">个账号同时运行</span>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">首选浏览器</label>
+                            <div class="yatori-input-wrapper">
+                                <select class="yatori-select" id="av-defaultDriver">
+                                    <option value="Chrome">Google Chrome (推荐)</option>
+                                    <option value="Edge">Microsoft Edge</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">默认窗口</label>
+                            <div class="yatori-input-wrapper">
+                                <select class="yatori-select" id="av-defaultWindowSize">
+                                    <option value="1400,800">1400 x 800 (最佳兼容)</option>
+                                    <option value="1200,700">1200 x 700 (笔记本)</option>
+                                    <option value="1600,900">1600 x 900 (高清)</option>
+                                    <option value="1920,1080">1920 x 1080 (全屏)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">自动处理验证码</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" id="av-defaultAutoCaptcha" checked>
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 账号管理 -->
+                <div class="yatori-section shadow-sm border-t-4 border-t-emerald-500">
+                    <div class="yatori-section-header expanded" onclick="toggleAutovisorSection('accounts')">
+                        <i class="fas fa-id-card mr-3 text-emerald-500"></i>
+                        <span class="yatori-section-title">智慧树账号管理</span>
+                    </div>
+                    <div class="yatori-section-content expanded bg-slate-50/50" id="av-section-accounts">
+                        <div id="autovisor-accounts"></div>
+                        <div class="mt-6 flex justify-center">
+                            <button onclick="addAutovisorAccount()" class="yatori-btn yatori-btn-primary !bg-emerald-600 hover:!bg-emerald-700 w-full max-w-xs shadow-md">
+                                <i class="fas fa-plus"></i>添加智慧树账号
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div> <!-- End yatori-main-wrapper -->
+
+    <!-- 底部浮动操作按钮 -->
+    <div class="yatori-actions">
+        <button onclick="previewYatoriConfig()" id="btn-preview" class="yatori-btn yatori-btn-secondary">
+            <i class="fas fa-eye"></i>配置预览
+        </button>
+        <button onclick="generateYatoriConfig()" id="btn-generate" class="yatori-btn yatori-btn-primary shadow-lg">
+            <i class="fas fa-file-code"></i>生成并下载配置
+        </button>
+        <button onclick="resetYatoriConfig()" class="yatori-btn yatori-btn-secondary text-slate-400 border-none hover:text-slate-600">
+            <i class="fas fa-trash-alt"></i>重置
+        </button>
+    </div>
+
+    <!-- 预览模态框 -->
+    <div id="previewModal" class="hidden fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+        <div class="modal-card max-w-3xl w-full max-h-[85vh] flex flex-col bg-white overflow-hidden">
+            <div class="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-code text-blue-500"></i>
+                    <h3 id="previewTitle" class="text-lg font-bold text-slate-800">配置预览</h3>
+                </div>
+                <button onclick="closePreview()" class="text-slate-400 hover:text-slate-600 p-2">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto p-0">
+                <pre id="previewContent" class="p-5 text-sm font-mono whitespace-pre-wrap break-all h-full min-h-[300px]"></pre>
+            </div>
+            <div class="p-4 border-t border-slate-100 flex justify-end gap-3 bg-slate-50/30">
+                <button onclick="closePreview()" class="yatori-btn yatori-btn-secondary px-6">关闭</button>
+                <button onclick="downloadConfig()" class="yatori-btn yatori-btn-primary px-6">
+                    <i class="fas fa-download"></i><span id="previewDownloadText">立即下载文件</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 课程编辑弹窗 -->
+    <div id="courseModal" class="hidden fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+        <div class="modal-card max-w-lg w-full bg-white overflow-hidden">
+            <div class="p-5 border-b border-slate-100 flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-list-ul text-blue-500"></i>
+                    <h3 class="text-lg font-bold text-slate-800" id="courseModalTitle">批量设定课程</h3>
+                </div>
+                <button onclick="closeCourseModal()" class="text-slate-400 hover:text-slate-600 p-2">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-6">
+                <p class="text-sm text-slate-500 mb-3">请输入课程完整名称，每行一个：</p>
+                <textarea id="courseListTextarea" class="yatori-input w-full h-64 font-mono leading-relaxed" placeholder="课程 A&#10;课程 B..."></textarea>
+                <div class="mt-4 p-3 bg-amber-50 border border-amber-100 rounded-md">
+                    <p class="text-xs text-amber-700 flex items-start gap-2">
+                        <i class="fas fa-info-circle mt-0.5"></i>
+                        <span>提示：include (只刷) 和 exclude (排除) 只能二选一。当前编辑的内容将覆盖之前的设置。</span>
+                    </p>
+                </div>
+            </div>
+            <div class="p-5 border-t border-slate-100 flex justify-end gap-3 bg-slate-50/30">
+                <button onclick="closeCourseModal()" class="yatori-btn yatori-btn-secondary px-6">取消</button>
+                <button onclick="saveCourseList()" class="yatori-btn yatori-btn-primary px-8">
+                    <i class="fas fa-check"></i>确认保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 平台定义
+        const platforms = [
+            { id: 'YINGHUA', name: '英华学堂', url: true },
+            { id: 'CANGHUI', name: '仓辉实训', url: true },
+            { id: 'HQKJ', name: '海旗科技', url: true },
+            { id: 'KETANGX', name: '码上研训', url: true },
+            { id: 'WELEARN', name: '随行课堂', url: true },
+            { id: 'ICVE', name: '智慧职教', url: true },
+            { id: 'QSXT', name: '青书学堂', url: true },
+            { id: 'ENAEA', name: '学习公社', url: false },
+            { id: 'XUEXITONG', name: '学习通', url: false },
+            { id: 'CQIE', name: '重庆工业学院', url: false },
+        ];
+
+        // 用户数据
+        let yatoriUsers = [];
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 默认展开用户设置
+            toggleSection('users');
+            // 添加第一个用户
+            addYatoriUser();
+            updateTabActions(currentTab);
+            refreshPreviewMeta();
+        });
+
+        // 当前活动的标签页
+        let currentTab = 'yatori';
+        const exportProfiles = {
+            yatori: {
+                tab: 'yatori',
+                fileName: 'config.yaml',
+                mimeType: 'text/yaml;charset=utf-8',
+                previewTitle: '配置预览 - config.yaml',
+                previewDownloadText: '下载 config.yaml'
+            },
+            autovisor: {
+                tab: 'autovisor',
+                fileName: 'configs.ini',
+                mimeType: 'text/plain;charset=utf-8',
+                previewTitle: '配置预览 - configs.ini',
+                previewDownloadText: '下载 configs.ini'
+            }
+        };
+        let previewState = {
+            tab: 'yatori',
+            fileName: exportProfiles.yatori.fileName,
+            mimeType: exportProfiles.yatori.mimeType,
+            previewTitle: exportProfiles.yatori.previewTitle,
+            previewDownloadText: exportProfiles.yatori.previewDownloadText,
+            content: ''
+        };
+
+        function setPreviewState(profile, content = '') {
+            previewState = {
+                tab: profile.tab,
+                fileName: profile.fileName,
+                mimeType: profile.mimeType,
+                previewTitle: profile.previewTitle,
+                previewDownloadText: profile.previewDownloadText,
+                content
+            };
+        }
+
+        function refreshPreviewMeta() {
+            document.getElementById('previewTitle').textContent = previewState.previewTitle;
+            document.getElementById('previewDownloadText').textContent = previewState.previewDownloadText;
+        }
+
+        function downloadTextFile(content, profile) {
+            const blob = new Blob([content], { type: profile.mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = profile.fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function openPreview(content, profile) {
+            setPreviewState(profile, content);
+            document.getElementById('previewContent').textContent = content;
+            refreshPreviewMeta();
+            document.getElementById('previewModal').classList.remove('hidden');
+        }
+
+        function updateTabActions(tab) {
+            const previewBtn = document.getElementById('btn-preview');
+            const generateBtn = document.getElementById('btn-generate');
+            const resetBtn = document.querySelector('.yatori-actions button[onclick^="reset"]');
+            
+            if (tab === 'yatori') {
+                previewBtn.setAttribute('onclick', 'previewYatoriConfig()');
+                generateBtn.setAttribute('onclick', 'generateYatoriConfig()');
+                if (resetBtn) resetBtn.setAttribute('onclick', 'resetYatoriConfig()');
+            } else {
+                previewBtn.setAttribute('onclick', 'previewAutovisorConfig()');
+                generateBtn.setAttribute('onclick', 'generateAutovisorConfig()');
+                if (resetBtn) resetBtn.setAttribute('onclick', 'resetAutovisorConfig()');
+            }
+        }
+
+        // Tab 切换
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            const tabButton = document.querySelector(`.tab-btn[onclick="switchTab('${tab}')"]`);
+            if (tabButton) {
+                tabButton.classList.add('active');
+            }
+            document.getElementById('tab-' + tab).classList.add('active');
+            
+            // 更新当前标签状态
+            currentTab = tab;
+            updateTabActions(tab);
+        }
+
+        // 切换折叠面板
+        function toggleSection(sectionId) {
+            const header = document.querySelector(`[onclick="toggleSection('${sectionId}')"]`);
+            const content = document.getElementById('section-' + sectionId);
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                header.classList.remove('expanded');
+            } else {
+                content.classList.add('expanded');
+                header.classList.add('expanded');
+            }
+        }
+
+        // AI 类型改变
+        function onAiTypeChange() {
+            const aiType = document.getElementById('y-aiType').value;
+            const urlRow = document.getElementById('y-aiUrlRow');
+            const modelHelp = document.getElementById('y-modelHelp');
+            
+            if (aiType === 'OTHER') {
+                urlRow.style.display = 'flex';
+            } else {
+                urlRow.style.display = 'none';
+            }
+            
+            // 设置提示文本
+            const helpTexts = {
+                'DOUBAO': '请输入接入点ID（非模型名）',
+                'TONGYI': '如：qwen-max, qwen-turbo',
+                'DEEPSEEK': '如：deepseek-chat, deepseek-reasoner',
+                'CHATGLM': '如：glm-4, glm-4-flash',
+                'XINGHUO': '如：lite, generalv3.5',
+                'OPENAI': '如：gpt-4, gpt-3.5-turbo',
+                'SILICON': '如：deepseek-ai/DeepSeek-V3',
+                'OTHER': '请输入模型名'
+            };
+            modelHelp.textContent = helpTexts[aiType] || '';
+        }
+
+        // 根据平台类型获取视频模式选项
+        function getVideoModelOptions(accountType, currentValue) {
+            const optionsMap = {
+                'YINGHUA': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '普通模式' },
+                    { value: 2, text: '暴力模式' },
+                    { value: 3, text: '去红模式' }
+                ],
+                'XUEXITONG': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '普通模式（顺序学习）' },
+                    { value: 2, text: '多课程模式' },
+                    { value: 3, text: '多任务点同时进行' }
+                ],
+                'WELEARN': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '刷学时模式' },
+                    { value: 2, text: '秒刷完成度' }
+                ],
+                'CQIE': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '常规模式' },
+                    { value: 2, text: '暴力模式（秒刷）' }
+                ],
+                'ENAEA': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '普通模式' },
+                    { value: 2, text: '暴力模式' }
+                ],
+                'HQKJ': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '普通模式' },
+                    { value: 2, text: '快速模式' }
+                ],
+                'ICVE': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '秒刷模式' }
+                ],
+                'QSXT': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '刷学时模式' }
+                ],
+                'KETANGX': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '常规模式（默认秒刷）' }
+                ],
+                'CANGHUI': [
+                    { value: 0, text: '不刷视频' },
+                    { value: 1, text: '普通模式' },
+                    { value: 2, text: '暴力模式' }
+                ]
+            };
+            
+            const options = optionsMap[accountType] || optionsMap['YINGHUA'];
+            return options.map(opt => 
+                `<option value="${opt.value}" ${currentValue === opt.value ? 'selected' : ''}>${opt.text}</option>`
+            ).join('');
+        }
+
+        // 根据平台类型获取视频模式帮助文本
+        function getVideoModelHelp(accountType) {
+            const helpMap = {
+                'YINGHUA': '普通模式:正常观看 | 暴力模式:快速完成 | 去红模式:清除异常标记',
+                'XUEXITONG': '普通模式:顺序学习 | 多课程模式:多课程并发 | 多任务点模式:多任务点同时进行(可能封号)',
+                'WELEARN': '刷学时模式:累积学习时间 | 秒刷完成度:直接完成',
+                'CQIE': '常规模式:正常刷课 | 暴力模式:秒刷完成',
+                'ENAEA': '普通模式:正常刷课 | 暴力模式:快速完成',
+                'HQKJ': '普通模式:正常观看 | 快速模式:加速完成',
+                'ICVE': '秒刷模式:仅支持秒刷',
+                'QSXT': '刷学时模式:仅支持刷学时',
+                'KETAGX': '常规模式:平台默认秒刷',
+                'CANGHUI': '普通模式:正常刷课 | 暴力模式:快速完成'
+            };
+            return helpMap[accountType] || '请选择适合的刷课模式';
+        }
+
+        // 添加用户
+        function addYatoriUser() {
+            const userId = Date.now();
+            const user = {
+                id: userId,
+                accountType: 'YINGHUA',
+                remarkName: '',
+                url: '',
+                account: '',
+                password: '',
+                isProxy: 0,
+                informEmails: [],
+                videoModel: 1,
+                autoExam: 0,
+                includeCourses: [],
+                excludeCourses: []
+            };
+            yatoriUsers.push(user);
+            renderYatoriUsers();
+        }
+
+        // 删除用户
+        function removeYatoriUser(userId) {
+            yatoriUsers = yatoriUsers.filter(u => u.id !== userId);
+            renderYatoriUsers();
+        }
+
+        // 更新用户字段
+        function updateUser(userId, field, value) {
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (user) {
+                user[field] = value;
+                if (field === 'accountType') {
+                    renderYatoriUsers(); // 重新渲染以显示/隐藏URL字段
+                }
+            }
+        }
+
+        // 添加标签
+        function addTag(userId, field, inputId) {
+            const input = document.getElementById(inputId);
+            const value = input.value.trim();
+            if (!value) return;
+            
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (user && !user[field].includes(value)) {
+                user[field].push(value);
+                input.value = '';
+                renderYatoriUsers();
+            }
+        }
+
+        // 删除标签
+        function removeTag(userId, field, index) {
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (user) {
+                user[field].splice(index, 1);
+                renderYatoriUsers();
+            }
+        }
+
+        // 添加课程项
+        function addCourseItem(userId, field) {
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (user) {
+                user[field].push('');
+                // 互斥：添加include时清空exclude，反之亦然
+                if (field === 'includeCourses' && user.excludeCourses.length > 0) {
+                    user.excludeCourses = [];
+                } else if (field === 'excludeCourses' && user.includeCourses.length > 0) {
+                    user.includeCourses = [];
+                }
+                renderYatoriUsers();
+                // 聚焦到新添加的输入框
+                setTimeout(() => {
+                    const listId = field === 'includeCourses' ? `include-list-${userId}` : `exclude-list-${userId}`;
+                    const inputs = document.querySelectorAll(`#${listId} input`);
+                    if (inputs.length > 0) {
+                        inputs[inputs.length - 1].focus();
+                    }
+                }, 50);
+            }
+        }
+
+        // 删除课程项
+        function removeCourseItem(userId, field, index) {
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (user) {
+                user[field].splice(index, 1);
+                renderYatoriUsers();
+            }
+        }
+
+        // 更新课程项
+        function updateCourseItem(userId, field, index, value) {
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (user) {
+                user[field][index] = value.trim();
+            }
+        }
+
+        // 获取自动考试帮助文本
+        function getAutoExamHelp(accountType) {
+            if (accountType === 'XUEXITONG') {
+                return '不考:关闭考试 | AI考试:使用AI答题 | 外部题库:对接外部题库 | 免费AI:学习通免费AI(无需配置)';
+            }
+            return '不考试:关闭考试 | AI考试:使用AI答题 | 外部题库对接:对接外部题库';
+        }
+
+        // 当前编辑的课程弹窗状态
+        let currentCourseEdit = { userId: null, type: null };
+
+        // 打开课程编辑弹窗
+        function openCourseModal(userId, type) {
+            currentCourseEdit = { userId, type };
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (!user) return;
+            
+            const courses = type === 'include' ? user.includeCourses : user.excludeCourses;
+            const title = type === 'include' ? '只刷课程设定' : '排除课程设定';
+            
+            document.getElementById('courseModalTitle').textContent = title;
+            document.getElementById('courseListTextarea').value = courses.join('\n');
+            document.getElementById('courseModal').classList.remove('hidden');
+        }
+
+        // 关闭课程编辑弹窗
+        function closeCourseModal() {
+            document.getElementById('courseModal').classList.add('hidden');
+            currentCourseEdit = { userId: null, type: null };
+        }
+
+        // 保存课程列表
+        function saveCourseList() {
+            const { userId, type } = currentCourseEdit;
+            if (!userId || !type) return;
+            
+            const user = yatoriUsers.find(u => u.id === userId);
+            if (!user) return;
+            
+            const textarea = document.getElementById('courseListTextarea');
+            const courses = textarea.value
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+            
+            if (type === 'include') {
+                user.includeCourses = courses;
+                // 清空排除课程（互斥）
+                if (courses.length > 0) {
+                    user.excludeCourses = [];
+                }
+            } else {
+                user.excludeCourses = courses;
+                // 清空只刷课程（互斥）
+                if (courses.length > 0) {
+                    user.includeCourses = [];
+                }
+            }
+            
+            renderYatoriUsers();
+            closeCourseModal();
+            showToast('课程列表已保存');
+        }
+
+        // 渲染用户列表
+        function renderYatoriUsers() {
+            const container = document.getElementById('yatori-users');
+            
+            if (yatoriUsers.length === 0) {
+                container.innerHTML = '<div class="text-center p-8 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl text-slate-400">尚未添加任何学习账号</div>';
+                return;
+            }
+            
+            container.innerHTML = yatoriUsers.map((user, index) => {
+                const platform = platforms.find(p => p.id === user.accountType);
+                const showUrl = platform && platform.url;
+                
+                return `
+                    <div class="yatori-user-card shadow-sm mb-6">
+                        <div class="yatori-user-header bg-slate-50/80 border-b border-slate-100" onclick="toggleUser(${user.id})">
+                            <i class="fas fa-chevron-down mr-3 text-blue-500" id="user-icon-${user.id}"></i>
+                            <span class="font-bold text-slate-700">账号 #${index + 1} <small class="ml-2 font-normal text-slate-400">(${platform ? platform.name : '未知平台'})</small></span>
+                            <button onclick="event.stopPropagation(); removeYatoriUser(${user.id})" class="ml-auto w-8 h-8 flex items-center justify-center text-slate-300 hover:text-red-500 rounded-full hover:bg-red-50 transition-colors">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div class="yatori-user-content expanded bg-white p-6" id="user-content-${user.id}">
+                            <div class="yatori-form-row">
+                                <label class="yatori-label">学习平台</label>
+                                <div class="yatori-input-wrapper">
+                                    <select class="yatori-select font-semibold" onchange="updateUser(${user.id}, 'accountType', this.value); renderYatoriUsers();">
+                                        ${platforms.map(p => `<option value="${p.id}" ${user.accountType === p.id ? 'selected' : ''}>${p.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="yatori-form-row">
+                                <label class="yatori-label">自定义备注</label>
+                                <div class="yatori-input-wrapper">
+                                    <input type="text" class="yatori-input" value="${user.remarkName}" onchange="updateUser(${user.id}, 'remarkName', this.value)" placeholder="例：张三-网课">
+                                </div>
+                            </div>
+                            ${showUrl ? `
+                            <div class="yatori-form-row">
+                                <label class="yatori-label">平台 URL</label>
+                                <div class="yatori-input-wrapper">
+                                    <input type="text" class="yatori-input" value="${user.url}" onchange="updateUser(${user.id}, 'url', this.value)" placeholder="输入登录后的首页地址...">
+                                </div>
+                            </div>
+                            ` : ''}
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 ml-0 sm:ml-[180px] mb-6">
+                                <div class="space-y-2">
+                                    <label class="text-xs font-bold text-slate-400 uppercase tracking-wider">登录账号</label>
+                                    <input type="text" class="yatori-input" value="${user.account}" onchange="updateUser(${user.id}, 'account', this.value)" placeholder="手机号/学号">
+                                </div>
+                                <div class="space-y-2">
+                                    <label class="text-xs font-bold text-slate-400 uppercase tracking-wider">密码/TOKEN</label>
+                                    <input type="password" class="yatori-input" value="${user.password}" onchange="updateUser(${user.id}, 'password', this.value)" placeholder="••••••••">
+                                </div>
+                            </div>
+                            
+                            <div class="h-px bg-slate-100 my-6"></div>
+
+                            <div class="yatori-form-row">
+                                <label class="yatori-label">独立代理池</label>
+                                <div class="yatori-input-wrapper">
+                                    <label class="yatori-switch">
+                                        <input type="checkbox" ${user.isProxy ? 'checked' : ''} onchange="updateUser(${user.id}, 'isProxy', this.checked ? 1 : 0)">
+                                        <span class="yatori-slider"></span>
+                                    </label>
+                                    <span class="ml-3 text-sm text-slate-500">${user.isProxy ? '已启用 IP 随机化' : '使用全局网络'}</span>
+                                </div>
+                            </div>
+                            <div class="yatori-form-row">
+                                <label class="yatori-label">通知邮箱</label>
+                                <div class="yatori-input-wrapper">
+                                    <div class="yatori-tag-input border-slate-200" onclick="document.getElementById('email-input-${user.id}').focus()">
+                                        ${user.informEmails.map((email, idx) => `
+                                            <span class="yatori-tag bg-blue-50 text-blue-600 border border-blue-100">${email}<i class="fas fa-times hover:text-blue-800" onclick="removeTag(${user.id}, 'informEmails', ${idx})"></i></span>
+                                        `).join('')}
+                                        <input type="text" id="email-input-${user.id}" placeholder="+ 新增邮箱" onkeydown="if(event.key==='Enter'){event.preventDefault();addTag(${user.id},'informEmails','email-input-${user.id}')}">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-6 mt-6 p-5 bg-slate-50/50 rounded-xl border border-slate-100">
+                                <div class="space-y-3">
+                                    <label class="block text-sm font-bold text-slate-700">刷视频策略</label>
+                                    <select class="yatori-select" onchange="updateUser(${user.id}, 'videoModel', parseInt(this.value))">
+                                        ${getVideoModelOptions(user.accountType, user.videoModel)}
+                                    </select>
+                                    <p class="text-xs text-slate-400 leading-relaxed">${getVideoModelHelp(user.accountType)}</p>
+                                </div>
+                                <div class="space-y-3">
+                                    <label class="block text-sm font-bold text-slate-700">考试/测验策略</label>
+                                    <select class="yatori-select" onchange="updateUser(${user.id}, 'autoExam', parseInt(this.value))">
+                                        <option value="0" ${user.autoExam === 0 ? 'selected' : ''}>关闭自动考试</option>
+                                        <option value="1" ${user.autoExam === 1 ? 'selected' : ''}>AI 智能答题</option>
+                                        <option value="2" ${user.autoExam === 2 ? 'selected' : ''}>第三方题库 API</option>
+                                        <option value="3" ${user.autoExam === 3 ? 'selected' : ''}>学习通免费 AI (限平台)</option>
+                                    </select>
+                                    <p class="text-xs text-slate-400 leading-relaxed">${getAutoExamHelp(user.accountType)}</p>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+                                <button onclick="openCourseModal(${user.id}, 'include')" class="yatori-btn yatori-btn-secondary text-blue-600 border-blue-100 hover:bg-blue-50">
+                                    <i class="fas fa-filter text-xs"></i>设定：只刷指定课程 (${user.includeCourses.length})
+                                </button>
+                                <button onclick="openCourseModal(${user.id}, 'exclude')" class="yatori-btn yatori-btn-secondary text-slate-500">
+                                    <i class="fas fa-ban text-xs"></i>设定：排除特定课程 (${user.excludeCourses.length})
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // 切换用户折叠
+        function toggleUser(userId) {
+            const content = document.getElementById(`user-content-${userId}`);
+            const icon = document.getElementById(`user-icon-${userId}`);
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                icon.style.transform = 'rotate(-90deg)';
+            } else {
+                content.classList.add('expanded');
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        // 生成配置
+        function generateYatoriConfig() {
+            const config = buildConfigObject();
+            const yaml = toYAML(config);
+            downloadTextFile(yaml, exportProfiles.yatori);
+            
+            showToast('配置已生成并下载');
+        }
+
+        // 构建配置对象
+        function buildConfigObject() {
+            const aiType = document.getElementById('y-aiType').value;
+            
+            const config = {
+                setting: {
+                    basicSetting: {
+                        completionTone: document.getElementById('y-completionTone').checked ? 1 : 0,
+                        colorLog: document.getElementById('y-colorLog').checked ? 1 : 0,
+                        logOutFileSw: document.getElementById('y-logOutFileSw').checked ? 1 : 0,
+                        logLevel: document.getElementById('y-logLevel').value,
+                        logModel: parseInt(document.getElementById('y-logModel').value),
+                        WebModel: 0
+                    },
+                    emailInform: {
+                        sw: document.getElementById('y-emailSw').checked ? 1 : 0,
+                        SMTPHost: document.getElementById('y-smtpHost').value,
+                        SMTPPort: document.getElementById('y-smtpPort').value ? parseInt(document.getElementById('y-smtpPort').value) : 0,
+                        userName: document.getElementById('y-emailUser').value,
+                        password: document.getElementById('y-emailPass').value
+                    }
+                },
+                users: yatoriUsers.map(user => ({
+                    accountType: user.accountType,
+                    url: user.url,
+                    remarkName: user.remarkName,
+                    account: user.account,
+                    password: user.password,
+                    isProxy: user.isProxy,
+                    informEmails: user.informEmails,
+                    coursesCustom: {
+                        shuffleSw: 0,
+                        videoModel: user.videoModel,
+                        autoExam: user.autoExam,
+                        examAutoSubmit: user.autoExam === 1 ? 1 : 0,
+                        includeCourses: user.includeCourses,
+                        excludeCourses: user.excludeCourses
+                    }
+                }))
+            };
+            
+            // AI 配置
+            if (aiType) {
+                config.setting.aiSetting = {
+                    aiType: aiType,
+                    aiUrl: aiType === 'OTHER' ? document.getElementById('y-aiUrl').value : '',
+                    model: document.getElementById('y-model').value,
+                    API_KEY: document.getElementById('y-API_KEY').value
+                };
+            }
+
+            // 题库配置
+            const bankUrl = document.getElementById('y-bankUrl').value;
+            config.setting.apiQueSetting = {
+                url: bankUrl || 'http://localhost:8083'
+            };
+            
+            return config;
+        }
+
+        // 转换为 YAML
+        function toYAML(obj, indent = 0) {
+            const spaces = '  '.repeat(indent);
+            let yaml = '';
+            
+            for (const [key, value] of Object.entries(obj)) {
+                if (value === null || value === undefined) continue;
+                
+                if (Array.isArray(value)) {
+                    if (value.length === 0) {
+                        yaml += `${spaces}${key}: []\n`;
+                    } else {
+                        yaml += `${spaces}${key}:\n`;
+                        value.forEach(item => {
+                            if (typeof item === 'object' && item !== null) {
+                                yaml += `${spaces}  -\n`;
+                                yaml += toYAML(item, indent + 2).replace(new RegExp(`^${spaces}`, 'gm'), `${spaces}    `);
+                            } else {
+                                yaml += `${spaces}  - ${item}\n`;
+                            }
+                        });
+                    }
+                } else if (typeof value === 'object') {
+                    yaml += `${spaces}${key}:\n`;
+                    yaml += toYAML(value, indent + 1);
+                } else if (typeof value === 'string') {
+                    if (value.includes(':') || value.includes('#') || value.includes('\n')) {
+                        yaml += `${spaces}${key}: "${value}"\n`;
+                    } else {
+                        yaml += `${spaces}${key}: ${value}\n`;
+                    }
+                } else if (typeof value === 'boolean') {
+                    yaml += `${spaces}${key}: ${value}\n`;
+                } else {
+                    yaml += `${spaces}${key}: ${value}\n`;
+                }
+            }
+            
+            return yaml;
+        }
+
+        // 预览配置
+        function previewYatoriConfig() {
+            const config = buildConfigObject();
+            const yaml = toYAML(config);
+            openPreview(yaml, exportProfiles.yatori);
+        }
+
+        // 关闭预览
+        function closePreview() {
+            document.getElementById('previewModal').classList.add('hidden');
+        }
+
+        // 下载配置
+        function downloadConfig() {
+            if (previewState.content) {
+                downloadTextFile(previewState.content, previewState);
+                showToast('配置已生成并下载');
+                closePreview();
+                return;
+            }
+
+            if (currentTab === 'yatori') {
+                generateYatoriConfig();
+                return;
+            }
+
+            generateAutovisorConfig();
+        }
+
+        // 重置配置
+        function resetYatoriConfig() {
+            if (confirm('确定要重置所有配置吗？')) {
+                // 重置全局设置
+                document.getElementById('y-completionTone').checked = true;
+                document.getElementById('y-colorLog').checked = true;
+                document.getElementById('y-logOutFileSw').checked = true;
+                document.getElementById('y-logLevel').value = 'INFO';
+                document.getElementById('y-logModel').value = '0';
+                document.getElementById('y-emailSw').checked = false;
+                document.getElementById('y-smtpHost').value = '';
+                document.getElementById('y-smtpPort').value = '';
+                document.getElementById('y-emailUser').value = '';
+                document.getElementById('y-emailPass').value = '';
+                document.getElementById('y-aiType').value = '';
+                document.getElementById('y-aiUrl').value = '';
+                document.getElementById('y-model').value = '';
+                document.getElementById('y-API_KEY').value = '';
+                document.getElementById('y-bankUrl').value = 'http://localhost:8083';
+                
+                // 重置用户
+                yatoriUsers = [];
+                addYatoriUser();
+                
+                onAiTypeChange();
+                showToast('配置已重置');
+            }
+        }
+
+        // 导入配置
+        function importConfig() {
+            document.getElementById('importFile').click();
+        }
+
+        // 处理文件导入
+        function handleFileImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const content = e.target.result;
+                    const fileName = file.name.toLowerCase();
+                    
+                    if (fileName.endsWith('.ini')) {
+                        // Autovisor INI 配置
+                        parseINIConfig(content);
+                        // 切换到 Autovisor 标签页
+                        switchTab('autovisor');
+                        setPreviewState(exportProfiles.autovisor, content);
+                        refreshPreviewMeta();
+                        showToast('Autovisor 配置导入成功');
+                    } else if (fileName.endsWith('.yaml') || fileName.endsWith('.yml')) {
+                        // Yatori YAML 配置
+                        parseYAMLConfig(content);
+                        // 切换到 Yatori 标签页
+                        switchTab('yatori');
+                        setPreviewState(exportProfiles.yatori, content);
+                        refreshPreviewMeta();
+                        showToast('Yatori 配置导入成功');
+                    } else {
+                        showToast('不支持的文件格式');
+                    }
+                } catch (err) {
+                    showToast('导入失败：' + err.message);
+                    console.error(err);
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = ''; // 清空输入
+        }
+
+        // 解析 YAML 配置
+        function parseYAMLConfig(content) {
+            // 简单的 YAML 解析器
+            const lines = content.split('\n');
+            let currentSection = null;
+            let currentSubSection = null;
+            let currentUser = null;
+            let users = [];
+            let setting = {};
+            let inUsers = false;
+            let userIndex = -1;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const trimmed = line.trim();
+                
+                if (!trimmed || trimmed.startsWith('#')) continue;
+                
+                // 检查是否是顶级键
+                if (!line.startsWith(' ') && trimmed.endsWith(':')) {
+                    const key = trimmed.slice(0, -1);
+                    if (key === 'setting') {
+                        currentSection = 'setting';
+                        inUsers = false;
+                    } else if (key === 'users') {
+                        currentSection = 'users';
+                        inUsers = true;
+                        userIndex = -1;
+                    } else {
+                        currentSection = key;
+                    }
+                    continue;
+                }
+                
+                // 解析 setting 下的子项
+                if (currentSection === 'setting' && line.startsWith('  ') && !line.startsWith('    ')) {
+                    const match = trimmed.match(/^(\w+):/);
+                    if (match) {
+                        currentSubSection = match[1];
+                        setting[currentSubSection] = {};
+                    }
+                    continue;
+                }
+                
+                // 解析 setting 子项的键值
+                if (currentSection === 'setting' && currentSubSection && line.startsWith('    ')) {
+                    const colonIndex = trimmed.indexOf(':');
+                    if (colonIndex > 0) {
+                        const key = trimmed.substring(0, colonIndex);
+                        let value = trimmed.substring(colonIndex + 1).trim();
+                        
+                        // 移除引号
+                        if ((value.startsWith('"') && value.endsWith('"')) || 
+                            (value.startsWith("'") && value.endsWith("'"))) {
+                            value = value.slice(1, -1);
+                        }
+                        
+                        // 转换类型
+                        if (value === 'true') value = true;
+                        else if (value === 'false') value = false;
+                        else if (!isNaN(value) && value !== '') value = Number(value);
+                        
+                        setting[currentSubSection][key] = value;
+                    }
+                    continue;
+                }
+                
+                // 解析 users 数组
+                if (inUsers && trimmed === '-') {
+                    userIndex++;
+                    currentUser = {};
+                    users.push(currentUser);
+                    continue;
+                }
+                
+                // 解析 user 的键值
+                if (currentUser && line.startsWith('    ')) {
+                    const colonIndex = trimmed.indexOf(':');
+                    if (colonIndex > 0) {
+                        const key = trimmed.substring(0, colonIndex);
+                        let value = trimmed.substring(colonIndex + 1).trim();
+                        
+                        // 移除引号
+                        if ((value.startsWith('"') && value.endsWith('"')) || 
+                            (value.startsWith("'") && value.endsWith("'"))) {
+                            value = value.slice(1, -1);
+                        }
+                        
+                        // 转换类型
+                        if (value === 'true') value = true;
+                        else if (value === 'false') value = false;
+                        else if (!isNaN(value) && value !== '') value = Number(value);
+                        
+                        // 处理数组
+                        if (key === 'informEmails' || key === 'includeCourses' || key === 'excludeCourses') {
+                            // 读取后续的行直到下一个键或空行
+                            currentUser[key] = [];
+                            let j = i + 1;
+                            while (j < lines.length && lines[j].trim().startsWith('- ')) {
+                                let item = lines[j].trim().substring(2);
+                                if ((item.startsWith('"') && item.endsWith('"')) || 
+                                    (item.startsWith("'") && item.endsWith("'"))) {
+                                    item = item.slice(1, -1);
+                                }
+                                currentUser[key].push(item);
+                                j++;
+                            }
+                            i = j - 1;
+                        } else if (key === 'coursesCustom') {
+                            // 处理嵌套的 coursesCustom
+                            currentUser[key] = {};
+                            let j = i + 1;
+                            while (j < lines.length && lines[j].startsWith('      ')) {
+                                const subLine = lines[j].trim();
+                                const subColonIndex = subLine.indexOf(':');
+                                if (subColonIndex > 0) {
+                                    const subKey = subLine.substring(0, subColonIndex);
+                                    let subValue = subLine.substring(subColonIndex + 1).trim();
+                                    
+                                    if ((subValue.startsWith('"') && subValue.endsWith('"')) || 
+                                        (subValue.startsWith("'") && subValue.endsWith("'"))) {
+                                        subValue = subValue.slice(1, -1);
+                                    }
+                                    
+                                    if (subValue === 'true') subValue = true;
+                                    else if (subValue === 'false') subValue = false;
+                                    else if (!isNaN(subValue) && subValue !== '') subValue = Number(subValue);
+                                    
+                                    // 处理数组
+                                    if (subKey === 'includeCourses' || subKey === 'excludeCourses') {
+                                        currentUser[key][subKey] = [];
+                                        let k = j + 1;
+                                        while (k < lines.length && lines[k].trim().startsWith('- ')) {
+                                            let item = lines[k].trim().substring(2);
+                                            if ((item.startsWith('"') && item.endsWith('"')) || 
+                                                (item.startsWith("'") && item.endsWith("'"))) {
+                                                item = item.slice(1, -1);
+                                            }
+                                            currentUser[key][subKey].push(item);
+                                            k++;
+                                        }
+                                        j = k - 1;
+                                    } else {
+                                        currentUser[key][subKey] = subValue;
+                                    }
+                                }
+                                j++;
+                            }
+                            i = j - 1;
+                        } else {
+                            currentUser[key] = value;
+                        }
+                    }
+                }
+            }
+            
+            // 应用导入的配置
+            applyImportedConfig(setting, users);
+        }
+
+        // 解析 INI 配置 (Autovisor)
+        function parseINIConfig(content) {
+            const lines = content.split('\n');
+            const accounts = [];
+            let currentAccount = null;
+            let currentSection = null;
+            let accountNum = 0;
+
+            for (let line of lines) {
+                line = line.trim();
+                if (!line || line.startsWith(';') || line.startsWith('#')) continue;
+
+                // 匹配节 [section-name-N]
+                const sectionMatch = line.match(/^\[(.+?)\]$/);
+                if (sectionMatch) {
+                    currentSection = sectionMatch[1];
+                    // 检查是否是新账号的 user-account 节
+                    const userMatch = currentSection.match(/^user-account(?:-(\d+))?$/);
+                    if (userMatch) {
+                        accountNum = userMatch[1] ? parseInt(userMatch[1]) : 1;
+                        currentAccount = {
+                            id: Date.now() + accountNum,
+                            accountNum: accountNum,
+                            username: '',
+                            password: '',
+                            driver: 'Chrome',
+                            exePath: '',
+                            enableAutoCaptcha: true,
+                            enableHideWindow: false,
+                            soundOff: true,
+                            limitMaxTime: 30,
+                            limitSpeed: 1.0,
+                            windowWidth: 1400,
+                            windowHeight: 800,
+                            urls: ['']
+                        };
+                        accounts[accountNum - 1] = currentAccount;
+                    }
+                    continue;
+                }
+
+                if (!currentAccount) continue;
+
+                // 解析键值对
+                const eqIndex = line.indexOf('=');
+                if (eqIndex > 0) {
+                    const key = line.substring(0, eqIndex).trim();
+                    const value = line.substring(eqIndex + 1).trim();
+
+                    // 根据当前节和键设置值
+                    if (currentSection.startsWith('user-account')) {
+                        if (key === 'username') currentAccount.username = value;
+                        else if (key === 'password') currentAccount.password = value;
+                    } else if (currentSection.startsWith('browser-option')) {
+                        if (key === 'driver') currentAccount.driver = value;
+                        else if (key === 'EXE_PATH') currentAccount.exePath = value;
+                    } else if (currentSection.startsWith('script-option')) {
+                        if (key === 'enableAutoCaptcha') currentAccount.enableAutoCaptcha = value.toLowerCase() === 'true';
+                        else if (key === 'enableHideWindow') currentAccount.enableHideWindow = value.toLowerCase() === 'true';
+                    } else if (currentSection.startsWith('course-option')) {
+                        if (key === 'soundOff') currentAccount.soundOff = value.toLowerCase() === 'true';
+                        else if (key === 'limitMaxTime') currentAccount.limitMaxTime = parseFloat(value) || 30;
+                        else if (key === 'limitSpeed') currentAccount.limitSpeed = parseFloat(value) || 1.0;
+                        else if (key === 'windowWidth') currentAccount.windowWidth = parseInt(value) || 1400;
+                        else if (key === 'windowHeight') currentAccount.windowHeight = parseInt(value) || 800;
+                    } else if (currentSection.startsWith('course-url')) {
+                        if (key.startsWith('URL')) {
+                            const urlIndex = parseInt(key.replace('URL', '')) - 1;
+                            if (!currentAccount.urls) currentAccount.urls = [];
+                            // 确保数组长度足够
+                            while (currentAccount.urls.length <= urlIndex) {
+                                currentAccount.urls.push('');
+                            }
+                            currentAccount.urls[urlIndex] = value;
+                        }
+                    }
+                }
+            }
+
+            // 过滤掉无效的账号（没有URL的）
+            const validAccounts = accounts.filter(acc => acc && (acc.username || acc.urls.some(u => u.trim())));
+
+            // 应用到页面
+            if (validAccounts.length > 0) {
+                autovisorAccounts = validAccounts;
+                renderAutovisorAccounts();
+            } else {
+                showToast('未找到有效的账号配置');
+            }
+        }
+
+        // 应用导入的配置
+        function applyImportedConfig(setting, users) {
+            // 应用 setting
+            if (setting.basicSetting) {
+                const bs = setting.basicSetting;
+                document.getElementById('y-completionTone').checked = bs.completionTone === 1;
+                document.getElementById('y-colorLog').checked = bs.colorLog === 1;
+                document.getElementById('y-logOutFileSw').checked = bs.logOutFileSw === 1;
+                document.getElementById('y-logLevel').value = bs.logLevel || 'INFO';
+                document.getElementById('y-logModel').value = String(bs.logModel || 0);
+            }
+            
+            if (setting.emailInform) {
+                const ei = setting.emailInform;
+                document.getElementById('y-emailSw').checked = ei.sw === 1;
+                document.getElementById('y-smtpHost').value = ei.SMTPHost || '';
+                document.getElementById('y-smtpPort').value = ei.SMTPPort || '';
+                document.getElementById('y-emailUser').value = ei.userName || '';
+                document.getElementById('y-emailPass').value = ei.password || '';
+            }
+            
+            if (setting.aiSetting) {
+                const ai = setting.aiSetting;
+                // 检查是否是自定义 URL
+                const knownTypes = ['DOUBAO', 'TONGYI', 'DEEPSEEK', 'CHATGLM', 'XINGHUO', 'OPENAI', 'SILICON', 'OTHER', 'METAAI'];
+                if (knownTypes.includes(ai.aiType)) {
+                    document.getElementById('y-aiType').value = ai.aiType;
+                    if (ai.aiType === 'OTHER' && ai.aiUrl) {
+                        document.getElementById('y-aiUrl').value = ai.aiUrl;
+                    }
+                } else if (ai.aiType) {
+                    document.getElementById('y-aiType').value = 'OTHER';
+                    document.getElementById('y-aiUrl').value = ai.aiType;
+                }
+                document.getElementById('y-model').value = ai.model || ai.Model || '';
+                document.getElementById('y-API_KEY').value = ai.API_KEY || ai.apiKey || ai.api_key || '';
+                onAiTypeChange();
+            }
+            
+            if (setting.apiQueSetting) {
+                document.getElementById('y-bankUrl').value = setting.apiQueSetting.url || 'http://localhost:8083';
+            }
+            
+            // 应用 users
+            if (users && users.length > 0) {
+                yatoriUsers = users.map((u, index) => ({
+                    id: Date.now() + index,
+                    accountType: u.accountType || 'YINGHUA',
+                    remarkName: u.remarkName || '',
+                    url: u.url || '',
+                    account: u.account || '',
+                    password: u.password || '',
+                    isProxy: u.isProxy || 0,
+                    informEmails: u.informEmails || [],
+                    videoModel: u.coursesCustom?.videoModel || 1,
+                    autoExam: u.coursesCustom?.autoExam || 0,
+                    includeCourses: u.coursesCustom?.includeCourses || u.includeCourses || [],
+                    excludeCourses: u.coursesCustom?.excludeCourses || u.excludeCourses || []
+                }));
+                renderYatoriUsers();
+            }
+        }
+
+        // 显示提示
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-4 right-4 bg-gray-800 text-white px-6 py-3 rounded-lg shadow-lg z-50';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // ========== Autovisor 功能 ==========
+        let autovisorAccounts = [];
+
+        // 切换 Autovisor 折叠面板
+        function toggleAutovisorSection(sectionId) {
+            const header = document.querySelector(`[onclick="toggleAutovisorSection('${sectionId}')"]`);
+            const content = document.getElementById('av-section-' + sectionId);
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                header.classList.remove('expanded');
+            } else {
+                content.classList.add('expanded');
+                header.classList.add('expanded');
+            }
+        }
+
+        // 添加 Autovisor 账号
+        function addAutovisorAccount() {
+            const accountId = Date.now();
+            const windowSize = document.getElementById('av-defaultWindowSize').value.split(',');
+            const account = {
+                id: accountId,
+                accountNum: autovisorAccounts.length + 1,
+                username: '',
+                password: '',
+                driver: document.getElementById('av-defaultDriver').value,
+                exePath: '',
+                enableAutoCaptcha: document.getElementById('av-defaultAutoCaptcha').checked,
+                enableHideWindow: false,
+                soundOff: true,
+                limitMaxTime: 30,
+                limitSpeed: 1.0,
+                windowWidth: parseInt(windowSize[0]),
+                windowHeight: parseInt(windowSize[1]),
+                urls: ['']
+            };
+            autovisorAccounts.push(account);
+            renderAutovisorAccounts();
+        }
+
+        // 删除 Autovisor 账号
+        function removeAutovisorAccount(id) {
+            autovisorAccounts = autovisorAccounts.filter(a => a.id !== id);
+            autovisorAccounts.forEach((acc, idx) => acc.accountNum = idx + 1);
+            renderAutovisorAccounts();
+        }
+
+        // 更新 Autovisor 账号
+        function updateAutovisorAccount(id, field, value) {
+            const account = autovisorAccounts.find(a => a.id === id);
+            if (account) {
+                account[field] = value;
+            }
+        }
+
+        // 添加 URL
+        function addAutovisorUrl(accountId) {
+            const account = autovisorAccounts.find(a => a.id === accountId);
+            if (account) {
+                account.urls.push('');
+                renderAutovisorAccounts();
+            }
+        }
+
+        // 删除 URL
+        function removeAutovisorUrl(accountId, urlIndex) {
+            const account = autovisorAccounts.find(a => a.id === accountId);
+            if (account && account.urls.length > 1) {
+                account.urls.splice(urlIndex, 1);
+                renderAutovisorAccounts();
+            }
+        }
+
+        // 更新 URL
+        function updateAutovisorUrl(accountId, urlIndex, value) {
+            const account = autovisorAccounts.find(a => a.id === accountId);
+            if (account) {
+                account.urls[urlIndex] = value;
+            }
+        }
+
+        // 渲染 Autovisor 账号列表
+        function renderAutovisorAccounts() {
+            const container = document.getElementById('autovisor-accounts');
+            
+            if (autovisorAccounts.length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-500 py-4">点击"新增账号"添加智慧树账号</p>';
+                return;
+            }
+            
+            container.innerHTML = autovisorAccounts.map(acc => `
+                <div class="yatori-user-card">
+                    <div class="yatori-user-header" onclick="toggleAutovisorUser(${acc.id})">
+                        <i class="fas fa-chevron-down mr-2 text-gray-400" id="av-user-icon-${acc.id}"></i>
+                        <span class="font-medium">账号 ${acc.accountNum}</span>
+                        <button onclick="event.stopPropagation(); removeAutovisorAccount(${acc.id})" class="ml-auto text-red-500 hover:text-red-700">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                    <div class="yatori-user-content expanded" id="av-user-content-${acc.id}">
+                        ${!acc.enableHideWindow ? `
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">用户名：</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="text" class="yatori-input" value="${acc.username}" onchange="updateAutovisorAccount(${acc.id}, 'username', this.value)" placeholder="智慧树账号（手机号，可选）">
+                                <p class="yatori-help-text">不填账号密码可手动在浏览器中登录</p>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">密码：</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="password" class="yatori-input" value="${acc.password}" onchange="updateAutovisorAccount(${acc.id}, 'password', this.value)" placeholder="智慧树密码（可选）">
+                            </div>
+                        </div>
+                        ` : `
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">用户名：<span class="text-red-500">*</span></label>
+                            <div class="yatori-input-wrapper">
+                                <input type="text" class="yatori-input" value="${acc.username}" onchange="updateAutovisorAccount(${acc.id}, 'username', this.value)" placeholder="智慧树账号（手机号）" required>
+                                <p class="yatori-help-text" style="color: #dc2626;">隐藏窗口模式必须填写账号</p>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">密码：<span class="text-red-500">*</span></label>
+                            <div class="yatori-input-wrapper">
+                                <input type="password" class="yatori-input" value="${acc.password}" onchange="updateAutovisorAccount(${acc.id}, 'password', this.value)" placeholder="智慧树密码" required>
+                                <p class="yatori-help-text" style="color: #dc2626;">隐藏窗口模式必须填写密码</p>
+                            </div>
+                        </div>
+                        `}
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">浏览器：</label>
+                            <div class="yatori-input-wrapper">
+                                <select class="yatori-select" onchange="updateAutovisorAccount(${acc.id}, 'driver', this.value)">
+                                    <option value="Chrome" ${acc.driver === 'Chrome' ? 'selected' : ''}>Chrome</option>
+                                    <option value="Edge" ${acc.driver === 'Edge' ? 'selected' : ''}>Edge</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">浏览器路径：</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="text" class="yatori-input" value="${acc.exePath}" onchange="updateAutovisorAccount(${acc.id}, 'exePath', this.value)" placeholder="可选，默认自动查找">
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">窗口大小：</label>
+                            <div class="yatori-input-wrapper">
+                                <select class="yatori-select" onchange="updateAutovisorAccount(${acc.id}, 'windowWidth', parseInt(this.value.split(',')[0])); updateAutovisorAccount(${acc.id}, 'windowHeight', parseInt(this.value.split(',')[1]))">
+                                    <option value="1400,800" ${acc.windowWidth === 1400 ? 'selected' : ''}>1400 x 800</option>
+                                    <option value="1200,700" ${acc.windowWidth === 1200 ? 'selected' : ''}>1200 x 700</option>
+                                    <option value="1600,900" ${acc.windowWidth === 1600 ? 'selected' : ''}>1600 x 900</option>
+                                    <option value="1920,1080" ${acc.windowWidth === 1920 ? 'selected' : ''}>1920 x 1080</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">时长限制：</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="number" class="yatori-input" value="${acc.limitMaxTime}" onchange="updateAutovisorAccount(${acc.id}, 'limitMaxTime', parseInt(this.value) || 30)" min="0">
+                                <p class="yatori-help-text">单次刷课最大时长（分钟），0为无限制</p>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">播放倍速：</label>
+                            <div class="yatori-input-wrapper">
+                                <input type="number" class="yatori-input" value="${acc.limitSpeed}" onchange="updateAutovisorAccount(${acc.id}, 'limitSpeed', parseFloat(this.value) || 1.0)" min="1" max="1.8" step="0.1">
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">自动验证码：</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" ${acc.enableAutoCaptcha ? 'checked' : ''} onchange="updateAutovisorAccount(${acc.id}, 'enableAutoCaptcha', this.checked)">
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">隐藏窗口：</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" ${acc.enableHideWindow ? 'checked' : ''} onchange="updateAutovisorAccount(${acc.id}, 'enableHideWindow', this.checked); renderAutovisorAccounts();">
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row">
+                            <label class="yatori-label">静音：</label>
+                            <div class="yatori-input-wrapper">
+                                <label class="yatori-switch">
+                                    <input type="checkbox" ${acc.soundOff ? 'checked' : ''} onchange="updateAutovisorAccount(${acc.id}, 'soundOff', this.checked)">
+                                    <span class="yatori-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="yatori-form-row" style="align-items: flex-start;">
+                            <label class="yatori-label">课程链接：</label>
+                            <div class="yatori-input-wrapper">
+                                ${acc.urls.map((url, idx) => `
+                                    <div class="flex gap-2 mb-2">
+                                        <input type="text" class="yatori-input flex-1" value="${url}" onchange="updateAutovisorUrl(${acc.id}, ${idx}, this.value)" placeholder="https://studyvideoh5.zhihuishu.com/...">
+                                        ${acc.urls.length > 1 ? `
+                                        <button onclick="removeAutovisorUrl(${acc.id}, ${idx})" class="text-red-500 hover:text-red-700 px-2">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                                <button onclick="addAutovisorUrl(${acc.id})" class="text-blue-600 hover:text-blue-800 text-sm mt-1">
+                                    <i class="fas fa-plus mr-1"></i>添加课程链接
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 切换 Autovisor 用户折叠
+        function toggleAutovisorUser(userId) {
+            const content = document.getElementById(`av-user-content-${userId}`);
+            const icon = document.getElementById(`av-user-icon-${userId}`);
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                icon.style.transform = 'rotate(-90deg)';
+            } else {
+                content.classList.add('expanded');
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        // 生成 Autovisor 配置
+        function generateAutovisorConfig() {
+            // 验证隐藏窗口模式是否填写了账号密码
+            const invalidAccounts = autovisorAccounts.filter(acc => acc.enableHideWindow && (!acc.username || !acc.password));
+            if (invalidAccounts.length > 0) {
+                const accountNums = invalidAccounts.map(acc => acc.accountNum).join(', ');
+                alert(`账号 ${accountNums} 启用了隐藏窗口模式，必须填写账号和密码！\n\n请填写账号密码，或关闭隐藏窗口选项。`);
+                return;
+            }
+            
+            const ini = buildAutovisorINI();
+            downloadTextFile(ini, exportProfiles.autovisor);
+            
+            showToast('配置已生成并下载');
+        }
+
+        // 构建 Autovisor INI
+        function buildAutovisorINI() {
+            let ini = '; ========== Autovisor 多账号配置文件 ==========\n';
+            ini += '; 支持多账号同时刷课，每个账号独立配置\n';
+            ini += '; 使用 Autovisor_Multi.py 运行此配置\n\n';
+
+            if (autovisorAccounts.length === 0) {
+                ini += '[user-account-1]\n';
+                ini += 'username = \n';
+                ini += 'password = \n\n';
+                ini += '[browser-option-1]\n';
+                ini += 'driver = Chrome\n';
+                ini += 'EXE_PATH = \n\n';
+                ini += '[script-option-1]\n';
+                ini += 'enableAutoCaptcha = True\n';
+                ini += 'enableHideWindow = False\n\n';
+                ini += '[course-option-1]\n';
+                ini += 'limitMaxTime = 30\n';
+                ini += 'limitSpeed = 1.0\n';
+                ini += 'soundOff = True\n';
+                ini += 'windowWidth = 1400\n';
+                ini += 'windowHeight = 800\n\n';
+                ini += '[course-url-1]\n';
+                ini += 'URL1 = \n';
+                return ini;
+            }
+
+            autovisorAccounts.forEach((acc, idx) => {
+                const num = idx + 1;
+                const validUrls = acc.urls.filter(url => url.trim());
+
+                ini += `; ========== 账号 ${num} ==========\n`;
+                ini += `[user-account-${num}]\n`;
+                ini += `username = ${acc.username}\n`;
+                ini += `password = ${acc.password}\n\n`;
+
+                ini += `[browser-option-${num}]\n`;
+                ini += `driver = ${acc.driver}\n`;
+                ini += `EXE_PATH = ${acc.exePath}\n\n`;
+
+                ini += `[script-option-${num}]\n`;
+                ini += `enableAutoCaptcha = ${acc.enableAutoCaptcha ? 'True' : 'False'}\n`;
+                ini += `enableHideWindow = ${acc.enableHideWindow ? 'True' : 'False'}\n\n`;
+
+                ini += `[course-option-${num}]\n`;
+                ini += `limitMaxTime = ${acc.limitMaxTime}\n`;
+                ini += `limitSpeed = ${acc.limitSpeed}\n`;
+                ini += `soundOff = ${acc.soundOff ? 'True' : 'False'}\n`;
+                ini += `windowWidth = ${acc.windowWidth || 1400}\n`;
+                ini += `windowHeight = ${acc.windowHeight || 800}\n\n`;
+
+                ini += `[course-url-${num}]\n`;
+                if (validUrls.length > 0) {
+                    validUrls.forEach((url, urlIdx) => {
+                        ini += `URL${urlIdx + 1} = ${url}\n`;
+                    });
+                } else {
+                    ini += 'URL1 = \n';
+                }
+                ini += '\n';
+            });
+
+            return ini;
+        }
+
+        // 预览 Autovisor 配置
+        function previewAutovisorConfig() {
+            const ini = buildAutovisorINI();
+            openPreview(ini, exportProfiles.autovisor);
+        }
+
+        // 重置 Autovisor 配置
+        function resetAutovisorConfig() {
+            if (confirm('确定要重置所有配置吗？')) {
+                document.getElementById('av-maxConcurrent').value = '3';
+                document.getElementById('av-defaultDriver').value = 'Chrome';
+                document.getElementById('av-defaultWindowSize').value = '1400,800';
+                document.getElementById('av-defaultAutoCaptcha').checked = true;
+                autovisorAccounts = [];
+                addAutovisorAccount();
+                showToast('配置已重置');
+            }
+        }
+
+        // 初始化 Autovisor
+        document.addEventListener('DOMContentLoaded', function() {
+            // 默认展开账号管理
+            const avAccountsHeader = document.querySelector('[onclick="toggleAutovisorSection(\'accounts\')"]');
+            if (avAccountsHeader) {
+                avAccountsHeader.classList.add('expanded');
+            }
+            // 添加第一个账号
+            if (autovisorAccounts.length === 0) {
+                addAutovisorAccount();
+            }
+        });
+
+        // 点击模态框外部关闭
+        document.getElementById('previewModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closePreview();
+            }
+        });
+    </script>
+</body>
+</html>

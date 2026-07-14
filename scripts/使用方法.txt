@@ -1,0 +1,1 @@
+先运行install_dependencies.py然后运行统一启动器.py（无法运行的查看是否安装了python，安装方法自己问豆包）
