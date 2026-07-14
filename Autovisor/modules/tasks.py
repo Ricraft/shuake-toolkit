@@ -7,9 +7,8 @@ import http.client  # 兼容外部通过 tasks.http.client 注入连接实现
 
 from playwright.async_api import Page
 from pygetwindow import Win32Window
-from modules.configs import Config
 from modules.course_types import CourseKind, CourseProfile
-from modules.utils import get_video_attr, display_window, get_browser_window, hide_window, is_playwright_window
+from modules.utils import display_window, hide_window
 from playwright._impl._errors import TargetClosedError
 from modules.logger import Logger
 from modules.floating_widget import inject_widget, update_widget_question
@@ -23,6 +22,7 @@ from modules.question_bank_client import (
     _match_option,
     _normalize_qb,
 )
+from modules.video_tasks import activate_window, play_video, task_monitor, video_optimize
 
 logger = Logger()
 QB_URL = os.environ.get("QB_URL", "http://127.0.0.1:8083/query")
@@ -223,190 +223,9 @@ async def status_ocr_stream(
 
 
 
-async def task_monitor(tasks: list[asyncio.Task]) -> None:
-    checked_tasks = set()
-    logger.info("任务监控已启动.")
-    while any(not task.done() for task in tasks):
-        for task in tasks:
-            if task.done() and task not in checked_tasks:
-                checked_tasks.add(task)
-                if task.cancelled():
-                    continue
-                try:
-                    exc = task.exception()
-                except asyncio.CancelledError:
-                    continue
-                if exc is None:
-                    continue
-                func_name = task.get_coro().__name__
-                logger.error(f"任务函数{func_name} 出现异常.", shift=True)
-                logger.write_log(f"{repr(exc)}\n")
-        await asyncio.sleep(1)
-    logger.info("任务监控已退出.", shift=True)
+# 视频后台任务已拆分至 modules.video_tasks，并在本模块顶部兼容导出。
 
 
-async def activate_window(page: Page) -> None:
-    while True:
-        try:
-            await asyncio.sleep(2)
-            window = await get_browser_window(page, retries=1, delay_ms=50)
-            if window and is_playwright_window(window) and window.isMinimized:
-                window.moveTo(-3200, -3200)
-                await asyncio.sleep(0.3)
-                window.restore()
-                logger.info("检测到播放窗口最小化,已自动恢复.")
-        except TargetClosedError:
-            logger.write_log("浏览器已关闭,窗口激活模块已下线.\n")
-            return
-        except Exception as e:
-            continue
-
-
-async def video_optimize(page: Page, config: Config) -> None:
-    await page.wait_for_load_state("domcontentloaded")
-    click_counter = 0  # 计数器，用于控制点击频率
-    first_set_rate = True  # 标记是否首次设置倍数
-    while True:
-        try:
-            await asyncio.sleep(2)
-            await page.wait_for_selector("video", state="attached", timeout=3000)
-            volume = await get_video_attr(page, "volume")
-            rate = await get_video_attr(page, "playbackRate")
-            
-            profile = CourseProfile.from_url(page.url)
-            is_hike_class = profile.is_hike_class
-            is_national_wisdom = profile.is_national_wisdom
-            
-            if is_hike_class or is_national_wisdom:
-                # 智慧共享课每隔一段时间hover播放器保持显示
-                click_counter += 1
-                video_container = page.locator("#vjs_container")
-                if await video_container.count() > 0:
-                    await video_container.first.hover()
-
-                if config.soundOff and volume != 0:
-                    await page.evaluate(config.volume_none)
-
-                # 全国智慧共享课不调倍速（按累计墙钟时间计分），翻转课正常调速
-                if not is_national_wisdom and (rate != config.limitSpeed or click_counter >= 3):
-                    click_counter = 0
-                    # 点击对应倍速按钮（基于 .speedTab.speedTabXX 复合选择器）
-                    speed_map = {
-                        2.0: ".speedTab.speedTab20", 1.5: ".speedTab.speedTab15",
-                        1.25: ".speedTab.speedTab10", 1.0: ".speedTab.speedTab05"
-                    }
-                    target_cls = speed_map.get(config.limitSpeed, ".speedTab.speedTab15")
-                    speed_btn = page.locator(target_cls)
-                    if await speed_btn.count() > 0:
-                        await speed_btn.first.click()
-                        await page.wait_for_timeout(200)
-                        if first_set_rate:
-                            logger.info(f"智慧共享课倍数已设置为 {config.limitSpeed}x")
-                            first_set_rate = False
-            
-            else:
-                # 普通课程处理
-                if config.soundOff and volume != 0:
-                    await page.evaluate(config.volume_none)
-                    await page.evaluate(config.set_none_icon)
-                
-                if rate != config.limitSpeed:
-                    await page.evaluate(config.revise_speed)
-                    await page.evaluate(config.revise_speed_name)
-                    if first_set_rate:
-                        logger.info(f"倍数已设置为 {config.limitSpeed}x")
-                        first_set_rate = False
-                    
-        except TargetClosedError:
-            logger.write_log("浏览器已关闭,视频调节模块已下线.\n")
-            return
-        except Exception as e:
-            continue
-
-
-async def play_video(page: Page, config: Config) -> None:
-    await page.wait_for_load_state("domcontentloaded")
-    from modules.utils import APPLY_VIDEO_SETTINGS_JS
-    limit_speed_default = config.limitSpeed
-    while True:
-        try:
-            await asyncio.sleep(2)
-            await page.wait_for_selector("video", state="attached", timeout=3000)
-            paused = await page.evaluate("document.querySelector('video').paused")
-            profile = CourseProfile.from_url(page.url)
-            is_national_wisdom = profile.is_national_wisdom
-
-            if paused:
-                is_hike_class = profile.is_hike_class
-                is_shared_class = is_hike_class or is_national_wisdom
-                if is_shared_class:
-                    ended = await page.evaluate("document.querySelector('video').ended")
-                    currentTime = await page.evaluate("document.querySelector('video').currentTime")
-                    duration = await page.evaluate("document.querySelector('video').duration")
-                    
-                    # 如果视频异常结束（ended=true 但 currentTime 很短），重置重新播放
-                    if ended and duration > 0 and currentTime < min(duration * 0.1, 3):
-                        logger.info("检测到视频异常结束(播放时间过短)，重置并重新播放.")
-                        await page.evaluate("document.querySelector('video').currentTime = 0;")
-                        await page.evaluate("Object.defineProperty(document.querySelector('video'), 'ended', { value: false, writable: true });")
-                    elif ended:
-                        # 正常播完，不需要处理，learning_loop 会检测到100%并退出
-                        continue
-            
-                logger.info("检测到视频暂停,正在尝试播放.")
-                
-                # 先禁用 pause 方法，防止网站立即重新暂停视频
-                limit_speed = 1.0 if is_national_wisdom else limit_speed_default
-                await page.evaluate(config.remove_pause)
-                
-                result = await page.evaluate(
-                    APPLY_VIDEO_SETTINGS_JS,
-                    {"speed": limit_speed, "mute": config.soundOff},
-                )
-                if result and result['success']:
-                    logger.info(f"视频设置已应用: 倍速={result['playbackRate']}x, 静音={result['muted']}")
-                
-                # 使用 Promise 处理 play() 调用，确保正确处理播放失败
-                play_result = await page.evaluate('''async () => {
-                    const video = document.querySelector('video');
-                    if (!video) return { success: false, error: 'video not found' };
-                    try {
-                        await video.play();
-                        return { success: true, paused: video.paused, error: null };
-                    } catch (e) {
-                        return { success: false, error: e.message || 'play failed' };
-                    }
-                }''')
-                
-                if play_result['success']:
-                    logger.write_log(f"视频已恢复播放（静音+{limit_speed}x倍速）.\n")
-                else:
-                    logger.warn(f"视频播放失败: {play_result['error']}")
-            else:
-                # 视频未暂停但可能"假播放"（paused=false 但 currentTime 不增加）
-                if is_national_wisdom:
-                    try:
-                        status = await page.evaluate('''() => {
-                            const video = document.querySelector('video');
-                            if (!video) return null;
-                            return {
-                                currentTime: video.currentTime,
-                                duration: video.duration,
-                                readyState: video.readyState,
-                                networkState: video.networkState,
-                                src: video.src || video.currentSrc || null
-                            };
-                        }''')
-                        if status and status['duration'] > 0 and status['currentTime'] < 0.5:
-                            await page.evaluate(config.remove_pause)
-                            await page.evaluate('document.querySelector("video").play();')
-                    except Exception:
-                        pass
-        except TargetClosedError:
-            logger.write_log("浏览器已关闭,视频播放模块已下线.\n")
-            return
-        except Exception as e:
-            continue
 
 
 async def _extract_question_title(page: Page) -> str:
