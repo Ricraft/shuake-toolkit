@@ -7,7 +7,6 @@ Cal.com-style dashboard backend with FastAPI
 import asyncio
 import json
 import os
-import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -22,9 +21,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-# Ensure parent modules are importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
+# 入口在 Autovisor 目录运行，modules 是同级包。不要永久修改 sys.path，
+# 否则同名 Autovisor.py 会遮蔽仓库中的 Autovisor 命名空间。
 from modules.configs import Config
 from modules.logger import Logger
 

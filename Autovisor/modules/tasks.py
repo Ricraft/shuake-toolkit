@@ -5,6 +5,7 @@ import random
 import re
 import traceback
 import http.client
+from urllib.parse import urlsplit
 
 from playwright.async_api import Page
 from pygetwindow import Win32Window
@@ -220,24 +221,22 @@ async def status_ocr_stream(
 # ============================================================
 
 QB_URL = os.environ.get("QB_URL", "http://127.0.0.1:8083/query")
-QB_TIMEOUT = 8
-logger.info(f"题库URL: {QB_URL}")
+QB_TIMEOUT = 15
 
-# 启动时测试连接
-import socket as _sock
-try:
-    _host = QB_URL.split("//")[1].split("/")[0].split(":")[0]
-    _port = int(QB_URL.split(":")[2].split("/")[0])
-    _s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-    _s.settimeout(2)
-    _r = _s.connect_ex((_host, _port))
-    _s.close()
-    if _r == 0:
-        logger.info(f"题库服务器连接测试成功: {_host}:{_port}")
-    else:
-        logger.warn(f"题库服务器连接测试失败: {_host}:{_port}, 错误码: {_r}")
-except Exception as _e:
-    logger.warn(f"题库服务器连接测试异常: {_e}")
+
+def _question_bank_endpoint():
+    """解析题库地址，不在模块导入阶段发起网络连接。"""
+    endpoint = urlsplit(QB_URL)
+    if endpoint.scheme not in {"http", "https"} or not endpoint.hostname:
+        raise ValueError(f"无效题库URL: {QB_URL}")
+    port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
+    path = endpoint.path or "/query"
+    if endpoint.query:
+        path = f"{path}?{endpoint.query}"
+    connection_class = (
+        http.client.HTTPSConnection if endpoint.scheme == "https" else http.client.HTTPConnection
+    )
+    return connection_class, endpoint.hostname, port, path
 
 
 def _normalize_qb(text):
@@ -519,14 +518,20 @@ def query_question_bank(title, options_text=None, query_type=None):
     if query_type:
         params["query_type"] = query_type
     body = json.dumps(params).encode("utf-8")
+    connection_class, host, port, query_path = _question_bank_endpoint()
     
     max_retries = 5
     for attempt in range(max_retries):
         conn = None
         resp = None
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", 8083, timeout=15)  # 增加超时时间
-            conn.request("POST", "/query", body=body, headers={"Content-Type": "application/json", "Connection": "close"})
+            conn = connection_class(host, port, timeout=QB_TIMEOUT)
+            conn.request(
+                "POST",
+                query_path,
+                body=body,
+                headers={"Content-Type": "application/json", "Connection": "close"},
+            )
             resp = conn.getresponse()
             status_code = resp.status
             
@@ -726,10 +731,9 @@ async def video_optimize(page: Page, config: Config) -> None:
             continue
 
 
-async def play_video(page: Page) -> None:
+async def play_video(page: Page, config: Config) -> None:
     await page.wait_for_load_state("domcontentloaded")
     from modules.utils import APPLY_VIDEO_SETTINGS_JS
-    config = Config("configs.ini")
     limit_speed_default = config.limitSpeed
     while True:
         try:
@@ -761,7 +765,10 @@ async def play_video(page: Page) -> None:
                 limit_speed = 1.0 if is_national_wisdom else limit_speed_default
                 await page.evaluate(config.remove_pause)
                 
-                result = await page.evaluate(APPLY_VIDEO_SETTINGS_JS, limit_speed)
+                result = await page.evaluate(
+                    APPLY_VIDEO_SETTINGS_JS,
+                    {"speed": limit_speed, "mute": config.soundOff},
+                )
                 if result and result['success']:
                     logger.info(f"视频设置已应用: 倍速={result['playbackRate']}x, 静音={result['muted']}")
                 

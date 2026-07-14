@@ -1,4 +1,5 @@
 # encoding=utf-8
+import argparse
 import asyncio
 import json
 import os
@@ -6,6 +7,7 @@ import time
 import traceback
 import sys
 import types
+from typing import Optional
 
 from runtime_bootstrap import activate_runtime_dependencies
 
@@ -54,18 +56,20 @@ event_loop_answer = asyncio.Event()
 async def init_page(p: Playwright) -> tuple[Page, BrowserContext]:
     driver = "msedge" if config.driver == "edge" else config.driver
     logger.info(f"正在启动{config.driver}浏览器...")
+    account_offset = max((config.account_id or 1) - 1, 0)
     browser = await p.chromium.launch(
         channel=driver,
         headless=False,
         executable_path=config.exe_path if config.exe_path else None,
         args=[
-            f'--window-size={1600},{900}',
-            '--window-position=100,100',  # 窗口位置
+            f'--window-size={config.windowWidth},{config.windowHeight}',
+            f'--window-position={100 + account_offset * 80},{100 + account_offset * 40}',
         ],
     )
     context = await browser.new_context()
     # 加载 Cookies
-    cookies = load_cookies("res/cookies.json")
+    os.makedirs(os.path.dirname(config.cookies_file) or ".", exist_ok=True)
+    cookies = load_cookies(config.cookies_file)
     if cookies:
         await context.add_cookies(cookies)
         logger.info("已加载 Cookies!")
@@ -81,8 +85,8 @@ async def auto_login(context: BrowserContext, page: Page, modules=None):
     async def request_handler(request):
         if "https://www.zhihuishu.com" in request.url:
             cookies = await context.cookies()
-            save_cookies(cookies, "res/cookies.json")
-            logger.info(f"已保存登录凭证到: res/cookies.json,下次可免密登录.")
+            save_cookies(cookies, config.cookies_file)
+            logger.info(f"已保存登录凭证到: {config.cookies_file},下次可免密登录.")
             # 停止监听
             page.remove_listener('request', request_handler)
 
@@ -710,7 +714,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                 current_title = title
             logger.info(f"开始观看:{current_title}")
             
-            # 等待视频并立即静音+倍速
+            # 等待视频并立即应用声音与倍速配置
             try:
                 await page.wait_for_selector("video", state="attached", timeout=15000)
                 await page.wait_for_timeout(500)
@@ -723,8 +727,12 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
                 
                 # 全国智慧共享课强制1.0倍速（按累计墙钟时间计分，倍速会导致时间不够）
                 national_wisdom_speed = 1.0
-                await page.evaluate(APPLY_VIDEO_SETTINGS_JS, national_wisdom_speed)
-                logger.write_log(f"静音+{national_wisdom_speed}x倍速 已应用\n")
+                await page.evaluate(
+                    APPLY_VIDEO_SETTINGS_JS,
+                    {"speed": national_wisdom_speed, "mute": config.soundOff},
+                )
+                sound_state = "静音" if config.soundOff else "声音开启"
+                logger.write_log(f"{sound_state}+{national_wisdom_speed}x倍速 已应用\n")
                 
                 # 确保视频正在播放
                 await page.wait_for_timeout(300)
@@ -1305,7 +1313,7 @@ async def main():
         # 启动协程任务
         video_optimize_task = asyncio.create_task(video_optimize(page, config))
         skip_ques_task = asyncio.create_task(skip_questions(page, event_loop_answer))
-        play_video_task = asyncio.create_task(play_video(page))
+        play_video_task = asyncio.create_task(play_video(page, config))
         tasks.extend([verify_task, video_optimize_task, skip_ques_task, play_video_task])
         # 隐藏窗口
         if config.enableHideWindow:
@@ -1391,42 +1399,67 @@ async def main():
     await cancel_background_tasks([monitor_task])
 
 
-if __name__ == "__main__":
-    print("Github:CXRunfree All Rights Reserved.")
+def run(config_path: str = "configs.ini", account_id: Optional[int] = None) -> int:
+    """运行一个账号；单账号入口和多账号子进程共同调用。"""
+    global config, logger, event_loop_verify, event_loop_answer
+
     logger = Logger()
+    logger.configure(account_id)
+    event_loop_verify = asyncio.Event()
+    event_loop_answer = asyncio.Event()
+    exit_code = 0
+
     try:
         logger.info("程序启动中...")
-        config = Config("configs.ini")
+        config = Config(config_path, account_id=account_id)
         if not config.course_urls:
             logger.info("未检测到有效网址或不支持此类网页,请检查配置文件!")
-            time.sleep(2)
-            sys.exit(-1)
+            return 2
         asyncio.run(main())
     except TargetClosedError as e:
         logger.write_log(traceback.format_exc())
         if "BrowserType.launch" in repr(e):
             logger.error("浏览器启动失败,请尝试重新启动!")
             logger.info("如果仍然无法启动,请修改配置文件并使用Chrome浏览器")
+            exit_code = 1
         else:
             logger.error("浏览器被关闭,程序退出.")
     except Exception as e:
+        exit_code = 1
         logger.error(repr(e), shift=True)
         logger.write_log(traceback.format_exc())
         if isinstance(e, KeyError):
-            logger.error(f"配置文件错误!")
+            logger.error("配置文件错误!")
         elif isinstance(e, FileNotFoundError):
-            logger.error(f"依赖文件缺失: {e.filename},请重新安装程序!")
+            missing_path = e.filename or str(e)
+            logger.error(f"依赖文件缺失: {missing_path},请重新安装程序!")
         elif isinstance(e, UnicodeDecodeError):
             logger.error("配置文件编码错误,保存时请选择UTF-8或GBK编码!")
         else:
             logger.error("系统出错,请检查后重新启动!")
     finally:
         logger.save()
-        try:
-            if sys.stdin and sys.stdin.isatty():
-                try:
-                    input("程序已结束,按Enter退出...")
-                except (OSError, ValueError):
-                    pass
-        except EOFError:
-            pass
+
+    return exit_code
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Autovisor 单账号运行入口")
+    parser.add_argument("--config", "-c", default="configs.ini", help="配置文件路径")
+    parser.add_argument("--account-id", type=int, default=None, help="运行指定编号账号")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    print("Github:CXRunfree All Rights Reserved.")
+    args = _parse_args()
+    result = run(config_path=args.config, account_id=args.account_id)
+    try:
+        if sys.stdin and sys.stdin.isatty():
+            try:
+                input("程序已结束,按Enter退出...")
+            except (OSError, ValueError):
+                pass
+    except EOFError:
+        pass
+    raise SystemExit(result)

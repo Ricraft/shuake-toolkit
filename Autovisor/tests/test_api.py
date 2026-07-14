@@ -11,8 +11,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-# Ensure project root is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Ensure the standalone Autovisor modules are importable during collection,
+# then restore sys.path so this test module does not shadow the Autovisor namespace.
+_AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from fastapi.testclient import TestClient
 
@@ -22,6 +24,8 @@ from web.api import (
     config_manager,
     dashboard_logger,
 )
+
+sys.path.remove(_AUTOVISOR_ROOT)
 
 
 class TestHealthEndpoint(unittest.TestCase):

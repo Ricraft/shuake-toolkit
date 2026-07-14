@@ -53,9 +53,18 @@ class Logger:
 
     def _init(self):
         os.makedirs("logs", exist_ok=True)  # 创建日志文件夹
-        new_index = len(os.listdir("logs")) + 1
-        self.filename = f"logs/Log{new_index}.txt"
+        self._configured = False
+        self.configure(os.getenv("AUTOVISOR_ACCOUNT_ID"))
         self.text = ""
+
+    def configure(self, account_id=None):
+        """为本次进程选择不会与其他账号碰撞的日志文件。"""
+        if self._configured:
+            return
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        account_suffix = f"_Account_{account_id}" if account_id not in (None, "") else ""
+        self.filename = f"logs/Log{account_suffix}_{timestamp}_{os.getpid()}.txt"
+        self._configured = True
 
     def write_log(self, msg):
         date = time.strftime("%H:%M:%S", time.localtime())

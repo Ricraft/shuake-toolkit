@@ -51,7 +51,7 @@ def main():
     
     if args.example:
         create_example_config()
-        return
+        return 0
     
     print("=" * 60)
     print("Autovisor 多账号刷课工具")
@@ -77,11 +77,11 @@ def main():
             print(f"  隐藏窗口: {'是' if acc.enable_hide_window else '否'}")
             print(f"  自动验证码: {'是' if acc.enable_auto_captcha else '否'}")
             print()
-        return
+        return 0
     
     if multi_config.get_account_count() == 0:
         print("错误: 未配置任何有效账号")
-        return
+        return 2
     
     # 运行多账号
     manager = MultiAccountManager(args.config)
@@ -93,11 +93,13 @@ def main():
     print(f"\n按 Ctrl+C 可以随时停止所有账号\n")
     
     try:
-        manager.run_all(max_concurrent=args.max)
+        exit_codes = manager.run_all(max_concurrent=args.max)
+        return 1 if any(exit_codes.values()) else 0
     except Exception as e:
         print(f"运行出错: {e}")
         import traceback
         traceback.print_exc()
+        return 1
     finally:
         try:
             if sys.stdin and sys.stdin.isatty():
@@ -107,4 +109,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

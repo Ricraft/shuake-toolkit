@@ -49,10 +49,15 @@ py Autovisor\download_runtime_deps.py
 ## 运行入口
 
 ```powershell
+Copy-Item Autovisor\configs.example.ini Autovisor\configs.ini
 py 统一启动器.py
 py Autovisor\Autovisor.py
 py Autovisor\Autovisor_Multi.py
 ```
+
+多账号配置使用 `user-account-N`、`course-url-N` 等编号小节。未编号的浏览器、
+脚本和课程选项可作为所有账号的公共默认值；每个账号使用独立 Cookie 和进程，
+但共用同一套完整课程执行逻辑。`--max N` 只限制并发数，不会跳过排队账号。
 
 账号密码、API Key、Cookie、数据库和日志均为本地敏感运行数据；请勿提交或对外分发。请仅在平台规则和授权范围内使用自动化功能。
 

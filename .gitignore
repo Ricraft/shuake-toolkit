@@ -27,8 +27,8 @@ configs.ini
 Yatori/config.yaml
 qb_config.json
 launcher_preferences.json
-res/cookies.json
-res/cookies_*.json
+**/res/cookies.json
+**/res/cookies_*.json
 
 # PyInstaller 构建产物
 build/

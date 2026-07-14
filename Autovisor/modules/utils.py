@@ -288,13 +288,21 @@ NATIONAL_WISDOM_CARD_SCAN_JS = r"""
 """
 
 APPLY_VIDEO_SETTINGS_JS = r"""
-(speed) => {
+(settings) => {
     const video = document.querySelector('video');
     if (!video) return { success: false };
-    
-    // 设置静音
-    video.muted = true;
-    video.volume = 0;
+
+    // 兼容旧调用方传入纯数字；新调用方显式传递是否静音。
+    const isObject = settings !== null && typeof settings === 'object';
+    const speed = isObject ? settings.speed : settings;
+    const shouldMute = isObject ? Boolean(settings.mute) : true;
+    if (shouldMute) {
+        video.muted = true;
+        video.volume = 0;
+    } else {
+        video.muted = false;
+        if (video.volume === 0) video.volume = 1;
+    }
     
     // 设置倍速，强制设置
     if (speed) {
