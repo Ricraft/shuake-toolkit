@@ -11,7 +11,8 @@ from modules.course_types import CourseKind, CourseProfile
 from modules.utils import display_window, hide_window
 from playwright._impl._errors import TargetClosedError
 from modules.logger import Logger
-from modules.floating_widget import inject_widget, update_widget_question
+from modules.floating_widget import inject_widget
+from modules.answer_strategy import build_answer_actions
 from modules import question_bank_client as _question_bank_client
 from modules.question_bank_client import (
     _build_model_query_prompt,
@@ -626,8 +627,12 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
             logger.info("[自动模式] 自动选择答案")
             if answer and answer.strip():
                 logger.info("答案: %s" % answer[:40])
-                await answer_question(page, answer, options, raw_options)
+                applied = await answer_question(page, answer, options, raw_options)
+                q["answer_applied"] = applied
+                if not applied:
+                    logger.warn("[WARN] 答案存在，但页面选项点击失败")
             else:
+                q["answer_applied"] = False
                 logger.warn("[WARN] 答案为空或无法匹配，留空跳过（可手动补充）")
             
             await page.wait_for_timeout(500)
@@ -647,7 +652,12 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
         return True
 
     # 检查未答题比例，防止无答案自动交卷
-    answered = sum(1 for q in questions_data if q.get("answer") and q["answer"].strip())
+    if auto_submit:
+        answered = sum(1 for q in questions_data if q.get("answer_applied"))
+    else:
+        answered = sum(
+            1 for q in questions_data if q.get("answer") and q["answer"].strip()
+        )
     unanswered = total - answered
     if unanswered > total * 0.5:
         logger.warn(f"\n[WARN] 未答题数 {unanswered}/{total} 超过 50%，跳过自动交卷，请手动检查后提交")
@@ -894,7 +904,7 @@ async def click_option_by_index(page: Page, index: int, option_value: str = None
                 if r:
                     logger.info("[OK] 通过value点击: value=%s (%s)" % (option_value, r))
                     await page.wait_for_timeout(200)
-                    return
+                    return True
 
             # 方案A兜底: 直接 force 点 input
             try:
@@ -904,7 +914,7 @@ async def click_option_by_index(page: Page, index: int, option_value: str = None
                     if r:
                         logger.info("[OK] 通过value点input: value=%s (%s)" % (option_value, r))
                         await page.wait_for_timeout(200)
-                        return
+                        return True
             except Exception:
                 pass
 
@@ -951,12 +961,12 @@ async def click_option_by_index(page: Page, index: int, option_value: str = None
             if r:
                 logger.info("[OK] 通过索引点击label: 选项%d (%s)" % (index+1, r))
                 await page.wait_for_timeout(200)
-                return
+                return True
             r = await _force_click_locator(main)
             if r:
                 logger.info("[OK] 通过索引点击nodeLab: 选项%d (%s)" % (index+1, r))
                 await page.wait_for_timeout(200)
-                return
+                return True
 
         # 方案C: .topic-item / .option-item / .el-radio / .el-checkbox
         for sel in ['.topic-item', '.option-item', '.el-radio', '.el-checkbox']:
@@ -966,7 +976,7 @@ async def click_option_by_index(page: Page, index: int, option_value: str = None
                 r = await _force_click_locator(loc.nth(index))
                 if r:
                     logger.info("[OK] 通过%s点击: 选项%d (%s)" % (sel, index+1, r))
-                    return
+                    return True
 
         # 方案D: input[type=radio/checkbox] 全局
         for sel in ['input[type="radio"]', 'input[type="checkbox"]']:
@@ -976,11 +986,13 @@ async def click_option_by_index(page: Page, index: int, option_value: str = None
                 r = await _force_click_locator(loc.nth(index))
                 if r:
                     logger.info("[OK] 通过%s点击: 选项%d (%s)" % (sel, index+1, r))
-                    return
+                    return True
 
         logger.warn("[FAIL] 所有方案失败: index=%d" % index)
+        return False
     except Exception as e:
         logger.warn("[FAIL] 点击异常: %s" % str(e)[:80])
+        return False
 
 
 async def click_option_by_text(page: Page, text: str):
@@ -1023,7 +1035,7 @@ async def click_option_by_text(page: Page, text: str):
                 if r:
                     logger.info("[OK] 通过文本点击%s: text=%s (%s)" % (name, text, r))
                     await page.wait_for_timeout(200)
-                    return
+                    return True
 
         # 方案B: .topic-item / .option-item 按文本匹配
         for sel in ['.topic-item', '.option-item']:
@@ -1035,11 +1047,13 @@ async def click_option_by_text(page: Page, text: str):
                     r = await _force_click_locator(locs.nth(i))
                     if r:
                         logger.info("[OK] 通过文本点击%s: text=%s (%s)" % (sel, text, r))
-                        return
+                        return True
 
         logger.warn("[FAIL] 通过文本所有方法失败: text=%s" % text)
+        return False
     except Exception as e:
         logger.warn("[FAIL] 通过文本点击异常: %s" % str(e)[:80])
+        return False
 
 
 async def answer_question(page: Page, answer: str, options: list = None, raw_options: list = None):
@@ -1049,77 +1063,32 @@ async def answer_question(page: Page, answer: str, options: list = None, raw_opt
     options: 选项文本列表（用于索引匹配）
     raw_options: 原始选项列表 [(id, text), ...] 用于 input[value] 定位
     """
-    # 处理空答案
-    if not answer or not answer.strip():
+    actions = build_answer_actions(answer, options, raw_options)
+    if not actions:
         logger.info("[ANS] 答题: 答案为空，跳过")
         return False
-    
-    answer = answer.strip()
+
+    answer = str(answer).strip()
     logger.info("[ANS] 答题: %s" % answer)
-    
-    # 打印选项列表，方便调试
     if options:
         logger.info("[ANS] 选项列表: %s" % str(options[:5]))
-    
-    # 使用 _match_option 智能匹配答案到选项索引
-    if options:
-        matched_indices = _match_option(answer, options)
-        logger.info("[ANS] 智能匹配结果: %s" % str(matched_indices))
-        if matched_indices:
-            for idx in matched_indices:
-                logger.info("[ANS] 尝试点击选项 %d: %s" % (idx+1, options[idx] if idx < len(options) else "?"))
-                option_value = str(raw_options[idx][0]) if raw_options and idx < len(raw_options) else None
-                await click_option_by_index(page, idx, option_value)
-                await page.wait_for_timeout(300)
-            return True
+
+    all_succeeded = True
+    for action_index, action in enumerate(actions):
+        if action.kind == "index":
+            logger.info("[ANS] 按索引点击选项: %s" % action.value)
+            succeeded = await click_option_by_index(
+                page,
+                int(action.value),
+                action.option_value,
+            )
         else:
-            logger.warn("[ANS] 智能匹配失败，尝试文本匹配")
-    
-    # 如果没有选项列表或匹配失败，使用传统方法
-    # 检查是否是多选题（答案包含 ### 分隔符）
-    if '###' in answer:
-        answers = answer.split('###')
-        logger.info("[ANS] 多选题，共 %d 个答案" % len(answers))
-        for idx, ans in enumerate(answers):
-            ans = ans.strip()
-            if ans:
-                logger.info("[ANS] 选择第 %d 个答案: %s" % (idx+1, ans))
-                # 判断题特殊处理
-                if ans in ['对', '正确', '是', '√', 'True', 'true']:
-                    await click_option_by_text(page, '对')
-                elif ans in ['错', '错误', '否', '×', 'False', 'false']:
-                    await click_option_by_text(page, '错')
-                elif ans in ['A', 'B', 'C', 'D']:
-                    index = ord(ans) - ord('A')
-                    await click_option_by_index(page, index)
-                else:
-                    await click_option_by_text(page, ans)
-                # 多选时每个选项之间稍等
-                if idx < len(answers) - 1:
-                    await page.wait_for_timeout(300)
-        return True
-    
-    # 单选题：判断题特殊处理
-    if answer in ['对', '正确', '是', '√', 'True', 'true']:
-        logger.info("[ANS] 判断题答案: 对")
-        await click_option_by_text(page, '对')
-        return True
-    if answer in ['错', '错误', '否', '×', 'False', 'false']:
-        logger.info("[ANS] 判断题答案: 错")
-        await click_option_by_text(page, '错')
-        return True
-    
-    # 单选题：字母选项
-    if answer in ['A', 'B', 'C', 'D']:
-        index = ord(answer) - ord('A')
-        logger.info("[ANS] 字母选项: %s -> 索引 %d" % (answer, index))
-        await click_option_by_index(page, index)
-        return True
-    
-    # 最后：通过文本匹配
-    logger.info("[ANS] 文本匹配: %s" % answer)
-    await click_option_by_text(page, answer)
-    return True
+            logger.info("[ANS] 按文本点击选项: %s" % action.value)
+            succeeded = await click_option_by_text(page, str(action.value))
+        all_succeeded = bool(succeeded) and all_succeeded
+        if action_index < len(actions) - 1:
+            await page.wait_for_timeout(300)
+    return all_succeeded
 
 
 async def click_next_button(page: Page):
