@@ -472,7 +472,11 @@ async def main():
     await cancel_background_tasks([monitor_task])
 
 
-def run(config_path: str = "configs.ini", account_id: Optional[int] = None) -> int:
+def run(
+    config_path: str = "configs.ini",
+    account_id: Optional[int] = None,
+    course_url: Optional[str] = None,
+) -> int:
     """运行一个账号；单账号入口和多账号子进程共同调用。"""
     global config, logger, event_loop_verify, event_loop_answer
 
@@ -485,6 +489,8 @@ def run(config_path: str = "configs.ini", account_id: Optional[int] = None) -> i
     try:
         logger.info("程序启动中...")
         config = Config(config_path, account_id=account_id)
+        if course_url and course_url.strip():
+            config.course_urls = [course_url.strip()]
         if not config.course_urls:
             logger.info("未检测到有效网址或不支持此类网页,请检查配置文件!")
             return 2
@@ -520,13 +526,18 @@ def _parse_args():
     parser = argparse.ArgumentParser(description="Autovisor 单账号运行入口")
     parser.add_argument("--config", "-c", default="configs.ini", help="配置文件路径")
     parser.add_argument("--account-id", type=int, default=None, help="运行指定编号账号")
+    parser.add_argument("--course-url", default=None, help="仅运行指定课程网址")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     print("Github:CXRunfree All Rights Reserved.")
     args = _parse_args()
-    result = run(config_path=args.config, account_id=args.account_id)
+    result = run(
+        config_path=args.config,
+        account_id=args.account_id,
+        course_url=args.course_url,
+    )
     try:
         if sys.stdin and sys.stdin.isatty():
             try:

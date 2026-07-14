@@ -13,7 +13,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +26,11 @@ from pydantic import BaseModel, Field
 # 否则同名 Autovisor.py 会遮蔽仓库中的 Autovisor 命名空间。
 from modules.configs import Config
 from modules.logger import Logger
+from web.task_supervisor import (
+    TaskAlreadyRunning,
+    TaskSnapshot,
+    TaskSupervisor,
+)
 
 # ============================================================
 # Configuration
@@ -62,8 +68,8 @@ class ConfigUpdate(BaseModel):
     course_urls: Optional[list[str]] = None
 
 class TaskStartRequest(BaseModel):
-    course_url: Optional[str] = None
-    mode: str = "single"  # single | multi
+    course_url: Optional[str] = Field(default=None, max_length=2048)
+    mode: Literal["single", "multi"] = "single"
 
 # ============================================================
 # State Management
@@ -74,7 +80,10 @@ class AppState:
     config: Optional[Config] = None
     is_running: bool = False
     current_task: Optional[str] = None
+    task_mode: Optional[str] = None
+    task_pid: Optional[int] = None
     task_start_time: Optional[float] = None
+    last_exit_code: Optional[int] = None
     logs: list[dict] = field(default_factory=list)
     max_logs: int = 1000
     stats: dict = field(default_factory=lambda: {
@@ -235,6 +244,22 @@ class ConfigManager:
         return result
 
 config_manager = ConfigManager(CONFIG_PATH)
+task_supervisor = TaskSupervisor(
+    CONFIG_PATH.parent,
+    log_path=LOGS_DIR / "DashboardTask.log",
+)
+
+
+def _sync_task_state(snapshot: TaskSnapshot | None = None) -> TaskSnapshot:
+    """用真实子进程状态覆盖 Dashboard 的兼容状态字段。"""
+    snapshot = snapshot or task_supervisor.refresh()
+    app_state.is_running = snapshot.is_running
+    app_state.current_task = snapshot.task_id
+    app_state.task_mode = snapshot.mode
+    app_state.task_pid = snapshot.pid
+    app_state.task_start_time = snapshot.start_time
+    app_state.last_exit_code = snapshot.exit_code
+    return snapshot
 
 # ============================================================
 # FastAPI App
@@ -249,14 +274,20 @@ async def lifespan(app: FastAPI):
         dashboard_logger.info(f"Config loaded: driver={cfg.driver}")
     except Exception as e:
         dashboard_logger.warn(f"Config load warning: {e}")
-    yield
-    # Shutdown
-    dashboard_logger.info("Autovisor Web API shutting down")
+    try:
+        yield
+    finally:
+        # Dashboard 退出不能遗留浏览器或多账号子进程。
+        stopped, _snapshot = await asyncio.to_thread(task_supervisor.stop)
+        if stopped:
+            dashboard_logger.info("Running task stopped during API shutdown")
+        _sync_task_state()
+        dashboard_logger.info("Autovisor Web API shutting down")
 
 app = FastAPI(
     title="Autovisor Dashboard API",
     description="Cal.com-style dashboard backend for Autovisor",
-    version="3.0.0",
+    version="3.1.0",
     lifespan=lifespan,
 )
 
@@ -289,7 +320,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/api/health", response_model=ApiResponse)
 async def health_check():
-    return ApiResponse(data={"status": "ok", "version": "3.0.0"})
+    return ApiResponse(data={"status": "ok", "version": "3.1.0"})
 
 @app.get("/api/config", response_model=ApiResponse)
 async def get_config():
@@ -327,39 +358,68 @@ async def get_stats():
 
 @app.get("/api/status", response_model=ApiResponse)
 async def get_status():
+    snapshot = _sync_task_state()
     uptime = 0.0
-    if app_state.task_start_time:
-        uptime = time.time() - app_state.task_start_time
+    if snapshot.start_time:
+        uptime = max(0.0, time.time() - snapshot.start_time)
     return ApiResponse(data={
-        "is_running": app_state.is_running,
-        "current_task": app_state.current_task,
+        "is_running": snapshot.is_running,
+        "current_task": snapshot.task_id,
+        "mode": snapshot.mode,
+        "pid": snapshot.pid,
+        "exit_code": snapshot.exit_code,
         "uptime_seconds": uptime,
         "total_sessions": app_state.stats["total_sessions"],
     })
 
 @app.post("/api/tasks/start", response_model=ApiResponse)
 async def start_task(request: TaskStartRequest):
-    if app_state.is_running:
-        raise HTTPException(status_code=409, detail="Task already running")
-    app_state.is_running = True
-    app_state.current_task = request.course_url or "all_courses"
-    app_state.task_start_time = time.time()
+    if request.course_url:
+        parsed = urlsplit(request.course_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise HTTPException(status_code=422, detail="Invalid course URL")
+    try:
+        snapshot = await asyncio.to_thread(
+            task_supervisor.launch,
+            mode=request.mode,
+            config_path=config_manager.config_path,
+            course_url=request.course_url,
+        )
+    except TaskAlreadyRunning as exc:
+        _sync_task_state()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        dashboard_logger.error(f"Task launch failed: {exc}")
+        raise HTTPException(status_code=500, detail="Task launch failed") from exc
+
+    _sync_task_state(snapshot)
     app_state.stats["total_sessions"] += 1
-    dashboard_logger.info(f"Task started: {app_state.current_task} (mode={request.mode})")
+    dashboard_logger.info(
+        f"Task started: {snapshot.task_id} "
+        f"(mode={snapshot.mode}, pid={snapshot.pid})"
+    )
     return ApiResponse(
-        data={"task_id": app_state.current_task, "mode": request.mode},
+        data={
+            "task_id": snapshot.task_id,
+            "mode": snapshot.mode,
+            "pid": snapshot.pid,
+        },
         message="Task started successfully",
     )
 
 @app.post("/api/tasks/stop", response_model=ApiResponse)
 async def stop_task():
-    if not app_state.is_running:
+    stopped, snapshot = await asyncio.to_thread(task_supervisor.stop)
+    _sync_task_state(snapshot)
+    if not stopped:
         return ApiResponse(data={}, message="No task running")
-    app_state.is_running = False
-    app_state.current_task = None
-    app_state.task_start_time = None
     dashboard_logger.info("Task stopped by user")
-    return ApiResponse(message="Task stopped successfully")
+    return ApiResponse(
+        data={"exit_code": snapshot.exit_code},
+        message="Task stopped successfully",
+    )
 
 @app.get("/api/courses", response_model=ApiResponse)
 async def get_courses():
@@ -434,4 +494,4 @@ async def serve_dashboard():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")

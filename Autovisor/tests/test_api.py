@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+import time
 from pathlib import Path
 
 # Ensure the standalone Autovisor modules are importable during collection,
@@ -18,14 +19,59 @@ sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from fastapi.testclient import TestClient
 
+import web.api as api_module
 from web.api import (
     app,
     app_state,
     config_manager,
     dashboard_logger,
 )
+from web.task_supervisor import TaskAlreadyRunning, TaskSnapshot
 
 sys.path.remove(_AUTOVISOR_ROOT)
+
+
+class _FakeTaskSupervisor:
+    def __init__(self):
+        self.snapshot = TaskSnapshot()
+        self.launch_calls = []
+        self.stop_calls = 0
+
+    def refresh(self):
+        return self.snapshot
+
+    def launch(self, *, mode, config_path, course_url=None):
+        if self.snapshot.is_running:
+            raise TaskAlreadyRunning("已有任务正在运行")
+        if mode == "multi" and course_url:
+            raise ValueError("多账号模式不支持单课程临时覆盖")
+        self.launch_calls.append((mode, Path(config_path), course_url))
+        self.snapshot = TaskSnapshot(
+            is_running=True,
+            task_id=course_url or (
+                "all_accounts" if mode == "multi" else "all_courses"
+            ),
+            mode=mode,
+            pid=7788,
+            start_time=time.time(),
+        )
+        return self.snapshot
+
+    def stop(self, timeout=10):
+        self.stop_calls += 1
+        if not self.snapshot.is_running:
+            return False, self.snapshot
+        self.snapshot = TaskSnapshot(exit_code=-15)
+        return True, self.snapshot
+
+    def set_running(self, *, task_id="course_1", mode="single", started_at=None):
+        self.snapshot = TaskSnapshot(
+            is_running=True,
+            task_id=task_id,
+            mode=mode,
+            pid=7788,
+            start_time=started_at if started_at is not None else time.time(),
+        )
 
 
 class TestHealthEndpoint(unittest.TestCase):
@@ -101,15 +147,25 @@ class TestConfigEndpoints(unittest.TestCase):
 class TestTaskEndpoints(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+        self.original_supervisor = api_module.task_supervisor
+        self.supervisor = _FakeTaskSupervisor()
+        api_module.task_supervisor = self.supervisor
         # Reset state
         app_state.is_running = False
         app_state.current_task = None
+        app_state.task_mode = None
+        app_state.task_pid = None
         app_state.task_start_time = None
+        app_state.last_exit_code = None
 
     def tearDown(self):
+        api_module.task_supervisor = self.original_supervisor
         app_state.is_running = False
         app_state.current_task = None
+        app_state.task_mode = None
+        app_state.task_pid = None
         app_state.task_start_time = None
+        app_state.last_exit_code = None
 
     def test_start_task(self):
         response = self.client.post("/api/tasks/start", json={"mode": "single"})
@@ -117,21 +173,23 @@ class TestTaskEndpoints(unittest.TestCase):
         data = response.json()
         self.assertTrue(data["success"])
         self.assertEqual(data["data"]["mode"], "single")
+        self.assertEqual(data["data"]["pid"], 7788)
         self.assertTrue(app_state.is_running)
+        self.assertEqual(len(self.supervisor.launch_calls), 1)
 
     def test_start_task_conflict(self):
-        app_state.is_running = True
+        self.supervisor.set_running()
         response = self.client.post("/api/tasks/start", json={"mode": "single"})
         self.assertEqual(response.status_code, 409)
 
     def test_stop_task(self):
-        app_state.is_running = True
-        app_state.current_task = "test_task"
+        self.supervisor.set_running(task_id="test_task")
         response = self.client.post("/api/tasks/stop", json={})
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertTrue(data["success"])
         self.assertFalse(app_state.is_running)
+        self.assertEqual(data["data"]["exit_code"], -15)
 
     def test_stop_when_not_running(self):
         app_state.is_running = False
@@ -140,13 +198,43 @@ class TestTaskEndpoints(unittest.TestCase):
         data = response.json()
         self.assertTrue(data["success"])
 
+    def test_invalid_mode_is_rejected_without_launching(self):
+        response = self.client.post("/api/tasks/start", json={"mode": "invalid"})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.supervisor.launch_calls, [])
+
+    def test_invalid_course_url_is_rejected_without_launching(self):
+        response = self.client.post(
+            "/api/tasks/start",
+            json={"mode": "single", "course_url": "file:///tmp/course"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.supervisor.launch_calls, [])
+
+    def test_multi_mode_rejects_single_course_override(self):
+        response = self.client.post(
+            "/api/tasks/start",
+            json={
+                "mode": "multi",
+                "course_url": "https://example.test/course",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.supervisor.launch_calls, [])
+
 
 class TestStatusEndpoint(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+        self.original_supervisor = api_module.task_supervisor
+        self.supervisor = _FakeTaskSupervisor()
+        api_module.task_supervisor = self.supervisor
         app_state.is_running = False
         app_state.current_task = None
         app_state.task_start_time = None
+
+    def tearDown(self):
+        api_module.task_supervisor = self.original_supervisor
 
     def test_status_stopped(self):
         response = self.client.get("/api/status")
@@ -157,17 +245,34 @@ class TestStatusEndpoint(unittest.TestCase):
         self.assertEqual(data["data"]["uptime_seconds"], 0.0)
 
     def test_status_running(self):
-        import time
-        app_state.is_running = True
-        app_state.current_task = "course_1"
-        app_state.task_start_time = time.time() - 120  # 2 minutes ago
+        self.supervisor.set_running(
+            task_id="course_1",
+            started_at=time.time() - 120,
+        )
         response = self.client.get("/api/status")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertTrue(data["success"])
         self.assertTrue(data["data"]["is_running"])
         self.assertEqual(data["data"]["current_task"], "course_1")
+        self.assertEqual(data["data"]["pid"], 7788)
         self.assertGreaterEqual(data["data"]["uptime_seconds"], 120)
+
+
+class TestLifespanCleanup(unittest.TestCase):
+    def test_shutdown_stops_running_task(self):
+        original_supervisor = api_module.task_supervisor
+        supervisor = _FakeTaskSupervisor()
+        supervisor.set_running()
+        api_module.task_supervisor = supervisor
+        try:
+            with TestClient(app) as client:
+                self.assertEqual(client.get("/api/health").status_code, 200)
+        finally:
+            api_module.task_supervisor = original_supervisor
+
+        self.assertEqual(supervisor.stop_calls, 1)
+        self.assertFalse(supervisor.snapshot.is_running)
 
 
 class TestLogsEndpoint(unittest.TestCase):
