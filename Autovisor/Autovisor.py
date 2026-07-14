@@ -48,12 +48,13 @@ from modules.lesson_navigation import (
     pending_course_cards,
 )
 from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
+from modules.meeting_course_flow import run_meeting_course
 from modules.national_test_flow import NationalTestOutcome, NationalTestSession
-from modules.progress import get_course_progress, show_course_progress, move_mouse_meeting_class
+from modules.progress import get_course_progress, show_course_progress
 from modules.utils import optimize_page, get_lesson_name, get_filtered_class, get_video_attr, hide_window, \
     get_browser_window, bring_console_to_front, save_cookies, load_cookies, \
     scan_national_wisdom_cards, click_card_by_id, APPLY_VIDEO_SETTINGS_JS, \
-    scan_normal_class_tests, detect_test_in_current_lesson, scan_meeting_class_videos
+    scan_normal_class_tests, detect_test_in_current_lesson
 from modules.slider import slider_verify
 from modules.async_utils import cancel_background_tasks
 from modules.tasks import video_optimize, play_video, skip_questions, wait_for_verify, activate_window, task_monitor, handle_test_page, TestResponseHandler
@@ -616,220 +617,16 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             await optimize_page(page, config, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class)
     # 见面课使用特殊逻辑（80%完成阈值）
     elif is_meeting_class:
-        logger.info("见面课模式：签到进度达到80%即完成签到")
-        
-        # 扫描视频列表
-        logger.info("扫描视频列表...")
-        videos = await scan_meeting_class_videos(page)
-        
-        if not videos:
-            logger.warn("未找到视频列表，尝试直接播放")
-            await page.wait_for_selector("video", state="attached", timeout=15000)
-            start_time = time.time()
-            
-            # 关闭可能出现的弹窗（学前必读等）
-            await close_popup(page, logger)
-            
-            # 移动鼠标到视频区域，显示播放控制按钮
-            logger.info("移动鼠标到视频区域...")
-            await move_mouse_meeting_class(page)
-            await page.wait_for_timeout(1000)
-            
-            # 设置倍速
-            if hasattr(config, 'playbackRate') and config.playbackRate:
-                try:
-                    await move_mouse_meeting_class(page)
-                    await page.wait_for_timeout(500)
-                    
-                    speed_set = False
-                    speed_box = page.locator(".speedBox").first
-                    if await speed_box.count() > 0 and await speed_box.is_visible():
-                        await speed_box.click(timeout=2000)
-                        await page.wait_for_timeout(500)
-                        rate_map = {1.0: ".speedTab05", 1.25: ".speedTab10", 1.5: ".speedTab15"}
-                        rate_selector = rate_map.get(config.playbackRate, ".speedTab15")
-                        rate_button = page.locator(rate_selector).first
-                        if await rate_button.count() > 0:
-                            await rate_button.click(timeout=2000)
-                            logger.info(f"倍数已设置为 {config.playbackRate}x")
-                            speed_set = True
-                            await page.wait_for_timeout(500)
-                    
-                    if not speed_set:
-                        rate_box = page.locator(".vjs-playback-rate").first
-                        if await rate_box.count() > 0 and await rate_box.is_visible():
-                            await rate_box.click(timeout=2000)
-                            await page.wait_for_timeout(500)
-                            vjs_rate_map = {1.0: "1x", 1.25: "1.25x", 1.5: "1.5x"}
-                            rate_text = vjs_rate_map.get(config.playbackRate, f"{config.playbackRate}x")
-                            rate_item = rate_box.locator(f".vjs-menu-item:has-text('{rate_text}')").first
-                            if await rate_item.count() > 0:
-                                await rate_item.click(timeout=2000)
-                                logger.info(f"倍数已设置为 {config.playbackRate}x (video.js)")
-                                speed_set = True
-                                await page.wait_for_timeout(500)
-                    
-                    if not speed_set:
-                        await page.evaluate(f"document.querySelector('video').playbackRate = {config.playbackRate};")
-                        logger.info(f"通过JS设置倍速为 {config.playbackRate}x")
-                except Exception as e:
-                    logger.warn(f"设置倍速失败: {str(e)[:50]}")
-            
-            # 尝试自动播放
-            try:
-                await move_mouse_meeting_class(page)
-                await page.wait_for_timeout(1000)
-                
-                play_clicked = False
-                big_play = page.locator(".bigPlayButton").first
-                if await big_play.count() > 0 and await big_play.is_visible():
-                    try:
-                        await big_play.click(timeout=5000)
-                        logger.info("点击播放按钮(.bigPlayButton)成功")
-                        play_clicked = True
-                        await page.wait_for_timeout(2000)
-                    except Exception:
-                        pass
-                
-                if not play_clicked:
-                    vjs_play = page.locator(".vjs-big-play-button").first
-                    if await vjs_play.count() > 0 and await vjs_play.is_visible():
-                        try:
-                            await vjs_play.click(timeout=5000)
-                            logger.info("点击播放按钮(.vjs-big-play-button)成功")
-                            play_clicked = True
-                            await page.wait_for_timeout(2000)
-                        except Exception:
-                            pass
-                
-                if not play_clicked:
-                    paused = await page.evaluate('document.querySelector("video")?.paused ?? true')
-                    if paused:
-                        logger.info("尝试直接播放视频...")
-                        await page.evaluate("document.querySelector('video').play();")
-                        await page.wait_for_timeout(2000)
-            except Exception as e:
-                logger.warn(f"自动播放失败: {str(e)[:100]}")
-            
-            await learning_loop(page, start_time, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class)
-            logger.info("见面课已完成！", shift=True)
-        else:
-            # 有视频列表，逐个播放未完成的视频
-            incomplete_videos = [v for v in videos if not v['completed']]
-            
-            if not incomplete_videos:
-                logger.info("所有视频已完成！", shift=True)
-            else:
-                logger.info(f"发现 {len(incomplete_videos)} 个未完成的视频")
-                
-                for video_idx, video in enumerate(incomplete_videos):
-                    if video_idx >= 50:
-                        logger.warn(f"视频播放次数超限(50)，强制停止", shift=True)
-                        break
-                    logger.info(f"\n开始播放 ({video_idx+1}/{len(incomplete_videos)}): {video['title']} ({video['duration']})")
-                    
-                    # 点击视频项
-                    try:
-                        await video['element'].click(timeout=5000)
-                        await page.wait_for_timeout(2000)
-                    except Exception as e:
-                        logger.warn(f"点击视频失败: {str(e)[:50]}")
-                        continue
-                    
-                    # 等待视频加载
-                    await page.wait_for_selector("video", state="attached", timeout=15000)
-                    start_time = time.time()
-                    
-                    # 关闭可能出现的弹窗（学前必读等）
-                    await close_popup(page, logger)
-                    
-                    # 移动鼠标到视频区域，显示播放控制按钮
-                    logger.info("移动鼠标到视频区域...")
-                    await move_mouse_meeting_class(page)
-                    await page.wait_for_timeout(1000)
-                    
-                    # 设置倍速（仅第一个视频设置）
-                    if video == incomplete_videos[0] and hasattr(config, 'playbackRate') and config.playbackRate:
-                        try:
-                            await move_mouse_meeting_class(page)
-                            await page.wait_for_timeout(500)
-                            
-                            speed_set = False
-                            speed_box = page.locator(".speedBox").first
-                            if await speed_box.count() > 0 and await speed_box.is_visible():
-                                await speed_box.click(timeout=2000)
-                                await page.wait_for_timeout(500)
-                                rate_map = {1.0: ".speedTab05", 1.25: ".speedTab10", 1.5: ".speedTab15"}
-                                rate_selector = rate_map.get(config.playbackRate, ".speedTab15")
-                                rate_button = page.locator(rate_selector).first
-                                if await rate_button.count() > 0:
-                                    await rate_button.click(timeout=2000)
-                                    logger.info(f"倍数已设置为 {config.playbackRate}x")
-                                    speed_set = True
-                                    await page.wait_for_timeout(500)
-                            
-                            if not speed_set:
-                                rate_box = page.locator(".vjs-playback-rate").first
-                                if await rate_box.count() > 0 and await rate_box.is_visible():
-                                    await rate_box.click(timeout=2000)
-                                    await page.wait_for_timeout(500)
-                                    vjs_rate_map = {1.0: "1x", 1.25: "1.25x", 1.5: "1.5x"}
-                                    rate_text = vjs_rate_map.get(config.playbackRate, f"{config.playbackRate}x")
-                                    rate_item = rate_box.locator(f".vjs-menu-item:has-text('{rate_text}')").first
-                                    if await rate_item.count() > 0:
-                                        await rate_item.click(timeout=2000)
-                                        logger.info(f"倍数已设置为 {config.playbackRate}x (video.js)")
-                                        speed_set = True
-                                        await page.wait_for_timeout(500)
-                            
-                            if not speed_set:
-                                await page.evaluate(f"document.querySelector('video').playbackRate = {config.playbackRate};")
-                                logger.info(f"通过JS设置倍速为 {config.playbackRate}x")
-                        except Exception as e:
-                            logger.warn(f"设置倍速失败: {str(e)[:50]}")
-                    
-                    # 尝试自动播放
-                    try:
-                        await move_mouse_meeting_class(page)
-                        await page.wait_for_timeout(1000)
-                        
-                        play_clicked = False
-                        big_play = page.locator(".bigPlayButton").first
-                        if await big_play.count() > 0 and await big_play.is_visible():
-                            try:
-                                await big_play.click(timeout=5000)
-                                logger.info("点击播放按钮(.bigPlayButton)成功")
-                                play_clicked = True
-                                await page.wait_for_timeout(2000)
-                            except Exception:
-                                pass
-                        
-                        if not play_clicked:
-                            vjs_play = page.locator(".vjs-big-play-button").first
-                            if await vjs_play.count() > 0 and await vjs_play.is_visible():
-                                try:
-                                    await vjs_play.click(timeout=5000)
-                                    logger.info("点击播放按钮(.vjs-big-play-button)成功")
-                                    play_clicked = True
-                                    await page.wait_for_timeout(2000)
-                                except Exception:
-                                    pass
-                        
-                        if not play_clicked:
-                            paused = await page.evaluate('document.querySelector("video")?.paused ?? true')
-                            if paused:
-                                logger.info("尝试直接播放视频...")
-                                await page.evaluate("document.querySelector('video').play();")
-                                await page.wait_for_timeout(2000)
-                    except Exception as e:
-                        logger.warn(f"自动播放失败: {str(e)[:100]}")
-                    
-                    # 进入学习循环（90%阈值）
-                    await learning_loop(page, start_time, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class)
-                    
-                    logger.info(f"视频 '{video['title']}' 已完成！", shift=True)
-                
-                logger.info("\n所有视频已完成！", shift=True)
+        return await run_meeting_course(
+            page,
+            config,
+            logger,
+            close_popup=close_popup,
+            learning_loop=learning_loop,
+            is_new_version=is_new_version,
+            is_hike_class=is_hike_class,
+            is_national_wisdom=is_national_wisdom,
+        )
     # 普通课程使用原有逻辑
     else:
         await page.wait_for_selector(".clearfix.video, .chapter-test", state="attached")
