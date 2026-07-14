@@ -82,3 +82,7 @@ class LessonNavigationState:
         if test_completed:
             self.test_attempts.pop(key, None)
             self.completed_keys.add(key)
+
+    def skip(self, key: str) -> None:
+        self.skipped_keys.add(key)
+        self.tried_keys.discard(key)

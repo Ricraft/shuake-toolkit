@@ -102,7 +102,11 @@ def _dependencies(scan_results, *, click_results=None):
 def test_empty_scan_finishes_without_clicking():
     calls, dependencies = _dependencies([([], _summary(0, 0))])
     logger = _Logger()
-    config = SimpleNamespace(limitMaxTime=0, course_urls=["course"], remove_pause="js")
+    config = SimpleNamespace(
+        limitMaxTime=0,
+        course_urls=["first-course", "second-course"],
+        remove_pause="js",
+    )
 
     asyncio.run(run_hike_course(_Page(), config, logger, **dependencies))
 
@@ -123,15 +127,24 @@ def test_lessons_are_clicked_learned_and_rescanned_in_page_order():
     logger = _Logger()
     config = SimpleNamespace(limitMaxTime=0, course_urls=["course"], remove_pause="js")
 
-    asyncio.run(run_hike_course(page, config, logger, clock=lambda: 10, **dependencies))
+    asyncio.run(
+        run_hike_course(
+            page,
+            config,
+            logger,
+            course_url="second-course",
+            clock=lambda: 10,
+            **dependencies,
+        )
+    )
 
     assert [click[0] for click in calls.clicks] == ["a", "b"]
     assert len(calls.learns) == 2
     assert calls.popups == 2
     assert calls.optimizes == [(False, True, False), (False, True, False)]
     assert page.goto_calls == [
-        ("course", "domcontentloaded"),
-        ("course", "domcontentloaded"),
+        ("second-course", "domcontentloaded"),
+        ("second-course", "domcontentloaded"),
     ]
     assert logger.infos[-1] == "所有课程已完成!"
 

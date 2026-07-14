@@ -256,6 +256,7 @@ def test_answered_test_is_not_repeated_when_completion_state_is_stale():
             review_loop=None,
             handler_factory=lambda: _Handler(),
             answer_handler=None,
+            course_url="second-course",
             class_provider=class_provider,
             test_scanner=test_scanner,
             optimizer=optimizer,
@@ -266,3 +267,4 @@ def test_answered_test_is_not_repeated_when_completion_state_is_stale():
 
     assert session_calls == [course]
     assert "测验提交后状态未刷新，本轮不重复作答" in logger.warnings
+    assert page.goto_calls == [("second-course", "domcontentloaded")]

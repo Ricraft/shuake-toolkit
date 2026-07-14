@@ -113,12 +113,13 @@ async def restore_normal_course_list(
     config,
     logger,
     *,
+    course_url: str,
     is_new_version: bool,
     optimizer=optimize_page,
 ) -> None:
     logger.info("测验处理完成，返回课程列表...")
     try:
-        await page.goto(config.course_urls[0], wait_until="domcontentloaded")
+        await page.goto(course_url, wait_until="domcontentloaded")
         logger.info("已返回课程列表页面")
     except Exception as exc:
         logger.warn(f"返回课程列表失败: {str(exc)[:50]}")
@@ -167,6 +168,7 @@ async def run_normal_course(
     review_loop,
     handler_factory,
     answer_handler,
+    course_url: str | None = None,
     is_new_version: bool = False,
     class_provider=get_filtered_class,
     test_scanner=scan_normal_class_tests,
@@ -176,6 +178,7 @@ async def run_normal_course(
     test_session_factory=NormalTestSession,
     clock=time.time,
 ) -> None:
+    target_course_url = course_url or config.course_urls[0]
     await page.wait_for_selector(".clearfix.video, .chapter-test", state="attached")
     await page.wait_for_timeout(2000)
     for _ in range(5):
@@ -272,6 +275,7 @@ async def run_normal_course(
                 page,
                 config,
                 logger,
+                course_url=target_course_url,
                 is_new_version=is_new_version,
                 optimizer=optimizer,
             )

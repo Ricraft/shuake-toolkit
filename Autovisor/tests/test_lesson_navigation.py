@@ -84,3 +84,11 @@ def test_completed_test_clears_retry_counter():
     choice = state.choose([_card("test", card_type="test")])
     assert choice.lesson is None
     assert choice.reason is SelectionReason.NO_CANDIDATES
+
+
+def test_explicitly_skipped_card_is_not_selected_again():
+    state = LessonNavigationState()
+    state.skip("broken")
+    choice = state.choose([_card("broken")])
+    assert choice.lesson is None
+    assert choice.reason is SelectionReason.NO_CANDIDATES

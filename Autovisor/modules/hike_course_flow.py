@@ -20,6 +20,7 @@ async def run_hike_course(
     *,
     close_popup,
     learning_loop,
+    course_url: str | None = None,
     is_new_version: bool = False,
     is_national_wisdom: bool = False,
     scanner=scan_pending_lessons_deep,
@@ -46,6 +47,7 @@ async def run_hike_course(
         logger.info("没有未完成的课程，本轮结束。")
         return
 
+    target_course_url = course_url or config.course_urls[0]
     start_time = clock()
     for lesson in pending_lessons:
         title = lesson["title"]
@@ -88,7 +90,7 @@ async def run_hike_course(
             is_national_wisdom,
         )
 
-        await page.goto(config.course_urls[0], wait_until="domcontentloaded")
+        await page.goto(target_course_url, wait_until="domcontentloaded")
         await page.wait_for_timeout(2000)
         await optimizer(
             page,
@@ -102,4 +104,3 @@ async def run_hike_course(
         if not refreshed_lessons:
             logger.info("所有课程已完成!", shift=True)
             return
-

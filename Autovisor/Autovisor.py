@@ -41,20 +41,14 @@ from modules.logger import Logger
 from modules.configs import Config
 from modules.course_session import CourseSession
 from modules.hike_course_flow import run_hike_course
-from modules.lesson_navigation import (
-    LessonNavigationState,
-    SelectionReason,
-    find_course_card,
-    pending_course_cards,
-)
 from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
 from modules.meeting_course_flow import run_meeting_course
-from modules.national_test_flow import NationalTestOutcome, NationalTestSession
+from modules.national_course_flow import run_national_course
 from modules.normal_course_flow import run_normal_course
 from modules.progress import get_course_progress, show_course_progress
-from modules.utils import optimize_page, get_lesson_name, get_video_attr, hide_window, \
+from modules.utils import get_video_attr, hide_window, \
     get_browser_window, bring_console_to_front, save_cookies, load_cookies, \
-    scan_national_wisdom_cards, click_card_by_id, APPLY_VIDEO_SETTINGS_JS
+    is_playwright_window
 from modules.slider import slider_verify
 from modules.async_utils import cancel_background_tasks
 from modules.tasks import video_optimize, play_video, skip_questions, wait_for_verify, activate_window, task_monitor, handle_test_page, TestResponseHandler
@@ -365,7 +359,7 @@ async def review_loop(page: Page, start_time, is_hike_class=False):
                 logger.warn(repr(e))
 
 
-async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is_national_wisdom=False, is_meeting_class=False):
+async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is_national_wisdom=False, is_meeting_class=False, course_url=None):
     # 智慧共享课（翻转课）使用深度扫描
     if is_hike_class:
         return await run_hike_course(
@@ -374,247 +368,24 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             logger,
             close_popup=close_popup,
             learning_loop=learning_loop,
+            course_url=course_url,
             is_new_version=is_new_version,
             is_national_wisdom=is_national_wisdom,
         )
     
-    # 全国智慧共享课使用专门的处理逻辑
+    # 全国智慧共享课
     elif is_national_wisdom:
-        logger.info("开始运行时滚动扫描... (全国智慧共享课)", shift=True)
-        
-        # 等待页面加载并关闭可能出现的弹窗
-        await page.wait_for_timeout(2000)
-        for _ in range(5):
-            closed = await close_popup(page, logger)
-            if closed:
-                await page.wait_for_timeout(500)
-            else:
-                break
-        
-        start_time = time.time()
-        navigation = LessonNavigationState(test_retry_limit=5)
-        consecutive_lessons = 0
-        loop_count = 0
-        
-        while True:
-            loop_count += 1
-            if loop_count > 200:
-                logger.warn("循环次数超限(200)，强制退出", shift=True)
-                break
-
-            # 先尝试关闭弹窗（学前必读等）
-            await close_popup(page, logger)
-            
-            all_cards, summary, is_in_iframe = await scan_national_wisdom_cards(page)
-            pending_lessons = pending_course_cards(all_cards)
-            
-            logger.info(
-                f"整页统计: 总卡片 {summary['total']} | 未完成 {summary['pending']} | 已完成 {summary['done']}",
-                shift=True,
-            )
-            
-            if not pending_lessons:
-                if summary["total"] == 0:
-                    logger.info("未检测到课程卡片，可能页面还在加载，重试中...", shift=True)
-                    await page.wait_for_timeout(3000)
-                    continue
-                logger.info("所有课程已完成!", shift=True)
-                break
-            
-            # 调试: 打印 test 类型卡片
-            test_cards = [c for c in all_cards if c.get('type') == 'test']
-            if test_cards:
-                logger.info(f"检测到 {len(test_cards)} 个测试项: {[t['title'] for t in test_cards]}")
-            
-            time_period = (time.time() - start_time) / 60
-            if 0 < config.limitMaxTime <= time_period:
-                logger.info(f"当前课程已达时限:{config.limitMaxTime}min", shift=True)
-                return
-            
-            selection = navigation.choose(pending_lessons)
-            lesson = selection.lesson
-            if lesson is None:
-                if selection.reason is SelectionReason.NO_CANDIDATES:
-                    logger.info("所有未完成项均已处理或跳过，退出", shift=True)
-                else:
-                    logger.info("所有剩余测验均已达到重试上限，退出", shift=True)
-                break
-            if selection.reason is SelectionReason.ROUND_RESET:
-                logger.info("所有可尝试项均尝试过，清空记录重新开始", shift=True)
-            
-            title = lesson["title"]
-            card_id = lesson["card_id"]
-            lesson_key = lesson["key"]
-            
-            logger.info(f"锁定未完成节次: {lesson.get('section', '')} / {title} ({lesson['progress']}%)")
-            
-            # 测试卡片：在点击前设置监听器
-            test_session = None
-            if lesson.get('type') == 'test':
-                # 测验重试次数限制（按测验key独立计数）
-                test_retry_count = navigation.begin_test_attempt(lesson_key)
-                if test_retry_count is None:
-                    logger.warn(f"测验 '{title}' 重试超限({navigation.test_retry_limit})，永久跳过", shift=True)
-                    continue
-                
-                test_session = NationalTestSession(
-                    page,
-                    config.course_urls[0],
-                    logger,
-                    TestResponseHandler(),
-                    handle_test_page,
-                )
-                test_session.prepare()
-                logger.info(f"已设置测试响应监听器，准备点击测试卡片: {title}")
-            
-            # 【修复】点击卡片前确保页面在课程列表页
-            try:
-                if "study/index" not in page.url and "wisdom-mooc" not in page.url:
-                    logger.info("点击卡片前检测到页面不在课程列表，重新导航", shift=True)
-                    await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                    await page.wait_for_timeout(1500)
-                    # 重新扫描
-                    all_cards, summary, is_in_iframe = await scan_national_wisdom_cards(page)
-                    pending_lessons = pending_course_cards(all_cards)
-                    # 重新查找当前卡片
-                    lesson = find_course_card(pending_lessons, lesson_key)
-                    if lesson is None:
-                        logger.warn(f"重新导航后未找到卡片:{title}", shift=True)
-                        if test_session:
-                            await test_session.cancel()
-                        continue
-                    card_id = lesson["card_id"]
-                    title = lesson["title"]
-            except Exception:
-                pass
-            
-            if not await click_card_by_id(page, card_id, title, is_in_iframe):
-                logger.warn(f"未能定位卡片:{title}, 本轮跳过.", shift=True)
-                if test_session:
-                    await test_session.cancel()
-                await page.wait_for_timeout(1000)
-                continue
-            
-            # 测试卡片：等待响应并处理答题
-            if lesson.get('type') == 'test':
-                logger.info(f"已点击测试卡片，等待页面加载和API响应...")
-                outcome = await test_session.process()
-                navigation.mark_attempted(
-                    lesson_key,
-                    test_completed=outcome is NationalTestOutcome.COMPLETED,
-                )
-                continue
-            
-            await page.wait_for_timeout(1000)
-            
-            # 关闭可能出现的弹窗（学前必读等）
-            await close_popup(page, logger)
-            
-            try:
-                current_title = await get_lesson_name(page, is_hike_class, is_national_wisdom) or title
-            except Exception:
-                current_title = title
-            logger.info(f"开始观看:{current_title}")
-            
-            # 等待视频并立即应用声音与倍速配置
-            try:
-                await page.wait_for_selector("video", state="attached", timeout=15000)
-                await page.wait_for_timeout(500)
-                if "www.zhihuishu.com" in page.url:
-                    logger.error("检测到被重定向到首页，session 可能已过期，退出", shift=True)
-                    return
-                
-                # 使用 remove_pause 防止视频被暂停
-                await page.evaluate(config.remove_pause)
-                
-                # 全国智慧共享课强制1.0倍速（按累计墙钟时间计分，倍速会导致时间不够）
-                national_wisdom_speed = 1.0
-                await page.evaluate(
-                    APPLY_VIDEO_SETTINGS_JS,
-                    {"speed": national_wisdom_speed, "mute": config.soundOff},
-                )
-                sound_state = "静音" if config.soundOff else "声音开启"
-                logger.write_log(f"{sound_state}+{national_wisdom_speed}x倍速 已应用\n")
-                
-                # 确保视频正在播放
-                await page.wait_for_timeout(300)
-                paused = await page.evaluate("document.querySelector('video')?.paused ?? true")
-                
-                if paused:
-                    # 尝试播放视频，处理Promise
-                    play_result = await page.evaluate('''async () => {
-                        const video = document.querySelector('video');
-                        if (!video) return { success: false, error: 'video not found' };
-                        try {
-                            await video.play();
-                            return { success: true, paused: video.paused, error: null };
-                        } catch (e) {
-                            return { success: false, error: e.message || 'play failed' };
-                        }
-                    }''')
-                    
-                    if play_result['success']:
-                        logger.write_log("视频已开始播放\n")
-                    else:
-                        logger.warn(f"视频播放失败: {play_result['error']}")
-            except Exception:
-                logger.warn("未及时检测到视频元素,进入宽松等待模式.", shift=True)
-            
-            # 学习循环
-            lesson_start = time.time()
-            await learning_loop(page, start_time, is_new_version, is_hike_class, is_national_wisdom)
-            lesson_elapsed = (time.time() - lesson_start) / 60
-            logger.write_log(f"\"{title}\" 本课学习用时: {lesson_elapsed:.1f}min\n")
-            
-            navigation.mark_attempted(lesson_key)
-            consecutive_lessons += 1
-            
-            # 检查视频是否真正播放完成
-            # 全国智慧共享课：用 go_back 返回课程列表（比 goto 快数倍，利用浏览器缓存）
-            if is_national_wisdom:
-                try:
-                    await page.go_back(wait_until="domcontentloaded")
-                    await page.wait_for_timeout(1000)
-                    # 【修复】验证是否真正回到了课程列表
-                    if "study/index" not in page.url:
-                        logger.info("go_back未回到课程列表，改用goto导航", shift=True)
-                        await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                        await page.wait_for_timeout(1500)
-                except Exception:
-                    logger.info("go_back失败，改用goto导航回课程列表", shift=True)
-                    try:
-                        await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                        await page.wait_for_timeout(1500)
-                    except Exception:
-                        pass
-                logger.info("视频播放完成，已返回课程列表", shift=True)
-                consecutive_lessons = 0
-                continue
-            else:
-                await page.wait_for_timeout(1500)
-                cur_progress = await get_course_progress(page, is_new_version, is_hike_class, is_national_wisdom)
-                logger.write_log(f"课后进度检查: {cur_progress}\n")
-                if cur_progress != "100%":
-                    logger.info(f"播放未完成(进度{cur_progress})，返回课程页重试", shift=True)
-                    consecutive_lessons = 0
-                    await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-                    await page.wait_for_timeout(3000)
-                    await optimize_page(page, config, is_new_version, is_hike_class, is_national_wisdom)
-                    continue
-            
-            # 检查总时限
-            time_period = (time.time() - start_time) / 60
-            if 0 < config.limitMaxTime <= time_period:
-                logger.info(f"已达总时限 {config.limitMaxTime}min，停止", shift=True)
-                return
-            
-            # 播放完成，尝试连播或回课程页
-            
-            # 每节课完成后返回课程列表重新扫描，确保进度记录正确
-            consecutive_lessons = 0
-            await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
-            await optimize_page(page, config, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class)
+        return await run_national_course(
+            page,
+            config,
+            logger,
+            close_popup=close_popup,
+            learning_loop=learning_loop,
+            handler_factory=TestResponseHandler,
+            answer_handler=handle_test_page,
+            course_url=course_url,
+            is_new_version=is_new_version,
+        )
     # 见面课使用特殊逻辑（80%完成阈值）
     elif is_meeting_class:
         return await run_meeting_course(
@@ -638,6 +409,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is
             review_loop=review_loop,
             handler_factory=TestResponseHandler,
             answer_handler=handle_test_page,
+            course_url=course_url,
             is_new_version=is_new_version,
         )
 
@@ -681,7 +453,11 @@ async def main():
             print("==" * 10)
             session = CourseSession.from_url(course_url)
             await session.open(page, config, logger)
-            await working_loop(page, **session.profile.working_loop_options())
+            await working_loop(
+                page,
+                course_url=course_url,
+                **session.profile.working_loop_options(),
+            )
     print("==" * 10)
     logger.info("所有课程已学习完毕!")
     # 后台协程均为长期监听任务；课程完成后必须主动取消，否则程序不会退出。
