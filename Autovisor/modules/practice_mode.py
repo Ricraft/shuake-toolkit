@@ -27,6 +27,7 @@ from playwright.async_api import async_playwright, Playwright, Page, BrowserCont
 
 from modules.logger import Logger
 from modules.configs import Config
+from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
 from modules.tasks import (
     TestResponseHandler,
     handle_test_page,
@@ -90,23 +91,23 @@ async def auto_login(context: BrowserContext, page: Page, config: Config, module
         logger.info("检测到已登录，跳过登录步骤")
         return
     
-    await page.wait_for_selector(".wall-main", state="attached")
+    await page.wait_for_selector(LOGIN_PANEL, state="attached")
     logger.info("检测到登录表单")
     
     if config.username and config.password:
         logger.info(f"正在自动填入账号密码 (用户名: {config.username})...")
         try:
-            await page.wait_for_selector("#lUsername", state="attached")
-            await page.wait_for_selector("#lPassword", state="attached")
+            await page.wait_for_selector(USERNAME_INPUT, state="attached")
+            await page.wait_for_selector(PASSWORD_INPUT, state="attached")
             
-            await page.locator("#lUsername").fill(config.username)
+            await page.locator(USERNAME_INPUT).fill(config.username)
             await page.wait_for_timeout(500)
-            await page.locator("#lPassword").fill(config.password)
+            await page.locator(PASSWORD_INPUT).fill(config.password)
             await page.wait_for_timeout(500)
             
-            await page.wait_for_selector(".wall-sub-btn", state="attached")
+            await page.wait_for_selector(LOGIN_SUBMIT, state="attached")
             await page.wait_for_timeout(500)
-            await page.locator(".wall-sub-btn").first.click()
+            await page.locator(LOGIN_SUBMIT).click()
             logger.info("已提交登录信息")
             
             await page.wait_for_timeout(1500)

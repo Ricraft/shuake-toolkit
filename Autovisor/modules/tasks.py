@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from playwright.async_api import Page
 from pygetwindow import Win32Window
 from modules.configs import Config
+from modules.course_types import CourseKind, CourseProfile
 from modules.utils import get_video_attr, display_window, get_browser_window, hide_window, is_playwright_window
 from playwright._impl._errors import TargetClosedError
 from modules.logger import Logger
@@ -680,9 +681,9 @@ async def video_optimize(page: Page, config: Config) -> None:
             volume = await get_video_attr(page, "volume")
             rate = await get_video_attr(page, "playbackRate")
             
-            # 判断课程类型
-            is_hike_class = "hike.zhihuishu.com" in page.url
-            is_national_wisdom = "wisdom-mooc.zhihuishu.com" in page.url
+            profile = CourseProfile.from_url(page.url)
+            is_hike_class = profile.is_hike_class
+            is_national_wisdom = profile.is_national_wisdom
             
             if is_hike_class or is_national_wisdom:
                 # 智慧共享课每隔一段时间hover播放器保持显示
@@ -740,10 +741,11 @@ async def play_video(page: Page, config: Config) -> None:
             await asyncio.sleep(2)
             await page.wait_for_selector("video", state="attached", timeout=3000)
             paused = await page.evaluate("document.querySelector('video').paused")
-            is_national_wisdom = "wisdom-mooc.zhihuishu.com" in page.url
+            profile = CourseProfile.from_url(page.url)
+            is_national_wisdom = profile.is_national_wisdom
 
             if paused:
-                is_hike_class = "hike.zhihuishu.com" in page.url
+                is_hike_class = profile.is_hike_class
                 is_shared_class = is_hike_class or is_national_wisdom
                 if is_shared_class:
                     ended = await page.evaluate("document.querySelector('video').ended")
@@ -884,7 +886,8 @@ async def skip_questions(page: Page, event_loop) -> None:
     last_question_hash = 0
     while True:
         try:
-            if "wisdom-mooc.zhihuishu.com" in page.url:
+            profile = CourseProfile.from_url(page.url)
+            if profile.kind is CourseKind.NATIONAL_WISDOM:
                 await asyncio.sleep(2)
                 try:
                     ai_dialog = page.locator(".ai-class-exercise-dialog")
@@ -945,7 +948,7 @@ async def skip_questions(page: Page, event_loop) -> None:
                     pass
                 continue
             
-            if "hike.zhihuishu.com" in page.url:
+            if profile.kind is CourseKind.HIKE:
                 logger.warn("当前课程为新版本,不支持自动答题.", shift=True)
                 return
             await asyncio.sleep(2)
@@ -995,11 +998,12 @@ async def skip_questions(page: Page, event_loop) -> None:
             logger.write_log("浏览器已关闭,答题模块已下线.\n")
             return
         except Exception as e:
-            if "fusioncourseh5" in page.url:
+            profile = CourseProfile.from_url(page.url)
+            if profile.kind is CourseKind.FUSION:
                 not_finish_close = await page.query_selector(".el-dialog")
                 if not_finish_close:
                     await page.press(".el-dialog", "Escape", timeout=1000)
-            elif "hike.zhihuishu.com" in page.url:
+            elif profile.kind is CourseKind.HIKE:
                 logger.warn("当前课程为新版本,不支持自动答题.", shift=True)
                 return
             else:

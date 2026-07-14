@@ -39,6 +39,8 @@ _ensure_simplejson_compat()
 
 from modules.logger import Logger
 from modules.configs import Config
+from modules.course_session import CourseSession
+from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
 from modules.progress import get_course_progress, show_course_progress, move_mouse_meeting_class
 from modules.utils import optimize_page, get_lesson_name, get_filtered_class, get_video_attr, hide_window, \
     get_browser_window, bring_console_to_front, save_cookies, load_cookies, \
@@ -94,19 +96,19 @@ async def auto_login(context: BrowserContext, page: Page, modules=None):
     if "login" not in page.url:
         logger.info("检测到已登录,跳过登录步骤.")
         return
-    await page.wait_for_selector(".wall-main", state='attached')  # 等待登陆界面加载
+    await page.wait_for_selector(LOGIN_PANEL, state='attached')  # 等待登陆界面加载
     page.on('request', request_handler)
     if config.username and config.password:
-        await page.wait_for_selector("#lUsername", state="attached")
-        await page.wait_for_selector("#lPassword", state="attached")
-        await page.locator('#lUsername').fill(config.username)
-        await page.locator('#lPassword').fill(config.password)
-        await page.wait_for_selector(".wall-sub-btn", state="attached")
+        await page.wait_for_selector(USERNAME_INPUT, state="attached")
+        await page.wait_for_selector(PASSWORD_INPUT, state="attached")
+        await page.locator(USERNAME_INPUT).fill(config.username)
+        await page.locator(PASSWORD_INPUT).fill(config.password)
+        await page.wait_for_selector(LOGIN_SUBMIT, state="attached")
         await page.wait_for_timeout(500)
-        await page.locator(".wall-sub-btn").first.click()
+        await page.locator(LOGIN_SUBMIT).click()
     if config.enableAutoCaptcha and modules:
         await slider_verify(page)
-    await page.wait_for_selector(".wall-main", state='hidden')
+    await page.wait_for_selector(LOGIN_PANEL, state='hidden')
 
 
 async def close_popup(page: Page, logger_instance=None):
@@ -1327,71 +1329,9 @@ async def main():
         # 遍历所有课程,加载网页
         for course_url in config.course_urls:
             print("==" * 10)
-            is_new_version = "fusioncourseh5" in course_url
-            # 判断课程类型
-            is_hike_class = "hike.zhihuishu.com" in course_url  # 翻转课
-            is_national_wisdom = "wisdom-mooc.zhihuishu.com" in course_url  # 全国智慧共享课
-            is_meeting_class = "lc.zhihuishu.com" in course_url or "live.zhihuishu.com" in course_url  # 见面课
-            
-            logger.info("正在加载播放页...")
-            await page.goto(course_url, wait_until="commit")
-            await optimize_page(page, config, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class)
-            logger.info("页面优化完成!")
-            # 获取课程标题
-            if is_meeting_class:
-                try:
-                    title_selectors = [".course-name", ".source-name", ".title", "h1", "h2", ".header-title", ".meeting-title"]
-                    course_title = "见面课"
-                    for selector in title_selectors:
-                        try:
-                            title_selector = await page.wait_for_selector(selector, timeout=3000)
-                            course_title = await title_selector.text_content()
-                            if course_title and course_title.strip():
-                                break
-                        except TimeoutError:
-                            continue
-                    logger.info(f"当前课程:<<{course_title}>>，是见面课")
-                except Exception as e:
-                    logger.warn(f"见面课获取课程标题失败: {repr(e)}")
-                    logger.info("当前课程:<<见面课>>")
-            elif is_national_wisdom:
-                try:
-                    title_selectors = [".course-name", ".source-name", ".title", "h1", "h2", ".header-title"]
-                    course_title = "全国智慧共享课"
-                    for selector in title_selectors:
-                        try:
-                            title_selector = await page.wait_for_selector(selector, timeout=3000)
-                            course_title = await title_selector.text_content()
-                            if course_title and course_title.strip():
-                                break
-                        except TimeoutError:
-                            continue
-                    logger.info(f"当前课程:<<{course_title}>>，是全国智慧共享课")
-                except Exception as e:
-                    logger.warn(f"全国智慧共享课获取课程标题失败: {repr(e)}")
-                    logger.info("当前课程:<<全国智慧共享课>>")
-            elif not is_new_version and not is_hike_class:
-                title_selector = await page.wait_for_selector(".source-name")
-                course_title = await title_selector.text_content()
-                logger.info(f"当前课程:<<{course_title}>>")
-            if is_hike_class:
-                try:
-                    title_selectors = [".course-name", ".source-name", ".title", "h1", "h2"]
-                    course_title = "智慧共享课"
-                    for selector in title_selectors:
-                        try:
-                            title_selector = await page.wait_for_selector(selector, timeout=3000)
-                            course_title = await title_selector.text_content()
-                            if course_title and course_title.strip():
-                                break
-                        except TimeoutError:
-                            continue
-                    logger.info(f"当前课程:<<{course_title}>>， 是智慧共享课")
-                except Exception as e:
-                    logger.warn(f"智慧共享课获取课程标题失败: {repr(e)}")
-                    logger.info("当前课程:<<智慧共享课>>")
-            # 启动课程主循环
-            await working_loop(page, is_new_version=is_new_version, is_hike_class=is_hike_class, is_national_wisdom=is_national_wisdom, is_meeting_class=is_meeting_class)
+            session = CourseSession.from_url(course_url)
+            await session.open(page, config, logger)
+            await working_loop(page, **session.profile.working_loop_options())
     print("==" * 10)
     logger.info("所有课程已学习完毕!")
     # 后台协程均为长期监听任务；课程完成后必须主动取消，否则程序不会退出。
