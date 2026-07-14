@@ -40,6 +40,7 @@ _ensure_simplejson_compat()
 from modules.logger import Logger
 from modules.configs import Config
 from modules.course_session import CourseSession
+from modules.hike_course_flow import run_hike_course
 from modules.lesson_navigation import (
     LessonNavigationState,
     SelectionReason,
@@ -51,7 +52,7 @@ from modules.national_test_flow import NationalTestOutcome, NationalTestSession
 from modules.progress import get_course_progress, show_course_progress, move_mouse_meeting_class
 from modules.utils import optimize_page, get_lesson_name, get_filtered_class, get_video_attr, hide_window, \
     get_browser_window, bring_console_to_front, save_cookies, load_cookies, \
-    scan_pending_lessons_deep, scan_national_wisdom_cards, click_card_by_id, APPLY_VIDEO_SETTINGS_JS, \
+    scan_national_wisdom_cards, click_card_by_id, APPLY_VIDEO_SETTINGS_JS, \
     scan_normal_class_tests, detect_test_in_current_lesson, scan_meeting_class_videos
 from modules.slider import slider_verify
 from modules.async_utils import cancel_background_tasks
@@ -366,73 +367,15 @@ async def review_loop(page: Page, start_time, is_hike_class=False):
 async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is_national_wisdom=False, is_meeting_class=False):
     # 智慧共享课（翻转课）使用深度扫描
     if is_hike_class:
-        logger.info("开始运行时滚动扫描... (智慧共享课)", shift=True)
-        pending_lessons, summary = await scan_pending_lessons_deep(page)
-        logger.info(
-            f"整页统计: 总卡片 {summary['total']} | 未完成 {summary['pending']} | 已完成 {summary['done']}",
-            shift=True,
+        return await run_hike_course(
+            page,
+            config,
+            logger,
+            close_popup=close_popup,
+            learning_loop=learning_loop,
+            is_new_version=is_new_version,
+            is_national_wisdom=is_national_wisdom,
         )
-        if summary["sections"]:
-            top_sections = []
-            for section, stats in summary["sections"].items():
-                top_sections.append(f"{section}:{stats['pending']}/{stats['total']}")
-            logger.info(f"分组统计: {' | '.join(top_sections[:6])}")
-        
-        if not pending_lessons:
-            logger.info("没有未完成的课程，本轮结束。")
-            return
-        
-        start_time = time.time()
-        for lesson in pending_lessons:
-            title = lesson["title"]
-            card_id = lesson["card_id"]
-            scope_id = lesson.get("scope_id")
-            top = lesson.get("top")
-            
-            # 检查时间限制
-            time_period = (time.time() - start_time) / 60
-            if 0 < config.limitMaxTime <= time_period:
-                logger.info(f"当前课程已达时限:{config.limitMaxTime}min", shift=True)
-                return
-            
-            logger.info(
-                f"锁定蓝条未满节次: {lesson.get('section', '')} / {title} ({lesson['progress']}%)"
-            )
-            
-            if not await click_card_by_id(page, card_id, title, scope_id, top):
-                logger.warn(f"未能定位卡片:{title}, 本轮跳过.", shift=True)
-                continue
-            
-            await page.wait_for_timeout(1000)
-            
-            # 关闭可能出现的弹窗（学前必读等）
-            await close_popup(page, logger)
-            
-            try:
-                current_title = await get_lesson_name(page, is_hike_class) or title
-            except Exception:
-                current_title = title
-            logger.info(f"开始观看:{current_title}")
-            
-            try:
-                await page.wait_for_selector("video", state="attached", timeout=15000)
-                await page.evaluate(config.remove_pause)
-            except Exception:
-                logger.warn("未及时检测到视频元素,进入宽松等待模式.", shift=True)
-            
-            # 学习循环
-            await learning_loop(page, start_time, is_new_version, is_hike_class, is_national_wisdom)
-            
-            # 返回课程母页继续下一个
-            await page.goto(config.course_urls[0], wait_until="domcontentloaded")
-            await page.wait_for_timeout(2000)
-            await optimize_page(page, config, is_new_version, is_hike_class, is_national_wisdom)
-            
-            # 重新扫描（课程状态可能已更新）
-            pending_lessons, summary = await scan_pending_lessons_deep(page)
-            if not pending_lessons:
-                logger.info("所有课程已完成!", shift=True)
-                return
     
     # 全国智慧共享课使用专门的处理逻辑
     elif is_national_wisdom:
