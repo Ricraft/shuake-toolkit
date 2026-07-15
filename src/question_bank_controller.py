@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
+import sqlite3
 import time
 import traceback
+import urllib.request
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 
 from src.atomic_io import atomic_dump_json
@@ -58,8 +62,6 @@ class QuestionBankController:
         self.server_factory = server_factory if server_factory is not None else QuestionBankServer
         self.configure_models = configure_models
         self.configure_auto_save_setting = configure_auto_save_setting
-        self.prepare_environment = prepare_environment or (lambda: None)
-        self.get_external_db_info = get_external_db_info or (lambda: "")
         self.on_status_change = on_status_change or (lambda: None)
         self.sync_external_url = sync_external_url or (lambda: None)
         self.port_checker = port_checker or self._is_port_listening
@@ -79,6 +81,13 @@ class QuestionBankController:
         self.ai_type = "OPENAI"
         self.ai_concurrent = True
         self.auto_save = True
+        self._zerror_db_logged = False
+        self.prepare_environment = (
+            prepare_environment or self.configure_zerror_environment
+        )
+        self.get_external_db_info = (
+            get_external_db_info or self.get_zerror_db_info
+        )
 
         self.load_settings()
 
@@ -316,6 +325,225 @@ class QuestionBankController:
         if self.running and self.server:
             return f"{self.server.url}/query"
         return None
+
+    @property
+    def database_path(self) -> Path:
+        return self.base_dir / "data" / "题库缓存.db"
+
+    def import_questions(self, file_path: str | os.PathLike[str]) -> dict:
+        if not self.available:
+            return {"ok": False, "message": "题库服务器不可用"}
+        try:
+            data = json.loads(Path(file_path).read_text(encoding="utf-8"))
+            if not isinstance(data, list):
+                return {"ok": False, "message": "文件格式错误：需要JSON数组"}
+            self._ensure_database()
+            imported = 0
+            with closing(sqlite3.connect(self.database_path)) as connection:
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    question = item.get("question")
+                    answer = item.get("answer")
+                    if not question or not answer:
+                        continue
+                    if isinstance(answer, (list, dict)):
+                        answer = json.dumps(answer, ensure_ascii=False)
+                    options = item.get("options")
+                    if isinstance(options, (list, dict)):
+                        options = json.dumps(options, ensure_ascii=False)
+                    connection.execute(
+                        "INSERT INTO AIResponses "
+                        "(Question, Answer, Options, QuestionType, IsAi) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            question,
+                            answer,
+                            options,
+                            item.get("type"),
+                            int(bool(item.get("is_ai", False))),
+                        ),
+                    )
+                    imported += 1
+                connection.commit()
+            self.log(f"[QB] 成功导入 {imported} 条题目")
+            return {"ok": True, "count": imported, "message": f"已导入 {imported} 条题目"}
+        except Exception as exc:
+            self.log(f"[QB] 导入失败: {exc}")
+            return {"ok": False, "message": str(exc)}
+
+    def export_questions(self, file_path: str | os.PathLike[str]) -> dict:
+        try:
+            rows = []
+            if self.database_path.exists():
+                self._ensure_database()
+                with closing(sqlite3.connect(self.database_path)) as connection:
+                    rows = connection.execute(
+                        "SELECT Question, Answer, Options, QuestionType, IsAi "
+                        "FROM AIResponses"
+                    ).fetchall()
+            data = [
+                {
+                    "question": row[0],
+                    "answer": row[1],
+                    "options": row[2],
+                    "type": row[3],
+                    "is_ai": bool(row[4]),
+                }
+                for row in rows
+            ]
+            Path(file_path).write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.log(f"[QB] 成功导出 {len(data)} 条题目到 {file_path}")
+            return {"ok": True, "count": len(data), "message": f"已导出 {len(data)} 条题目"}
+        except Exception as exc:
+            self.log(f"[QB] 导出失败: {exc}")
+            return {"ok": False, "message": str(exc)}
+
+    def clear_questions(self) -> dict:
+        if not self.database_path.exists():
+            return {"ok": True, "count": 0, "message": "题库缓存为空，无需清空"}
+        try:
+            self._ensure_database()
+            with closing(sqlite3.connect(self.database_path)) as connection:
+                cursor = connection.execute("DELETE FROM AIResponses")
+                count = max(cursor.rowcount, 0)
+                connection.commit()
+            self.log(f"[QB] 已清空题库缓存，共删除 {count} 条记录")
+            return {"ok": True, "count": count, "message": f"已清空题库缓存，共删除 {count} 条记录"}
+        except Exception as exc:
+            self.log(f"[QB] 清空题库缓存失败: {exc}")
+            return {"ok": False, "message": str(exc)}
+
+    def deduplicate_questions(self) -> dict:
+        if self.running and self.server:
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{getattr(self.server, 'port', self.port)}/api/deduplicate",
+                    method="POST",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                if result.get("success"):
+                    deleted = int(result.get("deleted", 0) or 0)
+                    message = f"去重完成，已清理 {deleted} 条重复记录"
+                    self.log(f"[QB] {message}")
+                    return {"ok": True, "count": deleted, "message": message}
+                return {
+                    "ok": False,
+                    "message": result.get("message", "去重失败"),
+                }
+            except Exception:
+                self.log("[QB] HTTP 去重失败，回退到直接操作数据库...")
+
+        try:
+            deleted = self._deduplicate_database()
+            message = (
+                f"去重完成，已清理 {deleted} 条重复记录"
+                if deleted
+                else "未发现重复记录"
+            )
+            self.log(f"[QB] {message}")
+            return {"ok": True, "count": deleted, "message": message}
+        except Exception as exc:
+            self.log(f"[QB] 去重失败: {exc}")
+            return {"ok": False, "message": str(exc)}
+
+    def _ensure_database(self) -> None:
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS AIResponses (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Question TEXT NOT NULL,
+                    Options TEXT,
+                    QuestionType TEXT,
+                    Answer TEXT NOT NULL,
+                    CreateTime DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FolderId INTEGER DEFAULT 0,
+                    FolderName TEXT DEFAULT '默认文件夹',
+                    IsAi BOOLEAN DEFAULT 1,
+                    IsPendingCorrection BOOLEAN DEFAULT 0
+                )
+                """
+            )
+            connection.commit()
+
+    def _deduplicate_database(self) -> int:
+        if not self.database_path.exists():
+            return 0
+        self._ensure_database()
+
+        def normalize(text) -> str:
+            value = str(text or "").strip().lower()
+            value = re.sub(r"\s+", "", value)
+            value = value.replace("&nbsp;", " ")
+            return re.sub(r"[，、；：。！？【】《》\"\"''（）…—·]+", "", value)
+
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            rows = connection.execute(
+                "SELECT Id, Question, COALESCE(Options, '') "
+                "FROM AIResponses ORDER BY CreateTime ASC, Id ASC"
+            ).fetchall()
+            seen = set()
+            duplicate_ids = []
+            for row_id, question, options in rows:
+                key = (normalize(question), normalize(options))
+                if key in seen:
+                    duplicate_ids.append(row_id)
+                else:
+                    seen.add(key)
+            connection.executemany(
+                "DELETE FROM AIResponses WHERE Id = ?",
+                [(row_id,) for row_id in duplicate_ids],
+            )
+            connection.commit()
+        return len(duplicate_ids)
+
+    def detect_zerror_db_path(self) -> str:
+        candidates = []
+        configured = os.environ.get("ZERROR_DB_PATH", "").strip()
+        if configured:
+            candidates.append(configured)
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_appdata:
+            candidates.append(os.path.join(local_appdata, "ZError", "airesponses.db"))
+        user_profile = os.environ.get("USERPROFILE", "").strip()
+        if user_profile:
+            candidates.append(
+                os.path.join(user_profile, "AppData", "Local", "ZError", "airesponses.db")
+            )
+        candidates.append(str(self.base_dir / "airesponses.db"))
+        for candidate in candidates:
+            if candidate and os.path.isfile(candidate):
+                return os.path.abspath(candidate)
+        return ""
+
+    def get_zerror_db_info(self) -> str:
+        path = self.detect_zerror_db_path()
+        if not path:
+            return ""
+        try:
+            with closing(sqlite3.connect(path)) as connection:
+                count = connection.execute("SELECT COUNT(*) FROM AIResponses").fetchone()[0]
+            return f"{count} 条记录 ({path})"
+        except Exception:
+            return f"已检测 ({path})"
+
+    def configure_zerror_environment(self) -> None:
+        path = self.detect_zerror_db_path()
+        if path:
+            os.environ["ZERROR_DB_PATH"] = path
+            if not self._zerror_db_logged:
+                self.log(f"📦 检测到 ZError 题库数据库: {self.get_zerror_db_info()}")
+        elif not self._zerror_db_logged:
+            self.log("⚠️ 未检测到 ZError 题库数据库，将使用本地缓存")
+        self._zerror_db_logged = True
 
     @staticmethod
     def _is_port_listening(port: int) -> bool:

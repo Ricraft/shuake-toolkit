@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -146,6 +147,77 @@ class QuestionBankControllerTests(unittest.TestCase):
             self.assertFalse(controller.running)
             self.assertIsNone(controller.server)
             self.assertTrue(_FakeServer.instances[0].stopped)
+
+    def test_import_export_deduplicate_and_clear_round_trip(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "questions.json"
+            exported = root / "exported.json"
+            source.write_text(
+                json.dumps(
+                    [
+                        {
+                            "question": "测试 题目？",
+                            "answer": ["A"],
+                            "options": ["A", "B"],
+                            "type": "single",
+                        },
+                        {
+                            "question": "测试题目",
+                            "answer": "A",
+                            "options": ["A", "B"],
+                            "type": "single",
+                        },
+                        {"question": "缺少答案"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            controller, _logs = self.make_controller(temp_dir)
+
+            imported = controller.import_questions(source)
+            deduplicated = controller.deduplicate_questions()
+            exported_result = controller.export_questions(exported)
+            cleared = controller.clear_questions()
+
+            self.assertEqual(imported["count"], 2)
+            self.assertEqual(deduplicated["count"], 1)
+            self.assertEqual(exported_result["count"], 1)
+            self.assertEqual(len(json.loads(exported.read_text(encoding="utf-8"))), 1)
+            self.assertEqual(cleared["count"], 1)
+
+    def test_import_rejects_non_array_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "bad.json"
+            source.write_text('{"question": "not a list"}', encoding="utf-8")
+            controller, _logs = self.make_controller(temp_dir)
+
+            result = controller.import_questions(source)
+
+            self.assertFalse(result["ok"])
+            self.assertFalse(controller.database_path.exists())
+
+    def test_zerror_environment_uses_configured_existing_database(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "airesponses.db"
+            import sqlite3
+
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("CREATE TABLE AIResponses (Id INTEGER)")
+                connection.executemany(
+                    "INSERT INTO AIResponses (Id) VALUES (?)",
+                    [(1,), (2,)],
+                )
+                connection.commit()
+            with patch.dict(os.environ, {"ZERROR_DB_PATH": str(database)}, clear=False):
+                controller, logs = self.make_controller(temp_dir)
+                controller.configure_zerror_environment()
+
+                self.assertEqual(controller.detect_zerror_db_path(), str(database.resolve()))
+                self.assertIn("2 条记录", controller.get_zerror_db_info())
+                self.assertTrue(any("ZError" in entry for entry in logs))
 
 
 if __name__ == "__main__":
