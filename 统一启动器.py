@@ -28,19 +28,7 @@ from src.course_catalog import (
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
-
-try:
-    from src.题库服务器 import (
-        QuestionBankServer,
-        configure_ai_models as qb_configure_ai_models,
-        configure_auto_save as qb_configure_auto_save,
-    )
-    QB_AVAILABLE = True
-except ImportError:
-    QB_AVAILABLE = False
-    QuestionBankServer = None
-    qb_configure_ai_models = lambda **kw: None
-    qb_configure_auto_save = lambda **kw: None
+from src.question_bank_controller import QuestionBankController
 
 try:
     import webview
@@ -742,24 +730,18 @@ class UnifiedLauncher:
         self.autovisor_version_checking = False
         self._shutdown_pending = False
 
-        # 题库服务器状态使用纯 Python 值，由 Web API 读取。
-        self.qb_server = None
-        self._qb_port = 8083
-        self.qb_running = False
-        self._qb_auto_start = True
-        self._qb_ai_enabled = True
-        self._qb_ai_url = ""
-        self._qb_ai_model = ""
-        self._qb_ai_api_key = ""
-        self._qb_ai_type = "OPENAI"
-        self._qb_ai_concurrent = True
-        self._qb_auto_save = True
-        if QB_AVAILABLE:
+        self.question_bank = QuestionBankController(
+            base_dir,
+            log=self.log_system,
+            prepare_environment=self._configure_zerror_db_env,
+            get_external_db_info=self._get_zerror_db_info,
+            on_status_change=self._after_qb_status_update,
+            sync_external_url=self._sync_yatori_question_bank_url,
+        )
+        if self.question_bank.available:
             self.log_system("[QB] 题库服务器模块已加载")
         else:
             self.log_system("[QB] 题库服务器模块未找到，请确保 题库服务器.py 在同目录下")
-
-        self._load_qb_settings()
 
         initial_autovisor_config = self._load_autovisor_config_data()
         self.autovisor_multi_mode = len(initial_autovisor_config.get('accounts', [])) > 1
@@ -780,6 +762,19 @@ class UnifiedLauncher:
         timer = threading.Timer(delay_seconds, callback)
         timer.daemon = True
         timer.start()
+
+    @property
+    def qb_server(self):
+        """Compatibility view of the extracted question-bank controller."""
+        return self.question_bank.server
+
+    @property
+    def qb_running(self):
+        return self.question_bank.running
+
+    @property
+    def _qb_port(self):
+        return self.question_bank.port
 
     def _get_autovisor_multi_mode(self):
         return bool(getattr(self, 'autovisor_multi_mode', True))
@@ -1107,9 +1102,9 @@ class UnifiedLauncher:
             },
             'running': dict(self.running),
             'starting': dict(self.starting),
-            'qb_running': self.qb_running,
-            'qb_port': self._qb_port,
-            'qb_stats': self.qb_server.get_stats() if self.qb_running and self.qb_server else None,
+            'qb_running': self.question_bank.running,
+            'qb_port': self.question_bank.port,
+            'qb_stats': self.question_bank.get_stats(),
             'logs': logs,
             'shutdown_pending': self._shutdown_pending,
             'autovisor_multi_mode': self._get_autovisor_multi_mode(),
@@ -1705,7 +1700,7 @@ class UnifiedLauncher:
             try:
                 # 确保题库服务器已启动
                 import time
-                if not self.qb_running:
+                if not self.question_bank.running:
                     self.log_system("[Autovisor] 正在启动题库服务器...")
                     self.start_question_bank(silent=True)
                     time.sleep(3)  # 等待服务器完全启动
@@ -1714,7 +1709,7 @@ class UnifiedLauncher:
                 
                 # 确保服务器可用
                 import socket
-                port = self._qb_port
+                port = self.question_bank.port
                 for attempt in range(3):
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(2)
@@ -1855,117 +1850,19 @@ class UnifiedLauncher:
     # 题库服务器管理
     # ============================================================
     def _load_qb_settings(self):
-        """从本地文件加载题库设置"""
-        try:
-            qb_config_path = os.path.join(self.get_base_dir(), "data", "qb_config.json")
-            if os.path.exists(qb_config_path):
-                with open(qb_config_path, 'r', encoding='utf-8') as f:
-                    saved = json.load(f)
-                if isinstance(saved, dict):
-                    self._qb_auto_start = saved.get('auto_start', True)
-                    self._qb_ai_enabled = bool(saved.get('ai_enabled', True))
-                    self._qb_ai_type = saved.get('ai_type', 'OPENAI')
-                    self._qb_ai_url = saved.get('ai_url', '')
-                    self._qb_ai_model = saved.get('ai_model', '')
-                    self._qb_ai_api_key = saved.get('ai_api_key', '') or os.environ.get('QB_AI_API_KEY', '')
-                    self._qb_auto_save = saved.get('auto_save', True)
-                    try:
-                        saved_port = int(saved.get('port', 8083))
-                    except (TypeError, ValueError):
-                        saved_port = 8083
-                    self._qb_port = saved_port if 1024 <= saved_port <= 65535 else 8083
-                    self.log_system('[QB] 已从本地加载题库设置')
-                    
-                    # 立即推送到题库服务器模块
-                    self._apply_qb_ai_config()
-                    qb_configure_auto_save(enabled=self._qb_auto_save)
-        except Exception as e:
-            self.log_system(f'[QB] 加载题库设置失败: {e}')
+        return self.question_bank.load_settings()
 
     def _apply_qb_ai_config(self):
-        """将AI配置推送到题库服务器"""
-        if not QB_AVAILABLE:
-            return
-        try:
-            models = []
-            if self._qb_ai_enabled and self._qb_ai_api_key:
-                models.append({
-                    "type": self._qb_ai_type or "OPENAI",
-                    "url": self._qb_ai_url or "",
-                    "model": self._qb_ai_model or "",
-                    "api_key": self._qb_ai_api_key or "",
-                })
-            qb_configure_ai_models(models=models, enabled=self._qb_ai_enabled, concurrent=self._qb_ai_concurrent)
-            self.log_system(f"[QB] AI配置已应用 (enabled={self._qb_ai_enabled}, models={len(models)})")
-        except Exception as e:
-            self.log_system(f"[QB] AI配置应用失败: {e}")
+        return self.question_bank.apply_ai_config()
 
     def _save_qb_settings(self):
-        """保存题库设置到本地文件"""
-        try:
-            qb_config_path = os.path.join(self.get_base_dir(), "data", "qb_config.json")
-            saved = {
-                'auto_start': self._qb_auto_start,
-                'ai_enabled': self._qb_ai_enabled,
-                'ai_type': self._qb_ai_type,
-                'ai_url': self._qb_ai_url,
-                'ai_model': self._qb_ai_model,
-                # api_key 不写入磁盘，通过环境变量 QB_AI_API_KEY 设置
-                'auto_save': self._qb_auto_save,
-                'port': self._qb_port,
-            }
-            atomic_dump_json(qb_config_path, saved)
-            self.log_system('[QB] 题库设置已保存到本地')
-            return True
-        except Exception as e:
-            self.log_system(f'[QB] 保存题库设置失败: {e}')
-            return False
+        return self.question_bank.save_settings()
 
     def get_qb_settings_from_web(self):
-        """从Web获取题库设置"""
-        return {
-            'auto_start': self._qb_auto_start,
-            'ai_enabled': self._qb_ai_enabled,
-            'ai_type': self._qb_ai_type,
-            'ai_url': self._qb_ai_url,
-            'ai_model': self._qb_ai_model,
-            'ai_api_key': self._qb_ai_api_key,
-            'auto_save': self._qb_auto_save,
-            'port': self._qb_port,
-        }
+        return self.question_bank.get_settings()
 
     def save_qb_settings_from_web(self, payload):
-        """从Web保存题库设置"""
-        if not isinstance(payload, dict):
-            return {'ok': False, 'message': '题库设置格式错误'}
-        try:
-            port = int(payload.get('port', 8083))
-            if not 1024 <= port <= 65535:
-                return {'ok': False, 'message': '题库端口必须在 1024 到 65535 之间'}
-            old_port = self._qb_port
-            was_running = self.qb_running
-            self._qb_auto_start = bool(payload.get('auto_start', True))
-            self._qb_ai_enabled = bool(payload.get('ai_enabled', False))
-            self._qb_ai_type = str(payload.get('ai_type', 'OPENAI'))
-            self._qb_ai_url = str(payload.get('ai_url', ''))
-            self._qb_ai_model = str(payload.get('ai_model', ''))
-            self._qb_ai_api_key = str(payload.get('ai_api_key', ''))
-            self._qb_auto_save = bool(payload.get('auto_save', True))
-            self._qb_port = port
-            if not self._save_qb_settings():
-                return {'ok': False, 'message': '题库设置写入失败'}
-            self._apply_qb_ai_config()
-            if QB_AVAILABLE:
-                qb_configure_auto_save(enabled=self._qb_auto_save)
-            if was_running and port != old_port:
-                self.log_system(f'[QB] 端口由 {old_port} 改为 {port}，正在重启题库服务器')
-                self.stop_question_bank()
-                self.start_question_bank(silent=True)
-                if not self.qb_running:
-                    return {'ok': False, 'message': f'题库服务器未能在新端口 {port} 启动'}
-            return {'ok': True, 'message': '题库设置已保存'}
-        except Exception as e:
-            return {'ok': False, 'message': f'保存题库设置失败: {e}'}
+        return self.question_bank.update_settings(payload)
 
     def _get_course_catalog_service(self):
         service = getattr(self, '_course_catalog_service', None)
@@ -2194,7 +2091,7 @@ class UnifiedLauncher:
         if not python_exe:
             return {'ok': False, 'message': '未找到 Python 解释器'}
 
-        if not self.qb_running:
+        if not self.question_bank.running:
             self.log_system("[刷题模式] 正在启动题库服务器...")
             self.start_question_bank(silent=True)
 
@@ -2244,101 +2141,20 @@ class UnifiedLauncher:
             return {'ok': False, 'message': f'启动刷题模式失败: {e}'}
 
     def auto_start_question_bank(self):
-        """启动器就绪后自动开启题库（根据偏好设置）"""
-        if not QB_AVAILABLE:
-            return
-        # 自动检测并设置 ZError 数据库路径
-        self._configure_zerror_db_env()
-        # 先刷新 UI 显示 ZError 内置状态
-        self._after_qb_status_update()
-        auto_start = self._qb_auto_start
-        if auto_start:
-            self.start_question_bank(silent=True)
+        return self.question_bank.auto_start_if_enabled()
 
     def toggle_question_bank(self):
-        """切换题库服务器状态"""
-        if self.qb_running:
-            self.stop_question_bank()
-        else:
-            self.start_question_bank()
+        return self.question_bank.toggle()
 
     def start_question_bank(self, silent=False):
-        """启动题库服务器"""
-        if not QB_AVAILABLE:
-            if not silent:
-                self.log_system("题库服务器模块未找到，请确保 题库服务器.py 在同目录下")
-            return
-        if self.qb_running:
-            return
-        port = self._qb_port
-        
-        try:
-            self._configure_zerror_db_env()
-            if self.qb_server:
-                self.qb_server.stop()
-            self.qb_server = QuestionBankServer(port=port)
-            self.log_system(f"[QB] 创建题库服务器实例，端口={port}")
-            self.qb_server.start()
-            
-            # 验证端口是否监听
-            import socket
-            import time
-            time.sleep(0.5)
-            for i in range(5):
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1)
-                result = sock.connect_ex(('127.0.0.1', port))
-                sock.close()
-                if result == 0:
-                    self.log_system(f"[QB] 端口 {port} 验证成功")
-                    break
-                else:
-                    self.log_system(f"[QB] 端口验证失败 (尝试 {i+1}/5)，错误码: {result}")
-                    time.sleep(0.3)
-            else:
-                self.log_system(f"[QB] 警告: 端口 {port} 验证失败，但服务器标记为运行中")
-            
-            self.qb_running = True
-            self._qb_port = port
-            # 应用AI配置
-            self._apply_qb_ai_config()
-            self._after_qb_status_update()
-            if not silent:
-                zinfo = self._get_zerror_db_info()
-                self.log_system(f"题库服务器已启动 → {self.qb_server.url}")
-                if zinfo:
-                    self.log_system(f"📦 ZError题库已内置: {zinfo}")
-            else:
-                self.log_system(f"题库服务器已自动启动 → {self.qb_server.url}")
-            self._sync_yatori_question_bank_url()
-        except OSError as e:
-            self.log_system(f"题库服务器启动失败(端口{port}被占用?): {e}")
-            import traceback
-            self.log_system(f"[QB] 详细错误: {traceback.format_exc()[:500]}")
-            self.qb_running = False
-            self._after_qb_status_update()
-        except Exception as e:
-            self.log_system(f"题库服务器启动异常: {e}")
-            import traceback
-            self.log_system(f"[QB] 详细错误: {traceback.format_exc()[:500]}")
-            self.qb_running = False
-            self._after_qb_status_update()
+        return self.question_bank.start(silent=silent)
 
     def stop_question_bank(self):
-        """停止题库服务器"""
-        if self.qb_server and self.qb_running:
-            try:
-                self.qb_server.stop()
-            except Exception:
-                pass
-        self.qb_running = False
-        self.qb_server = None
-        self._after_qb_status_update()
-        self.log_system("题库服务器已停止")
+        return self.question_bank.stop()
 
     def _import_question_bank(self):
         """导入题库数据"""
-        if not QB_AVAILABLE:
+        if not self.question_bank.available:
             self._show_error("导入失败", "题库服务器不可用")
             return
         file_path = ''
@@ -2377,7 +2193,7 @@ class UnifiedLauncher:
 
     def _export_question_bank(self):
         """导出题库数据"""
-        if not QB_AVAILABLE:
+        if not self.question_bank.available:
             self._show_error("导出失败", "题库服务器不可用")
             return
         file_path = ''
@@ -2436,11 +2252,11 @@ class UnifiedLauncher:
     def _deduplicate_question_bank(self):
         """清理题库中的重复题目，返回 (ok, message)"""
         # 先尝试 HTTP 方式（题库服务器运行中时）
-        if self.qb_running and self.qb_server:
+        if self.question_bank.running and self.question_bank.server:
             try:
                 import urllib.request
                 req = urllib.request.Request(
-                    f"http://127.0.0.1:{getattr(self.qb_server, 'port', 8083)}/api/deduplicate",
+                    f"http://127.0.0.1:{getattr(self.question_bank.server, 'port', 8083)}/api/deduplicate",
                     method='POST',
                     data=b'{}',
                     headers={"Content-Type": "application/json"}
@@ -2584,13 +2400,13 @@ class UnifiedLauncher:
 
     def _sync_yatori_question_bank_url(self):
         """自动将 Yatori 的外挂题库 URL 指向本地题库服务器"""
-        if not self.qb_running:
+        if not self.question_bank.running:
             return
         try:
             config = self._load_yatori_config_data()
             setting = config.get('setting', {})
             aqs = setting.get('apiQueSetting', {})
-            target_url = f"http://127.0.0.1:{self._qb_port}/query"
+            target_url = f"http://127.0.0.1:{self.question_bank.port}/query"
             if aqs.get('url') != target_url:
                 aqs['url'] = target_url
                 setting['apiQueSetting'] = aqs
@@ -2602,14 +2418,12 @@ class UnifiedLauncher:
 
     def get_question_bank_url(self):
         """获取题库服务器 URL（供 Autovisor 使用）"""
-        if self.qb_running and self.qb_server:
-            return f"{self.qb_server.url}/query"
-        return None
+        return self.question_bank.get_query_url()
 
     def start_all(self):
         """启动所有脚本"""
         self.log_system("正在一键启动所有脚本...")
-        if not self.qb_running and QB_AVAILABLE:
+        if not self.question_bank.running and self.question_bank.available:
             self.start_question_bank(silent=True)
         if not self.running['yatori']:
             self.start_yatori()
