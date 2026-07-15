@@ -1,6 +1,4 @@
-import json
 import os
-import re
 import http.client  # 兼容外部通过 tasks.http.client 注入连接实现
 
 from playwright.async_api import Page
@@ -51,6 +49,11 @@ from modules.question_bank_client import (
     _normalize_qb,
 )
 from modules.test_capture import TestResponseHandler
+from modules.test_page_flow import (
+    clean_html_tags,
+    handle_test_page as _run_handle_test_page,
+    query_test_answers,
+)
 from modules.video_tasks import activate_window, play_video, task_monitor, video_optimize
 
 logger = Logger()
@@ -74,40 +77,6 @@ def query_question_bank(title, options_text=None, query_type=None):
     )
 
 
-def clean_html_tags(text):
-    """清理HTML标签和特殊字符
-    
-    将HTML内容转换为纯文本显示
-    """
-    if not text:
-        return ""
-    
-    # 去除HTML标签
-    text = re.sub(r'<[^>]+>', '', text)
-    
-    # 替换HTML实体
-    html_entities = {
-        '&nbsp;': ' ',
-        '&amp;': '&',
-        '&lt;': '<',
-        '&gt;': '>',
-        '&quot;': '"',
-        '&apos;': "'",
-        '&#39;': "'",
-    }
-    
-    for entity, char in html_entities.items():
-        text = text.replace(entity, char)
-    
-    # 处理括号内的空格占位符：(&nbsp; &nbsp;) -> （）
-    text = re.sub(r'\(\s+\)', '（）', text)
-    text = re.sub(r'\(\s*\)', '（）', text)
-    
-    # 去除多余空白
-    text = re.sub(r'\s+', ' ', text)
-    
-    return text.strip()
-
 # 页面通用点击与状态监控已拆分至 modules.page_monitor，并在顶部兼容导出。
 
 async def skip_questions(page: Page, event_loop) -> None:
@@ -125,256 +94,30 @@ async def skip_questions(page: Page, event_loop) -> None:
 # 测验响应监听器已拆分至 modules.test_capture，并在本模块顶部兼容导出。
 
 
-async def handle_test_page(page: Page, questions_data: list, auto_submit: bool = False, manual_submit: bool = False) -> bool:
-    """
-    处理答题页面
-    questions_data: 从 doHomework 获取的题目数据
-    auto_submit: 是否自动提交（默认False，用户手动点击提交）
-    
-    注意：调用前 practice_loop 已确保试卷 DOM 已渲染
-    """
-    await page.wait_for_load_state("domcontentloaded")
-    
-    if not questions_data:
-        logger.warn("[WARN] 没有题目数据")
-        return False
-    
-    try:
-        await inject_widget(page)
-        logger.info("[OK] 浮动答题助手已注入")
-    except Exception as e:
-        logger.warn("[WARN] 浮动组件注入失败: %s" % str(e)[:50])
-    
-    option_selectors = [
-        '.nodeLab',
-        '.topic-item',
-        '.option-item',
-        '.el-radio',
-        '.el-checkbox',
-        '.exam-option',
-        '[class*="option"]',
-        '[class*="topic"]',
-    ]
-    max_retries = 3
-    option_sel = None
-    for retry in range(max_retries):
-        for sel in option_selectors:
-            try:
-                await page.wait_for_selector(sel, timeout=5000, state='visible')
-                option_sel = sel
-                logger.info(f"[OK] 选项元素已加载: {sel}")
-                break
-            except Exception:
-                continue
-        if option_sel:
-            break
-        if retry < max_retries - 1:
-            logger.warn(f"[RETRY] 等待选项加载失败，重试 {retry+1}/{max_retries}")
-            await page.wait_for_timeout(3000)
-        else:
-            page_html = await page.content()
-            logger.warn(f"页面HTML前500字符: {page_html[:500]}")
-            logger.error(f"[ERROR] 无法加载选项元素")
-            return False
-    
-    total = len(questions_data)
-    logger.info("="*60)
-    logger.info("[START] 开始答题，共 %d 道题" % total)
-    logger.info("="*60)
-    
-    type_map = {"单选题": "single", "多选题": "multiple", "判断题": "judgement",
-                "填空题": "completion", "简答题": "completion", "名词解释": "completion"}
-    
-    # 【阶段1】批量查询答案
-    logger.info("\n[STEP1] 批量查询答案")
-    for i, q in enumerate(questions_data):
-        q_name = clean_html_tags(q["name"])
-        q_type = q["type"]
-        options = [clean_html_tags(o[1]) for o in q["options"]]
-        options_joined = "\n".join(options)
+async def handle_test_page(
+    page: Page,
+    questions_data: list,
+    auto_submit: bool = False,
+    manual_submit: bool = False,
+) -> bool:
+    """兼容旧入口，并注入 tasks 当前可替换的页面与题库实现。"""
+    return await _run_handle_test_page(
+        page,
+        questions_data,
+        auto_submit=auto_submit,
+        manual_submit=manual_submit,
+        query_answer=query_question_bank,
+        widget_injector=inject_widget,
+        wait_action=wait_for_user_action,
+        selection_checker=has_selected_answer,
+        next_clicker=click_next_button,
+        prev_clicker=click_prev_button,
+        answer_applier=answer_question,
+        submitter=submit_exam,
+        logger_instance=logger,
+    )
 
-        qtype_hint = type_map.get(q_type, None) or ("single" if q.get("type_id") == 1 else
-                    "multiple" if q.get("type_id") == 2 else "judgement" if q.get("type_id") == 14 else None)
 
-        answer, is_ai = query_question_bank(q_name, options_joined, qtype_hint)
-        
-        if answer:
-            source = "AI" if is_ai else "题库"
-            logger.info("\n[%s] 第%d题 [%s]" % (source, i+1, q_type))
-            logger.info("题目: %s..." % q_name[:80])
-            logger.info("答案: %s" % answer[:60])
-            q["answer"] = answer
-            q["is_ai"] = is_ai
-        else:
-            logger.info("\n[NO MATCH] 第%d题 [%s]" % (i+1, q_type))
-            logger.info("题目: %s..." % q_name[:80])
-            q["answer"] = None
-            q["is_ai"] = False
-    
-    # 【阶段2】逐题答题
-    logger.info("\n" + "="*60)
-    logger.info("[STEP2] 逐题答题")
-    logger.info("="*60)
-    
-    current_index = 0
-    
-    while current_index < total:
-        i = current_index
-        q = questions_data[i]
-        q_name = clean_html_tags(q["name"])
-        q_type = q["type"]
-        answer = q.get("answer", "")
-        raw_options = q["options"]
-        options = [clean_html_tags(o[1]) for o in raw_options]
-        is_ai = q.get("is_ai", False)
-        
-        logger.info("\n--- 第%d/%d题 [%s] ---" % (i+1, total, q_type))
-        logger.info("题目: %s..." % q_name[:60])
-        
-        # 更新浮动组件显示
-        try:
-            widget_data = {
-                "question": q_name,
-                "answer": answer or "未找到答案",
-                "options": options,
-                "type": q_type,
-                "index": i,
-                "total": total,
-                "isAI": is_ai
-            }
-            await page.evaluate(f'''
-                if (window.AIAnswerWidget) {{
-                    AIAnswerWidget.updateQuestion({json.dumps(widget_data, ensure_ascii=False)});
-                }}
-            ''')
-        except Exception as e:
-            pass
-        
-        if not auto_submit:
-            # 手动模式：等待用户操作
-            logger.info("[手动模式] 请在页面上选择答案")
-            
-            # 检测是否为多选题
-            is_multiple = '多选' in q_type
-            
-            # 同时监听页面点击和浮动窗口按钮
-            action = await wait_for_user_action(page, is_multiple, timeout=180)
-
-            if action != "closed":
-                q["answer_applied"] = await has_selected_answer(page)
-                if (
-                    action in {"next", "option_click", "submit", "timeout"}
-                    and not q["answer_applied"]
-                ):
-                    logger.warn("[WARN] 当前题未检测到已选择或已填写的答案")
-            
-            if action == "next":
-                logger.info("[手动模式] 用户点击下一题")
-                # 点击页面上的下一题按钮
-                if i < total - 1:
-                    if not await click_next_button(page):
-                        logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
-                        return False
-                    await page.wait_for_timeout(300)
-                current_index += 1
-            elif action == "prev":
-                logger.info("[手动模式] 用户点击上一题")
-                # 点击页面上的上一题按钮（如果有）
-                if i > 0:
-                    if not await click_prev_button(page):
-                        logger.error("[ERROR] 上一题按钮点击失败，停止答题以防题号错位")
-                        return False
-                    await page.wait_for_timeout(300)
-                    current_index -= 1
-            elif action == "option_click":
-                logger.info("[手动模式] 用户选择了选项")
-                # 单选题：选择后自动下一题
-                if not is_multiple:
-                    await page.wait_for_timeout(500)
-                    if i < total - 1:
-                        if not await click_next_button(page):
-                            logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
-                            return False
-                        await page.wait_for_timeout(300)
-                    current_index += 1
-                else:
-                    # 多选题：继续等待
-                    pass
-            elif action == "submit":
-                logger.info("[手动模式] 用户点击提交试卷")
-                break
-            elif action == "closed":
-                logger.warn("[WARN] 答题页面已关闭，答题流程终止")
-                return False
-            else:
-                # 超时
-                logger.warn("[手动模式] 超时，自动下一题")
-                if i < total - 1:
-                    if not await click_next_button(page):
-                        logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
-                        return False
-                    await page.wait_for_timeout(300)
-                current_index += 1
-        else:
-            # 自动模式：自动点击答案
-            logger.info("[自动模式] 自动选择答案")
-            if answer and answer.strip():
-                logger.info("答案: %s" % answer[:40])
-                applied = await answer_question(page, answer, options, raw_options)
-                q["answer_applied"] = applied
-                if not applied:
-                    logger.warn("[WARN] 答案存在，但页面选项点击失败")
-            else:
-                q["answer_applied"] = False
-                logger.warn("[WARN] 答案为空或无法匹配，留空跳过（可手动补充）")
-            
-            await page.wait_for_timeout(500)
-            if i < total - 1:
-                if not await click_next_button(page):
-                    logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
-                    return False
-                await page.wait_for_timeout(300)
-            current_index += 1
-    
-    # 【阶段3】提交
-    logger.info("\n" + "="*60)
-    logger.info("[STEP3] 提交试卷")
-    logger.info("="*60)
-
-    if manual_submit:
-        logger.info("[手动提交] 已跳过自动提交，请在页面上手动点击提交按钮")
-        logger.info("[手动提交] 页面保持打开状态，请检查答案后手动提交")
-        return True
-
-    # 检查未答题比例，防止无答案自动交卷
-    answered = sum(1 for q in questions_data if q.get("answer_applied"))
-    unanswered = total - answered
-    if unanswered > total * 0.5:
-        logger.warn(f"\n[WARN] 未答题数 {unanswered}/{total} 超过 50%，跳过自动交卷，请手动检查后提交")
-        logger.warn("[WARN] 如需强制自动交卷，请调整答题策略或配置 AI")
-        return False
-
-    success = await submit_exam(page)
-    
-    if success:
-        logger.info("\n" + "="*60)
-        logger.info("[DONE] 答题完成，准备继续课程学习")
-        logger.info("="*60)
-        
-        # 关闭当前页面（测验窗口）
-        try:
-            await page.wait_for_timeout(1500)
-            # 尝试关闭页面
-            await page.evaluate('window.close()')
-            logger.info("[OK] 已关闭测验页面")
-        except Exception as e:
-            logger.warn("[WARN] 关闭页面: %s" % str(e)[:30])
-    else:
-        logger.warn("\n" + "="*60)
-        logger.warn("[FAIL] 答题提交失败")
-        logger.warn("="*60)
-    
-    return success
-
+# 测验编排已拆分至 modules.test_page_flow，并在本模块保留兼容入口。
 
 # 测验页面控件已拆分至 modules.test_page_controls，并在本模块顶部兼容导出。
