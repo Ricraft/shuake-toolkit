@@ -5,8 +5,6 @@
 支持自动下载和更新核心
 """
 
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
 import subprocess
 import threading
 import os
@@ -18,7 +16,6 @@ import shutil
 import json
 import urllib.request
 from datetime import datetime
-import queue
 
 from src.atomic_io import atomic_dump_json
 from src.config_service import ConfigService, read_ini_config
@@ -35,29 +32,15 @@ from src.process_supervisor import ProcessSupervisor
 try:
     from src.题库服务器 import (
         QuestionBankServer,
-        configure_ai as qb_configure_ai,
         configure_ai_models as qb_configure_ai_models,
-        configure_match as qb_configure_match,
         configure_auto_save as qb_configure_auto_save,
-        configure_remote_zerror as qb_configure_remote,
-        get_match_config as qb_get_match_config,
-        get_ai_config as qb_get_ai_config,
-        get_auto_save as qb_get_auto_save,
-        get_remote_zerror_config as qb_get_remote_config,
     )
     QB_AVAILABLE = True
 except ImportError:
     QB_AVAILABLE = False
     QuestionBankServer = None
-    qb_configure_ai = lambda **kw: None
     qb_configure_ai_models = lambda **kw: None
-    qb_configure_match = lambda **kw: None
     qb_configure_auto_save = lambda **kw: None
-    qb_configure_remote = lambda **kw: None
-    qb_get_match_config = lambda: {}
-    qb_get_ai_config = lambda: {}
-    qb_get_auto_save = lambda: True
-    qb_get_remote_config = lambda: {}
 
 try:
     import webview
@@ -96,31 +79,6 @@ class UnifiedLauncher:
     AUTOVISOR_SCRIPT_ENTRY_FILES = ("Autovisor_Multi.py", "Autovisor.py", "main.py", "run.py")
     AUTOVISOR_ENTRY_FILES = AUTOVISOR_EXECUTABLE_ENTRY_FILES + AUTOVISOR_SCRIPT_ENTRY_FILES
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
-    YATORI_ACCOUNT_TYPES = (
-        'XUEXITONG',
-        'YINGHUA',
-        'CANGHUI',
-        'ENAEA',
-        'CQIE',
-        'KETANGX',
-        'ICVE',
-        'QSXT',
-        'WELEARN',
-        'HQKJ',
-    )
-    # Per-platform supported modes (aligned with Yatori core v2.6.2-beta.8)
-    YATORI_PLATFORM_MODE_RULES = {
-        'XUEXITONG': {'videoModes': ('0', '1', '2', '3'), 'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': False},
-        'YINGHUA':   {'videoModes': ('0', '1', '2'),    'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': True},
-        'CANGHUI':   {'videoModes': ('0', '1'),         'examModes': ('0',),         'submitModes': ('0',),     'requireUrl': False},
-        'ENAEA':     {'videoModes': ('0', '1', '2', '3'), 'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': False},
-        'CQIE':      {'videoModes': ('0', '1', '2'),    'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': False},
-        'KETANGX':   {'videoModes': ('0', '1'),         'examModes': ('0',),         'submitModes': ('0',),     'requireUrl': False},
-        'ICVE':      {'videoModes': ('0', '1', '2'),    'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': False},
-        'QSXT':      {'videoModes': ('0', '1', '2'),    'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': False},
-        'WELEARN':   {'videoModes': ('0', '1', '2'),    'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': False},
-        'HQKJ':      {'videoModes': ('0', '1', '2'),    'examModes': ('0', '1', '2'), 'submitModes': ('0', '1'), 'requireUrl': True},
-    }
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
     LAUNCHER_VERSION = "v1.1.0"
@@ -698,73 +656,8 @@ class UnifiedLauncher:
     def _split_csv(self, value):
         return ConfigService.split_csv(value)
 
-    def _read_text_widget(self, widget):
-        return widget.get('1.0', tk.END).strip() if widget else ''
 
-    def _collect_yatori_accounts_form_data(self):
-        collected = []
-        for index, form in enumerate(getattr(self, 'yatori_account_forms', []), start=1):
-            collected.append(
-                {
-                    'accountType': form['account_type'].get().strip() or 'XUEXITONG',
-                    'url': form['site_url'].get().strip(),
-                    'remarkName': form['remark_name'].get().strip() or f'账号{index}',
-                    'account': form['account'].get().strip(),
-                    'password': form['password'].get(),
-                    'isProxy': 1 if form['use_proxy'].get() else 0,
-                    'informEmails': self._split_csv(form['inform_emails'].get()),
-                    'coursesCustom': {
-                        'studyTime': form['study_time'].get().strip(),
-                        'cxNode': self._as_int(form['cx_node'].get(), 3),
-                        'cxChapterTestSw': 1 if form['cx_chapter_test'].get() else 0,
-                        'cxWorkSw': 1 if form['cx_work'].get() else 0,
-                        'cxExamSw': 1 if form['cx_exam'].get() else 0,
-                        'shuffleSw': 1 if form['shuffle'].get() else 0,
-                        'videoModel': self._as_int(form['video_model'].get(), 1),
-                        'autoExam': self._as_int(form['auto_exam'].get(), 0),
-                        'examAutoSubmit': self._as_int(form['auto_submit'].get(), 0),
-                        'includeCourses': self._split_lines(self._read_text_widget(form['include_courses'])),
-                        'excludeCourses': self._split_lines(self._read_text_widget(form['exclude_courses'])),
-                    },
-                }
-            )
-        return collected or [self._default_yatori_user(1)]
 
-    def _collect_autovisor_accounts_form_data(self):
-        collected = []
-        default_driver = getattr(self, 'autovisor_browser_driver_var', None)
-        default_path = getattr(self, 'autovisor_browser_path_var', None)
-        global_driver = (default_driver.get().strip() if default_driver else 'Chrome') or 'Chrome'
-        global_path = (default_path.get().strip() if default_path else '')
-        for index, form in enumerate(getattr(self, 'autovisor_account_forms', []), start=1):
-            per_driver = form['driver'].get().strip()
-            per_path = form['exe_path'].get().strip()
-            # Use per-account values if explicitly set; otherwise fall back to global
-            if per_driver and per_driver != global_driver:
-                driver = per_driver
-            else:
-                driver = global_driver
-            if per_path and per_path != global_path:
-                exe_path = per_path
-            else:
-                exe_path = global_path if not per_path else per_path
-            collected.append(
-                {
-                    'account_id': form.get('account_id', index),
-                    'name': form['name'].get().strip() or f'账号 {index}',
-                    'username': form['username'].get().strip(),
-                    'password': form['password'].get(),
-                    'driver': driver,
-                    'exe_path': exe_path,
-                    'enable_auto_captcha': bool(form['enable_auto_captcha'].get()),
-                    'enable_hide_window': bool(form['enable_hide_window'].get()),
-                    'limit_max_time': form['limit_max_time'].get().strip() or '30',
-                    'limit_speed': self._normalize_autovisor_speed(form['limit_speed'].get(), '1.0'),
-                    'sound_off': bool(form['sound_off'].get()),
-                    'course_urls': self._split_lines(self._read_text_widget(form['course_urls'])),
-                }
-            )
-        return collected or [self._default_autovisor_account(1)]
 
     def _load_yatori_config_data(self):
         return self._get_config_service().load_yatori()
@@ -797,62 +690,21 @@ class UnifiedLauncher:
         yatori_installed = self.core_manager.check_yatori_installed()
         
         if not yatori_installed:
-            # Yatori 未安装，提示下载
-            self.log_system("⚠️ 未检测到 Yatori 核心，准备自动下载...")
-            self.show_yatori_install_dialog()
+            self.log_system("⚠️ 未检测到 Yatori 核心，请在 Web 界面中触发安装。")
         else:
             # Yatori 已安装，检查更新
             self.log_system("正在检查 Yatori 更新...")
             self.check_yatori_update_async()
 
-    def __init__(self, root, ui_mode='tk'):
-        self.root = root
-        self.ui_mode = ui_mode
+    def __init__(self):
+        """Initialize the WebView-backed launcher state."""
         self.web_window = None
         self._allow_webview_close = False
-        self.root.title("Yatori & Autovisor 统一启动器")
-        if self.ui_mode == 'tk':
-            self.root.geometry("1450x940")
-            self.root.minsize(1180, 760)
-
-        self.colors = {
-            'bg': '#f5f5f7',
-            'sidebar': '#1d1d1f',
-            'surface': '#ffffff',
-            'card': '#ffffff',
-            'surface_alt': '#f5f5f7',
-            'surface_dark': '#272729',
-            'surface_dark_2': '#2a2a2c',
-            'surface_black': '#000000',
-            'primary': '#0066cc',
-            'primary_hover': '#0052b3',
-            'primary_focus': '#0071e3',
-            'primary_on_dark': '#2997ff',
-            'primary_soft': '#e8f0fe',
-            'text': '#1d1d1f',
-            'text_muted': '#86868b',
-            'text_on_dark': '#ffffff',
-            'text_on_dark_muted': '#cccccc',
-            'border': '#d2d2d7',
-            'hairline': '#e0e0e0',
-            'divider_soft': '#f0f0f0',
-            'surface_pearl': '#fafafc',
-            'success': '#34c759',
-            'danger': '#ff3b30',
-            'warning': '#ff9500',
-            'console': '#1d1d1f',
-            'console_text': '#f5f5f7',
-        }
 
         self.processes = {
             'yatori': None,
             'autovisor': None,
             'practice': None,
-        }
-        self.log_queues = {
-            'yatori': queue.Queue(),
-            'autovisor': queue.Queue(),
-            'system': queue.Queue(),
         }
         self.log_history = {
             'yatori': [],
@@ -890,46 +742,18 @@ class UnifiedLauncher:
         self.autovisor_version_checking = False
         self._shutdown_pending = False
 
-        # 题库服务器状态（内部用纯 Python 值，tk 模式下额外创建 tk 变量绑定 UI）
+        # 题库服务器状态使用纯 Python 值，由 Web API 读取。
         self.qb_server = None
         self._qb_port = 8083
         self.qb_running = False
         self._qb_auto_start = True
-        self.qb_port = None
-        self.qb_auto_start = None
         self._qb_ai_enabled = True
         self._qb_ai_url = ""
         self._qb_ai_model = ""
         self._qb_ai_api_key = ""
         self._qb_ai_type = "OPENAI"
-        self.qb_ai_enabled_var = None
-        self.qb_ai_url_var = None
-        self.qb_ai_model_var = None
-        self.qb_ai_api_key_var = None
-        self.qb_ai_type_var = None
-        self._qb_ai_models = []  # 多模型配置: [{"type":"OPENAI","url":"","model":"","api_key":""}]
         self._qb_ai_concurrent = True
-        self.qb_ai_concurrent_var = None
-        self.qb_ai_model2_type_var = None
-        self.qb_ai_model2_url_var = None
-        self.qb_ai_model2_name_var = None
-        self.qb_ai_model2_key_var = None
-        self._qb_remote_url = ""
-        self._qb_remote_token = ""
-        self.qb_remote_url_var = None
-        self.qb_remote_token_var = None
-        self._qb_match_threshold = 0.72
-        self._qb_match_coverage = 0.75
-        self._qb_match_fastpass = 0.85
-        self._qb_match_title_weight = 0.7
-        self._qb_match_options_weight = 0.3
-        self.qb_match_threshold_var = None
-        self.qb_match_coverage_var = None
-        self.qb_match_fastpass_var = None
-        self.qb_match_title_weight_var = None
-        self.qb_match_options_weight_var = None
         self._qb_auto_save = True
-        self.qb_auto_save_var = None
         if QB_AVAILABLE:
             self.log_system("[QB] 题库服务器模块已加载")
         else:
@@ -937,34 +761,17 @@ class UnifiedLauncher:
 
         self._load_qb_settings()
 
-        self.current_view = 'dashboard'
-        self.current_settings_tab = 'yatori'
-        self.view_frames = {}
-        self.nav_buttons = {}
-        self.settings_tab_buttons = {}
-        self.yatori_account_forms = []
-        self.autovisor_account_forms = []
         initial_autovisor_config = self._load_autovisor_config_data()
         self.autovisor_multi_mode = len(initial_autovisor_config.get('accounts', [])) > 1
-        self.autovisor_multi_var = (
-            tk.BooleanVar(value=self.autovisor_multi_mode) if self.ui_mode == 'tk' else None
-        )
         if CoreManager:
             self.core_manager = CoreManager(base_dir, log_callback=self._core_manager_log)
 
         self.log_system("统一启动器已就绪")
-        self._refresh_runtime_summary()
-        if self.ui_mode == 'tk':
-            self._init_apple_ui()
         self._after(600, self.auto_start_question_bank)
         self._after(1000, self.auto_check_cores)
         self._after(1400, self._apply_auto_run_preference)
 
     def _after(self, delay_ms, callback):
-        if self.ui_mode == 'tk' and self.root:
-            self.root.after(delay_ms, callback)
-            return
-
         delay_seconds = max(delay_ms, 0) / 1000.0
         if delay_seconds <= 0:
             callback()
@@ -975,31 +782,21 @@ class UnifiedLauncher:
         timer.start()
 
     def _get_autovisor_multi_mode(self):
-        if self.ui_mode == 'tk' and self.autovisor_multi_var is not None:
-            try:
-                value = bool(self.autovisor_multi_var.get())
-                self.autovisor_multi_mode = value
-                return value
-            except RuntimeError:
-                pass
         return bool(getattr(self, 'autovisor_multi_mode', True))
 
     def _set_autovisor_multi_mode(self, value):
-        normalized = bool(value)
-        self.autovisor_multi_mode = normalized
-        if self.ui_mode == 'tk' and self.autovisor_multi_var is not None:
-            self.autovisor_multi_var.set(normalized)
+        self.autovisor_multi_mode = bool(value)
 
     def attach_web_window(self, window):
         self.web_window = window
 
-        if self.ui_mode == 'web' and self.web_window:
+        if self.web_window:
             self.web_window.events.closing += self._handle_web_window_closing
             self._apply_window_preferences(initial=True)
 
     def _request_web_exit_confirmation(self):
         """请求Web端显示退出确认对话框，使用非阻塞方式"""
-        if not (self.ui_mode == 'web' and self.web_window):
+        if not self.web_window:
             return False
 
         try:
@@ -1041,42 +838,18 @@ class UnifiedLauncher:
     def _close_main_window(self):
         """安全关闭主窗口"""
         self._save_window_geometry_preference()
-        if self.ui_mode == 'tk':
-            try:
-                if self.root:
-                    self.root.quit()
-                    self.root.destroy()
-            except Exception:
-                pass
-            return
-
         if self.web_window:
             self._allow_webview_close = True
             self.web_window.destroy()
 
     def _show_error(self, title, message):
-        if self.ui_mode == 'tk':
-            messagebox.showerror(title, message)
-        else:
-            self.log_system(f"[{title}] {str(message).replace(chr(10), ' | ')}")
+        self.log_system(f"[{title}] {str(message).replace(chr(10), ' | ')}")
 
     def _show_info(self, title, message):
-        if self.ui_mode == 'tk':
-            messagebox.showinfo(title, message)
-        else:
-            self.log_system(f"[{title}] {str(message).replace(chr(10), ' | ')}")
+        self.log_system(f"[{title}] {str(message).replace(chr(10), ' | ')}")
 
     def _show_warning(self, title, message):
-        if self.ui_mode == 'tk':
-            messagebox.showwarning(title, message)
-        else:
-            self.log_system(f"[{title}] {str(message).replace(chr(10), ' | ')}")
-
-    def _ask_yes_no(self, title, message, default=True):
-        if self.ui_mode == 'tk':
-            return messagebox.askyesno(title, message)
         self.log_system(f"[{title}] {str(message).replace(chr(10), ' | ')}")
-        return default
 
     def _append_log_history(self, source, log_line, replace_last=False):
         history = self.log_history.setdefault(source, [])
@@ -1182,18 +955,7 @@ class UnifiedLauncher:
         always_on_top = self._preference_enabled('alwaysOnTop')
         start_minimized = initial and self._preference_enabled('startMinimized')
 
-        if self.ui_mode == 'tk' and self.root:
-            try:
-                self.root.attributes('-topmost', always_on_top)
-            except Exception as exc:
-                self.log_system(f"应用置顶设置失败: {exc}")
-            if start_minimized:
-                self._after(300, self._minimize_main_window)
-            elif initial:
-                self.root.deiconify()
-            return
-
-        if self.ui_mode == 'web' and self.web_window:
+        if self.web_window:
             if always_on_top:
                 self.log_system("当前 WebView 后端不保证支持窗口置顶，已保存该偏好。")
             if start_minimized:
@@ -1206,11 +968,9 @@ class UnifiedLauncher:
 
     def _minimize_main_window(self):
         try:
-            if self.ui_mode == 'tk' and self.root:
-                self.root.iconify()
-            elif self.ui_mode == 'web' and self.web_window and hasattr(self.web_window, 'minimize'):
+            if self.web_window and hasattr(self.web_window, 'minimize'):
                 self.web_window.minimize()
-            elif self.ui_mode == 'web' and self.web_window and hasattr(self.web_window, 'hide'):
+            elif self.web_window and hasattr(self.web_window, 'hide'):
                 self.web_window.hide()
             else:
                 self.log_system("当前窗口后端不支持自动最小化。")
@@ -1218,14 +978,8 @@ class UnifiedLauncher:
             self.log_system(f"最小化窗口失败: {exc}")
 
     def _save_window_geometry_preference(self):
-        if not self._preference_enabled('rememberGeometry'):
-            return
-        if self.ui_mode == 'tk' and self.root:
-            try:
-                self.web_preferences['windowGeometry'] = self.root.geometry()
-                self._save_web_preferences()
-            except Exception as exc:
-                self.log_system(f"保存窗口位置失败: {exc}")
+        # pywebview does not expose a portable read API for current geometry.
+        return
 
     def _play_feedback_sound(self, error=False):
         if not self._preference_enabled('soundEnabled', True):
@@ -1455,18 +1209,13 @@ class UnifiedLauncher:
 
     def browse_browser_path_for_web(self):
         file_path = ''
-        if self.ui_mode == 'web' and self.web_window and webview:
+        if self.web_window and webview:
             selection = self.web_window.create_file_dialog(
                 FD_OPEN,
                 file_types=('Executable Files (*.exe)', 'All Files (*.*)'),
             )
             if selection:
                 file_path = selection[0]
-        else:
-            file_path = filedialog.askopenfilename(
-                title="Select Browser Executable",
-                filetypes=[("Executable", "*.exe"), ("All Files", "*.*")],
-            )
         return {'ok': bool(file_path), 'path': file_path or ''}
 
     def test_ai_connectivity_from_web(self, config):
@@ -1614,7 +1363,8 @@ class UnifiedLauncher:
             elif action == 'show_settings_dir':
                 self.open_config_dir(script_type or 'yatori')
             elif action == 'show_update_dialog':
-                self.show_update_dialog()
+                if not self.show_update_dialog():
+                    return {'ok': False, 'message': '无法检查或安装 Yatori 更新'}
             elif action == 'check_autovisor_update':
                 self.check_autovisor_update_async()
             elif action == 'install_autovisor_update':
@@ -1659,1156 +1409,24 @@ class UnifiedLauncher:
 
         return {'ok': True, 'state': self.get_web_initial_state()}
 
-    # ========== TK UI methods removed - using webview only ==========
-    def _init_apple_ui(self):
-        """初始化 Apple 风格 UI 布局"""
-        self.root.configure(bg=self.colors['bg'])
+    # ========== WebView-only runtime methods ==========
 
-        style = ttk.Style()
-        style.theme_use('clam')
 
-        style.configure('Apple.TFrame', background=self.colors['bg'])
-        style.configure('AppleNav.TFrame', background=self.colors['sidebar'])
-        style.configure('AppleContent.TFrame', background=self.colors['bg'])
 
-        style.configure(
-            'ApplePill.TButton',
-            background=self.colors['primary'],
-            foreground='#ffffff',
-            borderwidth=0,
-            focuscolor='none',
-            font=('Microsoft YaHei', 11),
-            padding=(22, 8),
-        )
-        style.map('ApplePill.TButton',
-                  background=[('active', self.colors['primary_hover']), ('disabled', self.colors['border'])],
-                  foreground=[('disabled', self.colors['text_muted'])])
 
-        style.configure(
-            'ApplePillOutline.TButton',
-            background='transparent',
-            foreground=self.colors['primary'],
-            borderwidth=1,
-            bordercolor=self.colors['primary'],
-            focuscolor='none',
-            font=('Microsoft YaHei', 11),
-            padding=(22, 8),
-        )
-        style.map('ApplePillOutline.TButton',
-                  background=[('active', self.colors['primary_soft'])],
-                  foreground=[('disabled', self.colors['text_muted'])])
 
-        style.configure(
-            'AppleGhost.TButton',
-            background='transparent',
-            foreground=self.colors['primary'],
-            borderwidth=0,
-            focuscolor='none',
-            font=('Microsoft YaHei', 10),
-            padding=(12, 6),
-        )
-        style.map('AppleGhost.TButton',
-                  foreground=[('active', self.colors['primary_hover']), ('disabled', self.colors['text_muted'])])
 
-        style.configure(
-            'AppleDanger.TButton',
-            background=self.colors['danger'],
-            foreground='#ffffff',
-            borderwidth=0,
-            focuscolor='none',
-            font=('Microsoft YaHei', 11),
-            padding=(22, 8),
-        )
-        style.map('AppleDanger.TButton',
-                  background=[('active', '#e0352b'), ('disabled', self.colors['border'])])
 
-        style.configure(
-            'AppleNav.TButton',
-            background=self.colors['sidebar'],
-            foreground=self.colors['text_on_dark_muted'],
-            borderwidth=0,
-            focuscolor='none',
-            font=('Microsoft YaHei', 11),
-            padding=(16, 10),
-            anchor='w',
-        )
-        style.map('AppleNav.TButton',
-                  background=[('active', '#3a3a3c')],
-                  foreground=[('active', self.colors['text_on_dark'])])
 
-        style.configure(
-            'AppleNavActive.TButton',
-            background='#3a3a3c',
-            foreground=self.colors['text_on_dark'],
-            borderwidth=0,
-            focuscolor='none',
-            font=('Microsoft YaHei', 11, 'bold'),
-            padding=(16, 10),
-            anchor='w',
-        )
 
-        style.configure('Apple.TNotebook', background=self.colors['surface_alt'], borderwidth=0)
-        style.configure('Apple.TNotebook.Tab', background=self.colors['surface_alt'],
-                        foreground=self.colors['text_muted'], padding=(16, 8),
-                        font=('Microsoft YaHei', 10), borderwidth=0)
-        style.map('Apple.TNotebook.Tab',
-                  background=[('selected', self.colors['surface'])],
-                  foreground=[('selected', self.colors['text'])])
 
-        style.configure('Apple.TLabelframe', background=self.colors['surface_alt'],
-                        foreground=self.colors['text_muted'], borderwidth=1,
-                        relief='solid', bordercolor=self.colors['hairline'])
-        style.configure('Apple.TLabelframe.Label', background=self.colors['surface_alt'],
-                        foreground=self.colors['text_muted'], font=('Microsoft YaHei', 9, 'bold'))
 
-        style.configure('Apple.Horizontal.TProgressbar', background=self.colors['primary'],
-                        troughcolor=self.colors['divider_soft'], borderwidth=0, thickness=6)
 
-        self._build_main_layout()
-        self._build_dashboard_view()
-        self._build_settings_view()
-        self._build_about_view()
-        self._switch_view('dashboard')
-        self.start_log_update()
 
-    def _build_main_layout(self):
-        """构建主布局：左侧导航栏 + 右侧内容区"""
-        nav = tk.Frame(self.root, bg=self.colors['sidebar'], width=220)
-        nav.pack(side=tk.LEFT, fill=tk.Y)
-        nav.pack_propagate(False)
 
-        nav_inner = tk.Frame(nav, bg=self.colors['sidebar'], padx=16, pady=20)
-        nav_inner.pack(fill=tk.BOTH, expand=True)
 
-        logo_frame = tk.Frame(nav_inner, bg=self.colors['sidebar'])
-        logo_frame.pack(fill=tk.X, pady=(0, 32))
-        tk.Label(logo_frame, text="Autovisor", font=('Microsoft YaHei', 18, 'bold'),
-                 bg=self.colors['sidebar'], fg=self.colors['text_on_dark']).pack(anchor='w')
-        tk.Label(logo_frame, text="统一刷课管理", font=('Microsoft YaHei', 10),
-                 bg=self.colors['sidebar'], fg=self.colors['text_on_dark_muted']).pack(anchor='w', pady=(2, 0))
 
-        nav_items = [
-            ('dashboard', '概览', '▦'),
-            ('settings', '配置', '⚙'),
-            ('about', '关于', 'ℹ'),
-        ]
-        for key, label, icon in nav_items:
-            btn = ttk.Button(nav_inner, text=f"  {icon}  {label}",
-                             style='AppleNav.TButton',
-                             command=lambda k=key: self._switch_view(k))
-            btn.pack(fill=tk.X, pady=2)
-            self.nav_buttons[key] = btn
 
-        nav_inner.pack(fill=tk.BOTH, expand=True)
-
-        spacer = tk.Frame(nav_inner, bg=self.colors['sidebar'])
-        spacer.pack(fill=tk.BOTH, expand=True)
-
-        bottom_frame = tk.Frame(nav_inner, bg=self.colors['sidebar'])
-        bottom_frame.pack(fill=tk.X, pady=(16, 0))
-        tk.Label(bottom_frame, text=f"Yatori {self._get_yatori_display_version()}",
-                 font=('Microsoft YaHei', 8), bg=self.colors['sidebar'],
-                 fg=self.colors['text_on_dark_muted']).pack(anchor='w')
-        tk.Label(bottom_frame, text=f"Autovisor {self._get_autovisor_display_version()}",
-                 font=('Microsoft YaHei', 8), bg=self.colors['sidebar'],
-                 fg=self.colors['text_on_dark_muted']).pack(anchor='w')
-
-        self.content_host = tk.Frame(self.root, bg=self.colors['bg'])
-        self.content_host.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-    def _create_card(self, parent, padding=24, tone='white'):
-        if tone == 'dark':
-            bg = self.colors['surface_dark']
-            fg = self.colors['text_on_dark']
-        elif tone == 'dark2':
-            bg = self.colors['surface_dark_2']
-            fg = self.colors['text_on_dark']
-        elif tone == 'soft':
-            bg = self.colors['surface_alt']
-            fg = self.colors['text']
-        elif tone == 'pearl':
-            bg = self.colors['surface_pearl']
-            fg = self.colors['text']
-        else:
-            bg = self.colors['surface']
-            fg = self.colors['text']
-
-        card = tk.Frame(parent, bg=bg, padx=padding, pady=padding,
-                        highlightbackground=self.colors['hairline'],
-                        highlightthickness=1 if tone in ('white', 'pearl') else 0)
-        return card
-
-    def show_settings(self, tab_name='yatori'):
-        self.current_settings_tab = tab_name
-        self._switch_view('settings')
-        self._switch_settings_tab(tab_name)
-
-    def _switch_view(self, view_name):
-        self.current_view = view_name
-        for key, btn in self.nav_buttons.items():
-            btn.configure(style='AppleNavActive.TButton' if key == view_name else 'AppleNav.TButton')
-        for name, frame in self.view_frames.items():
-            if name == view_name:
-                frame.pack(fill=tk.BOTH, expand=True)
-            else:
-                frame.pack_forget()
-
-    def _switch_settings_tab(self, tab_name):
-        self.current_settings_tab = tab_name
-        if hasattr(self, 'settings_notebook') and self.settings_notebook:
-            tab_ids = {'yatori': 0, 'autovisor': 1}
-            self.settings_notebook.select(tab_ids.get(tab_name, 0))
-
-    def _create_labeled_input(self, parent, label_text, variable, *, combo_values=None, show=None, buttons=None, width=20):
-        row = tk.Frame(parent, bg=parent.cget('bg') if parent.cget('bg') != 'SystemButtonFace' else self.colors['surface'])
-        row.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(row, text=label_text, font=('Microsoft YaHei', 10),
-                 bg=row.cget('bg'), fg=self.colors['text_muted'], anchor='w').pack(anchor='w')
-        input_row = tk.Frame(row, bg=row.cget('bg'))
-        input_row.pack(fill=tk.X, pady=(4, 0))
-        if combo_values:
-            widget = ttk.Combobox(input_row, textvariable=variable, values=combo_values,
-                                  state='readonly', font=('Microsoft YaHei', 10), width=width)
-        else:
-            widget = tk.Entry(input_row, textvariable=variable, font=('Microsoft YaHei', 10),
-                              width=width, show=show or '',
-                              bg=self.colors['surface'], fg=self.colors['text'],
-                              insertbackground=self.colors['text'],
-                              relief='solid', bd=1,
-                              highlightbackground=self.colors['hairline'],
-                              highlightthickness=1)
-        widget.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        if buttons:
-            for btn_text, btn_cmd, btn_style in buttons:
-                ttk.Button(input_row, text=btn_text, style=btn_style or 'AppleGhost.TButton',
-                           command=btn_cmd).pack(side=tk.LEFT, padx=(6, 0))
-        return widget
-
-    def _create_labeled_text(self, parent, label_text, value='', height=4):
-        row = tk.Frame(parent, bg=parent.cget('bg') if parent.cget('bg') != 'SystemButtonFace' else self.colors['surface'])
-        row.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(row, text=label_text, font=('Microsoft YaHei', 10),
-                 bg=row.cget('bg'), fg=self.colors['text_muted'], anchor='w').pack(anchor='w')
-        text_widget = tk.Text(row, height=height, font=('Consolas', 10),
-                              bg=self.colors['surface'], fg=self.colors['text'],
-                              insertbackground=self.colors['text'],
-                              relief='solid', bd=1,
-                              highlightbackground=self.colors['hairline'],
-                              highlightthickness=1, wrap=tk.WORD)
-        text_widget.pack(fill=tk.X, pady=(4, 0))
-        if value:
-            text_widget.insert('1.0', value)
-        return text_widget
-
-    def _create_surface_check(self, parent, text, variable):
-        row = tk.Frame(parent, bg=parent.cget('bg') if parent.cget('bg') != 'SystemButtonFace' else self.colors['surface'])
-        row.pack(fill=tk.X, pady=(0, 6))
-        tk.Checkbutton(row, text=text, variable=variable,
-                       bg=row.cget('bg'), activebackground=row.cget('bg'),
-                       fg=self.colors['text'], selectcolor=self.colors['surface'],
-                       font=('Microsoft YaHei', 10),
-                       anchor='w').pack(anchor='w')
-
-    def _create_scrollable_settings_body(self, parent):
-        canvas = tk.Canvas(parent, bg=self.colors['bg'], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
-        scroll_frame = tk.Frame(canvas, bg=self.colors['bg'])
-        scroll_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0, 0), window=scroll_frame, anchor='nw')
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        return scroll_frame
-
-    def _build_dashboard_view(self):
-        dashboard = tk.Frame(self.content_host, bg=self.colors['bg'])
-        self.view_frames['dashboard'] = dashboard
-
-        canvas = tk.Canvas(dashboard, bg=self.colors['bg'], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(dashboard, orient='vertical', command=canvas.yview)
-        scroll_frame = tk.Frame(canvas, bg=self.colors['bg'])
-        scroll_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0, 0), window=scroll_frame, anchor='nw', tags='scroll_frame')
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        def _on_canvas_configure(event):
-            canvas.itemconfig('scroll_frame', width=event.width)
-        canvas.bind('<Configure>', _on_canvas_configure)
-
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
-        canvas.bind_all('<MouseWheel>', _on_mousewheel, add='+')
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        hero = tk.Frame(scroll_frame, bg=self.colors['bg'])
-        hero.pack(fill=tk.X, padx=40, pady=(40, 0))
-        hero.grid_columnconfigure(0, weight=1)
-        hero.grid_columnconfigure(1, weight=1)
-
-        yatori_card = self._create_card(hero, padding=32, tone='white')
-        yatori_card.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-        y_top = tk.Frame(yatori_card, bg=self.colors['surface'])
-        y_top.pack(fill=tk.X)
-        y_title = tk.Frame(y_top, bg=self.colors['surface'])
-        y_title.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Label(y_title, text="Yatori", font=('Microsoft YaHei', 20, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack(anchor='w')
-        tk.Label(y_title, text="非智慧树系统核心", font=('Microsoft YaHei', 10),
-                 bg=self.colors['surface'], fg=self.colors['text_muted']).pack(anchor='w', pady=(4, 0))
-        self.yatori_ready_badge = tk.Label(y_top, text="待检测", font=('Microsoft YaHei', 9, 'bold'),
-                                           bg=self.colors['surface_alt'], fg=self.colors['text_muted'], padx=12, pady=4)
-        self.yatori_ready_badge.pack(side=tk.RIGHT)
-        self.yatori_version_label = tk.Label(
-            yatori_card,
-            text=f"当前核心版本: {self._get_yatori_display_version()}",
-            font=('Microsoft YaHei', 9),
-            bg=self.colors['surface'],
-            fg=self.colors['text_muted'],
-        )
-        self.yatori_version_label.pack(anchor='w', pady=(24, 8))
-        self.yatori_status = tk.Label(yatori_card, text="● 未启动", font=('Microsoft YaHei', 11),
-                                      bg=self.colors['surface'], fg=self.colors['text_muted'])
-        self.yatori_status.pack(anchor='w')
-        y_actions = tk.Frame(yatori_card, bg=self.colors['surface'])
-        y_actions.pack(fill=tk.X, pady=(24, 0))
-        self.yatori_btn = ttk.Button(y_actions, text="启动核心", style="ApplePill.TButton",
-                                     command=lambda: self.toggle_script('yatori'))
-        self.yatori_btn.pack(side=tk.LEFT)
-        self.yatori_stop_btn = ttk.Button(y_actions, text="停止运行", style="AppleDanger.TButton",
-                                          command=lambda: self.stop_script('yatori'), state='disabled')
-        self.yatori_stop_btn.pack(side=tk.LEFT, padx=(10, 0))
-        self.yatori_stop_btn.pack_forget()
-        ttk.Button(y_actions, text="配置设置", style="ApplePillOutline.TButton",
-                   command=lambda: self.show_settings('yatori')).pack(side=tk.LEFT, padx=(10, 0))
-        self.yatori_update_btn = ttk.Button(y_actions, text="安装/更新核心", style="AppleGhost.TButton",
-                                            command=self.show_update_dialog)
-        self.yatori_update_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-        autovisor_card = self._create_card(hero, padding=32, tone='dark')
-        autovisor_card.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-        a_top = tk.Frame(autovisor_card, bg=self.colors['surface_dark'])
-        a_top.pack(fill=tk.X)
-        a_title = tk.Frame(a_top, bg=self.colors['surface_dark'])
-        a_title.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Label(a_title, text="Autovisor", font=('Microsoft YaHei', 20, 'bold'),
-                 bg=self.colors['surface_dark'], fg=self.colors['text_on_dark']).pack(anchor='w')
-        tk.Label(a_title, text="智慧树专用核心", font=('Microsoft YaHei', 10),
-                 bg=self.colors['surface_dark'], fg=self.colors['text_on_dark_muted']).pack(anchor='w', pady=(4, 0))
-        self.autovisor_ready_badge = tk.Label(a_top, text="待检测", font=('Microsoft YaHei', 9, 'bold'),
-                                              bg=self.colors['surface_dark_2'], fg=self.colors['primary_on_dark'], padx=12, pady=4)
-        self.autovisor_ready_badge.pack(side=tk.RIGHT)
-        self.autovisor_version_label = tk.Label(
-            autovisor_card,
-            text=f"当前核心版本: {self._get_autovisor_display_version()}",
-            font=('Microsoft YaHei', 9),
-            bg=self.colors['surface_dark'],
-            fg=self.colors['text_on_dark_muted'],
-        )
-        self.autovisor_version_label.pack(anchor='w', pady=(24, 8))
-        a_status_row = tk.Frame(autovisor_card, bg=self.colors['surface_dark'])
-        a_status_row.pack(fill=tk.X)
-        self.autovisor_status = tk.Label(a_status_row, text="● 未启动", font=('Microsoft YaHei', 11),
-                                         bg=self.colors['surface_dark'], fg=self.colors['text_on_dark_muted'])
-        self.autovisor_status.pack(side=tk.LEFT)
-        tk.Checkbutton(
-            a_status_row,
-            text="多账号模式",
-            variable=self.autovisor_multi_var,
-            bg=self.colors['surface_dark'],
-            activebackground=self.colors['surface_dark'],
-            fg=self.colors['text_on_dark'],
-            selectcolor=self.colors['surface_dark_2'],
-            font=('Microsoft YaHei', 10),
-        ).pack(side=tk.RIGHT)
-
-        a_actions = tk.Frame(autovisor_card, bg=self.colors['surface_dark'])
-        a_actions.pack(fill=tk.X, pady=(24, 0))
-        self.autovisor_btn = ttk.Button(a_actions, text="启动核心", style="ApplePill.TButton",
-                                        command=lambda: self.toggle_script('autovisor'))
-        self.autovisor_btn.pack(side=tk.LEFT)
-        self.autovisor_stop_btn = ttk.Button(a_actions, text="停止运行", style="AppleDanger.TButton",
-                                             command=lambda: self.stop_script('autovisor'), state='disabled')
-        self.autovisor_stop_btn.pack(side=tk.LEFT, padx=(10, 0))
-        self.autovisor_stop_btn.pack_forget()
-        ttk.Button(a_actions, text="配置设置", style="ApplePillOutline.TButton",
-                   command=lambda: self.show_settings('autovisor')).pack(side=tk.LEFT, padx=(10, 0))
-        self.autovisor_update_btn = ttk.Button(
-            a_actions,
-            text="检查更新",
-            style="AppleGhost.TButton",
-            command=self.check_autovisor_update_async,
-        )
-        self.autovisor_update_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-        console_section = tk.Frame(scroll_frame, bg=self.colors['bg'])
-        console_section.pack(fill=tk.BOTH, expand=True, padx=40, pady=(32, 40))
-
-        log_card = self._create_card(console_section, padding=24, tone='white')
-        log_card.pack(fill=tk.BOTH, expand=True)
-        log_header = tk.Frame(log_card, bg=self.colors['surface'])
-        log_header.pack(fill=tk.X, pady=(0, 16))
-        tk.Label(log_header, text="» 系统控制台", font=('Microsoft YaHei', 16, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack(side=tk.LEFT)
-        log_tools = tk.Frame(log_header, bg=self.colors['surface'])
-        log_tools.pack(side=tk.RIGHT)
-        ttk.Button(log_tools, text="清空日志", style="AppleGhost.TButton", command=self.clear_all_logs).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(log_tools, text="复制内容", style="AppleGhost.TButton", command=self.copy_current_log).pack(side=tk.LEFT)
-
-        self.log_notebook = ttk.Notebook(log_card, style="Apple.TNotebook")
-        self.log_notebook.pack(fill=tk.BOTH, expand=True)
-
-        def create_log_tab(name):
-            frame = tk.Frame(self.log_notebook, bg=self.colors['surface'], padx=4, pady=4)
-            self.log_notebook.add(frame, text=name)
-            text_area = scrolledtext.ScrolledText(
-                frame,
-                wrap=tk.WORD,
-                font=('Consolas', 10),
-                bg=self.colors['console'],
-                fg=self.colors['console_text'],
-                insertbackground=self.colors['console_text'],
-                relief='flat',
-                borderwidth=0,
-            )
-            text_area.pack(fill=tk.BOTH, expand=True)
-            text_area.configure(state='disabled')
-            return text_area
-
-        self.log_texts = {
-            'system': create_log_tab('系统'),
-            'yatori': create_log_tab('Yatori'),
-            'autovisor': create_log_tab('Autovisor'),
-            'question_bank': create_log_tab('题库'),
-        }
-        self.log_notebook.bind('<<NotebookTabChanged>>', self._on_log_tab_changed)
-
-    def _build_settings_view(self):
-        page = tk.Frame(self.content_host, bg=self.colors['bg'])
-        self.view_frames['settings'] = page
-
-        header = tk.Frame(page, bg=self.colors['bg'])
-        header.pack(fill=tk.X, padx=40, pady=(40, 0))
-        title_wrap = tk.Frame(header, bg=self.colors['bg'])
-        title_wrap.pack(side=tk.LEFT)
-        tk.Label(title_wrap, text="核心设置", font=('Microsoft YaHei', 26, 'bold'),
-                 bg=self.colors['bg'], fg=self.colors['text']).pack(anchor='w')
-        tk.Label(title_wrap, text="这里保存的配置会直接写入运行所需的 config.yaml 与 configs.ini。",
-                 font=('Microsoft YaHei', 10), bg=self.colors['bg'], fg=self.colors['text_muted']).pack(anchor='w', pady=(4, 0))
-        action_wrap = tk.Frame(header, bg=self.colors['bg'])
-        action_wrap.pack(side=tk.RIGHT)
-        ttk.Button(action_wrap, text="重新加载", style="AppleGhost.TButton", command=self._load_settings_into_forms).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(action_wrap, text="打开目录", style="AppleGhost.TButton", command=self.open_current_settings_dir).pack(side=tk.LEFT, padx=(0, 10))
-        self.save_settings_btn = ttk.Button(action_wrap, text="保存全部配置", style="ApplePill.TButton", command=self.save_all_settings)
-        self.save_settings_btn.pack(side=tk.LEFT)
-
-        tab_bar = tk.Frame(page, bg=self.colors['bg'])
-        tab_bar.pack(fill=tk.X, padx=40, pady=(24, 0))
-        pill_group = tk.Frame(tab_bar, bg=self.colors['surface_alt'], padx=4, pady=4)
-        pill_group.pack(side=tk.LEFT)
-        for tab_name, label in (('yatori', 'Yatori 配置'), ('autovisor', 'Autovisor 配置')):
-            button = tk.Button(
-                pill_group,
-                text=label,
-                relief='flat',
-                bd=0,
-                padx=18,
-                pady=10,
-                font=('Microsoft YaHei', 10),
-                bg=self.colors['surface_alt'],
-                fg=self.colors['text_muted'],
-                activebackground=self.colors['surface_alt'],
-                activeforeground=self.colors['text_muted'],
-                command=lambda current=tab_name: self._switch_settings_tab(current),
-            )
-            button.pack(side=tk.LEFT, padx=4)
-            self.settings_tab_buttons[tab_name] = button
-
-        scroll_outer, body = self._create_scrollable_settings_body(page)
-
-        def adjust_z_order():
-            try:
-                scroll_outer.lower()
-                header.lift()
-                tab_bar.lift()
-            except tk.TclError:
-                pass
-        page.after(100, adjust_z_order)
-
-        self.yatori_settings_panel = tk.Frame(body, bg=self.colors['bg'])
-        self.autovisor_settings_panel = tk.Frame(body, bg=self.colors['bg'])
-
-        self.yatori_log_level_var = tk.StringVar()
-        self.yatori_log_model_var = tk.StringVar()
-        self.yatori_web_model_var = tk.StringVar()
-        self.yatori_completion_tone_var = tk.BooleanVar(value=True)
-        self.yatori_color_log_var = tk.BooleanVar(value=True)
-        self.yatori_log_out_file_var = tk.BooleanVar(value=True)
-        self.yatori_email_sw_var = tk.BooleanVar(value=False)
-        self.yatori_smtp_host_var = tk.StringVar()
-        self.yatori_smtp_port_var = tk.StringVar()
-        self.yatori_email_user_var = tk.StringVar()
-        self.yatori_email_password_var = tk.StringVar()
-        self.yatori_ai_type_var = tk.StringVar()
-        self.yatori_ai_url_var = tk.StringVar()
-        self.yatori_ai_model_var = tk.StringVar()
-        self.yatori_ai_api_key_var = tk.StringVar()
-        self.yatori_api_url_var = tk.StringVar()
-
-        general_grid = tk.Frame(self.yatori_settings_panel, bg=self.colors['bg'])
-        general_grid.pack(fill=tk.X)
-        general_grid.grid_columnconfigure(0, weight=1)
-        general_grid.grid_columnconfigure(1, weight=1)
-
-        general_card = self._create_card(general_grid, padding=24, tone='white')
-        general_card.grid(row=0, column=0, sticky='nsew', padx=(0, 10), pady=(0, 16))
-        tk.Label(general_card, text="全局行为", font=('Microsoft YaHei', 14, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack(anchor='w', pady=(0, 12))
-        self._create_labeled_input(general_card, "日志级别", self.yatori_log_level_var,
-                                   combo_values=('INFO', 'DEBUG', 'WARN', 'ERROR'))
-        self._create_labeled_input(general_card, "日志显示模式", self.yatori_log_model_var,
-                                   combo_values=('0', '1'))
-        self._create_labeled_input(general_card, "Web 模式", self.yatori_web_model_var,
-                                   combo_values=('0', '1'))
-        self._create_surface_check(general_card, "完成时播放提示音", self.yatori_completion_tone_var)
-        self._create_surface_check(general_card, "启用彩色日志", self.yatori_color_log_var)
-        self._create_surface_check(general_card, "写入日志文件", self.yatori_log_out_file_var)
-
-        email_card = self._create_card(general_grid, padding=24, tone='white')
-        email_card.grid(row=0, column=1, sticky='nsew', padx=(10, 0), pady=(0, 16))
-        tk.Label(email_card, text="邮件通知", font=('Microsoft YaHei', 14, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack(anchor='w', pady=(0, 12))
-        self._create_surface_check(email_card, "启用 SMTP 邮件通知", self.yatori_email_sw_var)
-        self._create_labeled_input(email_card, "SMTP 服务器", self.yatori_smtp_host_var)
-        self._create_labeled_input(email_card, "SMTP 端口", self.yatori_smtp_port_var)
-        self._create_labeled_input(email_card, "用户名 / 邮箱", self.yatori_email_user_var)
-        self._create_labeled_input(email_card, "授权码 / 密码", self.yatori_email_password_var, show='*')
-
-        ai_card = self._create_card(self.yatori_settings_panel, padding=24, tone='white')
-        ai_card.pack(fill=tk.X, pady=(0, 16))
-        tk.Label(ai_card, text="AI 模型配置", font=('Microsoft YaHei', 14, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack(anchor='w', pady=(0, 12))
-        self._create_labeled_input(ai_card, "AI 提供商", self.yatori_ai_type_var,
-                                   combo_values=('TONGYI', 'DEEPSEEK'))
-        self._create_labeled_input(ai_card, "AI 接口地址", self.yatori_ai_url_var)
-        self._create_labeled_input(ai_card, "模型名称", self.yatori_ai_model_var)
-        self._create_labeled_input(ai_card, "API Key", self.yatori_ai_api_key_var, show='*')
-
-        api_card = self._create_card(self.yatori_settings_panel, padding=24, tone='white')
-        api_card.pack(fill=tk.X, pady=(0, 16))
-        tk.Label(api_card, text="题库接口", font=('Microsoft YaHei', 14, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack(anchor='w', pady=(0, 12))
-        self._create_labeled_input(api_card, "题库 API 地址", self.yatori_api_url_var)
-
-        account_header = tk.Frame(self.yatori_settings_panel, bg=self.colors['bg'])
-        account_header.pack(fill=tk.X, pady=(4, 8))
-        tk.Label(account_header, text="学习账号", font=('Microsoft YaHei', 16, 'bold'),
-                 bg=self.colors['bg'], fg=self.colors['text']).pack(side=tk.LEFT)
-        ttk.Button(account_header, text="添加账号", style="ApplePill.TButton", command=self._add_yatori_account).pack(side=tk.RIGHT)
-        self.yatori_accounts_container = tk.Frame(self.yatori_settings_panel, bg=self.colors['bg'])
-        self.yatori_accounts_container.pack(fill=tk.BOTH, expand=True)
-
-        self.autovisor_browser_driver_var = tk.StringVar(value='Chrome')
-        self.autovisor_browser_path_var = tk.StringVar()
-
-        env_card = self._create_card(self.autovisor_settings_panel, padding=24, tone='white')
-        env_card.pack(fill=tk.X, pady=(0, 16))
-        tk.Label(env_card, text="运行环境", font=('Microsoft YaHei', 14, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack(anchor='w', pady=(0, 12))
-        env_grid = tk.Frame(env_card, bg=self.colors['surface'])
-        env_grid.pack(fill=tk.X)
-        env_grid.grid_columnconfigure(0, weight=1)
-        env_grid.grid_columnconfigure(1, weight=1)
-        left_env = tk.Frame(env_grid, bg=self.colors['surface'])
-        left_env.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-        right_env = tk.Frame(env_grid, bg=self.colors['surface'])
-        right_env.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-        self._create_labeled_input(left_env, "首选浏览器", self.autovisor_browser_driver_var,
-                                   combo_values=('Chrome', 'Edge'))
-        self._create_labeled_input(
-            right_env,
-            "浏览器路径",
-            self.autovisor_browser_path_var,
-            buttons=[
-                ("自动识别", self._detect_selected_browser_path, "AppleGhost.TButton"),
-                ("浏览", self._browse_browser_path, "AppleGhost.TButton"),
-            ],
-        )
-        tk.Checkbutton(
-            env_card,
-            text="启用多账号模式",
-            variable=self.autovisor_multi_var,
-            bg=self.colors['surface'],
-            activebackground=self.colors['surface'],
-            fg=self.colors['text'],
-            selectcolor='white',
-            font=('Microsoft YaHei', 10),
-            anchor='w',
-        ).pack(anchor='w', pady=(10, 0))
-
-        a_account_header = tk.Frame(self.autovisor_settings_panel, bg=self.colors['bg'])
-        a_account_header.pack(fill=tk.X, pady=(4, 8))
-        tk.Label(a_account_header, text="智慧树账号", font=('Microsoft YaHei', 16, 'bold'),
-                 bg=self.colors['bg'], fg=self.colors['text']).pack(side=tk.LEFT)
-        ttk.Button(a_account_header, text="添加账号", style="ApplePill.TButton", command=self._add_autovisor_account).pack(side=tk.RIGHT)
-        self.autovisor_accounts_container = tk.Frame(self.autovisor_settings_panel, bg=self.colors['bg'])
-        self.autovisor_accounts_container.pack(fill=tk.BOTH, expand=True)
-
-    def _build_about_view(self):
-        page = tk.Frame(self.content_host, bg=self.colors['bg'])
-        self.view_frames['about'] = page
-
-        hero = self._create_card(page, padding=40, tone='white')
-        hero.pack(fill=tk.BOTH, expand=True, padx=40, pady=40)
-        top = tk.Frame(hero, bg=self.colors['surface'])
-        top.pack(expand=True)
-
-        icon = tk.Canvas(top, width=96, height=96, bg=self.colors['surface'], highlightthickness=0)
-        icon.create_oval(4, 4, 92, 92, fill=self.colors['primary'], outline='')
-        icon.create_text(48, 48, text="R", fill="white", font=('Segoe UI', 30, 'bold'))
-        icon.pack(pady=(0, 20))
-
-        tk.Label(top, text=f"统一启动器 {self.LAUNCHER_VERSION}", font=('Microsoft YaHei', 28, 'bold'),
-                 bg=self.colors['surface'], fg=self.colors['text']).pack()
-        self.about_version_label = tk.Label(
-            top,
-            text=f"Yatori {self._get_yatori_display_version()} / Autovisor {self._get_autovisor_display_version()}",
-            font=('Microsoft YaHei', 11),
-            bg=self.colors['surface'],
-            fg=self.colors['text_muted'],
-        )
-        self.about_version_label.pack(pady=(10, 28))
-
-        info_card = tk.Frame(top, bg=self.colors['surface_alt'], padx=24, pady=20)
-        info_card.pack(fill=tk.X, padx=60)
-        tk.Label(info_card, text="当前核心目录", font=('Microsoft YaHei', 12, 'bold'),
-                 bg=self.colors['surface_alt'], fg=self.colors['text']).pack(anchor='w')
-        self.about_paths_label = tk.Label(
-            info_card,
-            text="",
-            justify=tk.LEFT,
-            font=('Consolas', 10),
-            bg=self.colors['surface_alt'],
-            fg=self.colors['text_muted'],
-        )
-        self.about_paths_label.pack(anchor='w', pady=(8, 0))
-
-        # 致谢信息
-        thanks_card = tk.Frame(top, bg=self.colors['surface_alt'], padx=24, pady=16)
-        thanks_card.pack(fill=tk.X, padx=60, pady=(16, 0))
-        tk.Label(thanks_card, text="特别致谢", font=('Microsoft YaHei', 12, 'bold'),
-                 bg=self.colors['surface_alt'], fg=self.colors['text']).pack(anchor='w')
-        tk.Label(thanks_card, text="题库架构由 ZError 提供支持",
-                 font=('Microsoft YaHei', 10),
-                 bg=self.colors['surface_alt'], fg=self.colors['text_muted']).pack(anchor='w', pady=(8, 0))
-
-        # 更新日志
-        changelog_card = tk.Frame(top, bg=self.colors['surface_alt'], padx=24, pady=16)
-        changelog_card.pack(fill=tk.X, padx=60, pady=(16, 0))
-        tk.Label(changelog_card, text="更新日志", font=('Microsoft YaHei', 12, 'bold'),
-                 bg=self.colors['surface_alt'], fg=self.colors['text']).pack(anchor='w')
-        changelog_text = tk.Text(changelog_card, height=6, wrap=tk.WORD,
-                                  font=('Microsoft YaHei', 9),
-                                  bg=self.colors['surface_alt'], fg=self.colors['text_muted'],
-                                  relief='flat', highlightthickness=0)
-        changelog_text.pack(fill=tk.X, pady=(8, 0))
-        changelog_content = """2026-05-18 v1.0.0
-• 新增: 软件设置背景透明度调节功能
-• 新增: 关于页更新日志显示
-• 优化: 界面交互体验
-
-2026-05-15 v0.9.5
-• 新增: 题库服务器集成
-• 修复: 多账号模式配置问题
-
-2026-05-10 v0.9.0
-• 初始版本发布
-• 支持 Yatori & Autovisor 双核心"""
-        changelog_text.insert(tk.END, changelog_content)
-        changelog_text.config(state='disabled')
-
-        actions = tk.Frame(top, bg=self.colors['surface'])
-        actions.pack(pady=32)
-        ttk.Button(actions, text="打开 Yatori 目录", style="AppleGhost.TButton",
-                   command=lambda: self.open_config_dir('yatori')).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="打开 Autovisor 目录", style="AppleGhost.TButton",
-                   command=lambda: self.open_config_dir('autovisor')).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="检查 Autovisor 更新", style="ApplePill.TButton",
-                   command=self.check_autovisor_update_async).pack(side=tk.LEFT, padx=6)
-
-    def _refresh_runtime_summary(self):
-        y_installed = self._directory_has_any_file(self.yatori_path, self.YATORI_ENTRY_FILES)
-        a_installed = self._directory_has_any_file(self.autovisor_path, self.AUTOVISOR_ENTRY_FILES)
-        if hasattr(self, 'yatori_ready_badge'):
-            self.yatori_ready_badge.config(
-                text="已就绪" if y_installed else "未安装",
-                bg=self.colors['surface_alt'],
-                fg=self.colors['success'] if y_installed else self.colors['danger'],
-            )
-        if hasattr(self, 'autovisor_ready_badge'):
-            self.autovisor_ready_badge.config(
-                text="已就绪" if a_installed else "未安装",
-                bg=self.colors['primary_soft'] if a_installed else self.colors['surface_alt'],
-                fg=self.colors['primary'] if a_installed else self.colors['danger'],
-            )
-        if hasattr(self, 'about_paths_label'):
-            self.about_paths_label.config(text=f"Yatori: {self.yatori_path}\nAutovisor: {self.autovisor_path}")
-        if hasattr(self, 'about_version_label'):
-            self.about_version_label.config(
-                text=f"Yatori {self._get_yatori_display_version()} / Autovisor {self._get_autovisor_display_version()}"
-            )
-
-    def _populate_yatori_settings(self, config):
-        basic = config.get('setting', {}).get('basicSetting', {})
-        email = config.get('setting', {}).get('emailInform', {})
-        ai = config.get('setting', {}).get('aiSetting', {})
-        api = config.get('setting', {}).get('apiQueSetting', {})
-        self.yatori_log_level_var.set(str(basic.get('logLevel', 'INFO')))
-        self.yatori_log_model_var.set(str(basic.get('logModel', 0)))
-        self.yatori_web_model_var.set(str(basic.get('WebModel', 0)))
-        self.yatori_completion_tone_var.set(bool(self._as_int(basic.get('completionTone', 1), 1)))
-        self.yatori_color_log_var.set(bool(self._as_int(basic.get('colorLog', 1), 1)))
-        self.yatori_log_out_file_var.set(bool(self._as_int(basic.get('logOutFileSw', 1), 1)))
-        self.yatori_email_sw_var.set(bool(self._as_int(email.get('sw', 0), 0)))
-        self.yatori_smtp_host_var.set(str(email.get('SMTPHost', '')))
-        self.yatori_smtp_port_var.set(str(email.get('SMTPPort', 0)))
-        self.yatori_email_user_var.set(str(email.get('userName', '')))
-        self.yatori_email_password_var.set(str(email.get('password', '')))
-        self.yatori_ai_type_var.set(str(ai.get('aiType', 'TONGYI')))
-        self.yatori_ai_url_var.set(str(ai.get('aiUrl', '')))
-        self.yatori_ai_model_var.set(str(ai.get('model', '')))
-        self.yatori_ai_api_key_var.set(str(ai.get('API_KEY', '')))
-        self.yatori_api_url_var.set(str(api.get('url', 'http://127.0.0.1:8083/query')))
-        self._render_yatori_accounts(config.get('users') or [self._default_yatori_user(1)])
-
-    def _populate_autovisor_settings(self, config):
-        self._set_autovisor_multi_mode(config.get('multi_mode'))
-        self.autovisor_browser_driver_var.set(config.get('browser_driver', 'Chrome') or 'Chrome')
-        self.autovisor_browser_path_var.set(config.get('browser_path', ''))
-        self._render_autovisor_accounts(config.get('accounts') or [self._default_autovisor_account(1)])
-
-    def _load_settings_into_forms(self):
-        self._populate_yatori_settings(self._load_yatori_config_data())
-        self._populate_autovisor_settings(self._load_autovisor_config_data())
-        self._refresh_runtime_summary()
-        self.log_system("已重新加载启动器配置")
-
-    def _get_yatori_platform_rule(self, platform_code):
-        return self.YATORI_PLATFORM_MODE_RULES.get(platform_code, self.YATORI_PLATFORM_MODE_RULES['XUEXITONG'])
-
-    def _sync_yatori_platform_card(self, form):
-        """Update video/exam/submit combo boxes when platform type changes."""
-        platform_code = form['account_type'].get().strip() or 'XUEXITONG'
-        rule = self._get_yatori_platform_rule(platform_code)
-        # Update video mode combo
-        video_widget = form.get('_video_widget')
-        if video_widget:
-            current_video = form['video_model'].get()
-            video_widget['values'] = rule['videoModes']
-            if current_video not in rule['videoModes']:
-                form['video_model'].set(rule['videoModes'][0])
-        # Update auto exam combo
-        exam_widget = form.get('_exam_widget')
-        if exam_widget:
-            current_exam = form['auto_exam'].get()
-            exam_widget['values'] = rule['examModes']
-            if current_exam not in rule['examModes']:
-                form['auto_exam'].set(rule['examModes'][0])
-        # Update submit mode combo
-        submit_widget = form.get('_submit_widget')
-        if submit_widget:
-            current_submit = form['auto_submit'].get()
-            submit_widget['values'] = rule['submitModes']
-            if current_submit not in rule['submitModes']:
-                form['auto_submit'].set(rule['submitModes'][0])
-
-    def _render_yatori_accounts(self, accounts):
-        for child in self.yatori_accounts_container.winfo_children():
-            child.destroy()
-        self.yatori_account_forms = []
-        active_accounts = accounts or [self._default_yatori_user(1)]
-        for index, account in enumerate(active_accounts, start=1):
-            card = self._create_card(self.yatori_accounts_container, padding=18, tone='white')
-            card.pack(fill=tk.X, pady=(0, 14))
-            header = tk.Frame(card, bg=self.colors['surface'])
-            header.pack(fill=tk.X, pady=(0, 10))
-            title = account.get('remarkName') or f'账号{index}'
-            tk.Label(header, text=title, font=('Microsoft YaHei', 13, 'bold'),
-                     bg=self.colors['surface'], fg=self.colors['text']).pack(side=tk.LEFT)
-            if len(active_accounts) > 1:
-                ttk.Button(header, text="删除", style="Ghost.TButton",
-                           command=lambda current=index - 1: self._remove_yatori_account(current)).pack(side=tk.RIGHT)
-
-            platform_code = str(account.get('accountType', 'XUEXITONG'))
-            rule = self._get_yatori_platform_rule(platform_code)
-            cc = account.get('coursesCustom', {})
-            # Ensure initial values are valid for this platform
-            initial_video = str(cc.get('videoModel', rule['videoModes'][0]))
-            if initial_video not in rule['videoModes']:
-                initial_video = rule['videoModes'][0]
-            initial_exam = str(cc.get('autoExam', rule['examModes'][0]))
-            if initial_exam not in rule['examModes']:
-                initial_exam = rule['examModes'][0]
-            initial_submit = str(cc.get('examAutoSubmit', rule['submitModes'][0]))
-            if initial_submit not in rule['submitModes']:
-                initial_submit = rule['submitModes'][0]
-            form = {
-                'account_type': tk.StringVar(value=platform_code),
-                'site_url': tk.StringVar(value=str(account.get('url', ''))),
-                'remark_name': tk.StringVar(value=str(account.get('remarkName', title))),
-                'account': tk.StringVar(value=str(account.get('account', ''))),
-                'password': tk.StringVar(value=str(account.get('password', ''))),
-                'use_proxy': tk.BooleanVar(value=bool(self._as_int(account.get('isProxy', 0), 0))),
-                'inform_emails': tk.StringVar(value=', '.join(account.get('informEmails', []) or [])),
-                'study_time': tk.StringVar(value=str(cc.get('studyTime', ''))),
-                'cx_node': tk.StringVar(value=str(cc.get('cxNode', 3))),
-                'cx_chapter_test': tk.BooleanVar(value=bool(self._as_int(cc.get('cxChapterTestSw', 1), 1))),
-                'cx_work': tk.BooleanVar(value=bool(self._as_int(cc.get('cxWorkSw', 1), 1))),
-                'cx_exam': tk.BooleanVar(value=bool(self._as_int(cc.get('cxExamSw', 1), 1))),
-                'shuffle': tk.BooleanVar(value=bool(self._as_int(cc.get('shuffleSw', 0), 0))),
-                'video_model': tk.StringVar(value=initial_video),
-                'auto_exam': tk.StringVar(value=initial_exam),
-                'auto_submit': tk.StringVar(value=initial_submit),
-            }
-
-            top_grid = tk.Frame(card, bg=self.colors['surface'])
-            top_grid.pack(fill=tk.X)
-            top_grid.grid_columnconfigure(0, weight=1)
-            top_grid.grid_columnconfigure(1, weight=1)
-            left = tk.Frame(top_grid, bg=self.colors['surface'])
-            left.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-            right = tk.Frame(top_grid, bg=self.colors['surface'])
-            right.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-            account_type_widget = self._create_labeled_input(left, "账号类型", form['account_type'],
-                                       combo_values=self.YATORI_ACCOUNT_TYPES)
-            tk.Label(
-                left,
-                text="提示：英华学堂、海旗科技建议同时填写站点地址",
-                font=('Microsoft YaHei', 9),
-                bg=self.colors['surface'],
-                fg=self.colors['text_muted'],
-                anchor='w',
-            ).pack(fill=tk.X, pady=(0, 8))
-            self._create_labeled_input(left, "备注名称", form['remark_name'])
-            self._create_labeled_input(left, "登录账号", form['account'])
-            self._create_labeled_input(right, "站点地址 / URL", form['site_url'])
-            self._create_labeled_input(right, "密码", form['password'], show='*')
-            self._create_labeled_input(right, "通知邮箱（逗号分隔）", form['inform_emails'])
-            self._create_surface_check(card, "启用代理", form['use_proxy'])
-            self._create_surface_check(card, "随机打乱课程", form['shuffle'])
-            form['_video_widget'] = self._create_labeled_input(card, "视频模式", form['video_model'], combo_values=rule['videoModes'])
-            form['_exam_widget'] = self._create_labeled_input(card, "自动考试模式", form['auto_exam'], combo_values=rule['examModes'])
-            form['_submit_widget'] = self._create_labeled_input(card, "交卷模式", form['auto_submit'], combo_values=rule['submitModes'])
-            # Wire platform change callback
-            def _make_on_platform_change(f=form):
-                def _inner(*_):
-                    self._sync_yatori_platform_card(f)
-                return _inner
-            form['account_type'].trace_add('write', _make_on_platform_change())
-            tk.Label(
-                card,
-                text="视频: 0=不刷 1=普通(单课依次) 2=暴力(多课并行) 3=去红/多节点 | 考试: 1=AI 2=题库API 3=学习通内置AI | 交卷: 0=仅保存 1=自动提交 2=智能提交(无空题才交)",
-                font=('Microsoft YaHei', 9),
-                bg=self.colors['surface'],
-                fg=self.colors['text_muted'],
-                anchor='w',
-                justify=tk.LEFT,
-            ).pack(fill=tk.X, pady=(0, 10))
-
-            # 学习通专属设置
-            cx_card = self._create_card(card, padding=14, tone='soft')
-            cx_card.pack(fill=tk.X, pady=(0, 10))
-            tk.Label(cx_card, text="学习通高级设置", font=('Microsoft YaHei', 12, 'bold'),
-                     bg=self.colors['surface_alt'], fg=self.colors['text']).pack(anchor='w', pady=(0, 8))
-            cx_grid = tk.Frame(cx_card, bg=self.colors['surface_alt'])
-            cx_grid.pack(fill=tk.X)
-            cx_grid.grid_columnconfigure(0, weight=1)
-            cx_grid.grid_columnconfigure(1, weight=1)
-            cx_left = tk.Frame(cx_grid, bg=self.colors['surface_alt'])
-            cx_left.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-            cx_right = tk.Frame(cx_grid, bg=self.colors['surface_alt'])
-            cx_right.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-            self._create_labeled_input(cx_left, "多节点并发数 (cxNode)", form['cx_node'],
-                                       combo_values=('-1', '1', '2', '3', '4', '5', '6', '7', '8'))
-            tk.Label(cx_left, text="视频模式=3时生效，-1=不限，数值越大并发越高",
-                     font=('Microsoft YaHei', 8), bg=self.colors['surface_alt'],
-                     fg=self.colors['text_muted'], anchor='w').pack(fill=tk.X, pady=(0, 6))
-            self._create_labeled_input(cx_left, "学习时间段 (studyTime)", form['study_time'])
-            tk.Label(cx_left, text="WeLearn等平台学习时间范围，如 10-30，留空使用默认",
-                     font=('Microsoft YaHei', 8), bg=self.colors['surface_alt'],
-                     fg=self.colors['text_muted'], anchor='w').pack(fill=tk.X, pady=(0, 6))
-            self._create_surface_check(cx_right, "章节测试 (cxChapterTestSw)", form['cx_chapter_test'])
-            self._create_surface_check(cx_right, "课后作业 (cxWorkSw)", form['cx_work'])
-            self._create_surface_check(cx_right, "自动考试 (cxExamSw)", form['cx_exam'])
-
-            text_grid = tk.Frame(card, bg=self.colors['surface'])
-            text_grid.pack(fill=tk.X)
-            text_grid.grid_columnconfigure(0, weight=1)
-            text_grid.grid_columnconfigure(1, weight=1)
-            include_wrap = tk.Frame(text_grid, bg=self.colors['surface'])
-            include_wrap.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-            exclude_wrap = tk.Frame(text_grid, bg=self.colors['surface'])
-            exclude_wrap.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-            include_text = self._create_labeled_text(
-                include_wrap,
-                "仅包含这些课程（每行一个）",
-                '\n'.join(cc.get('includeCourses', []) or []),
-                height=4,
-            )
-            exclude_text = self._create_labeled_text(
-                exclude_wrap,
-                "排除这些课程（每行一个）",
-                '\n'.join(account.get('coursesCustom', {}).get('excludeCourses', []) or []),
-                height=4,
-            )
-            form['include_courses'] = include_text
-            form['exclude_courses'] = exclude_text
-            self.yatori_account_forms.append(form)
-
-    def _render_autovisor_accounts(self, accounts):
-        for child in self.autovisor_accounts_container.winfo_children():
-            child.destroy()
-        self.autovisor_account_forms = []
-        active_accounts = accounts or [self._default_autovisor_account(1)]
-        multi = len(active_accounts) > 1
-        for index, account in enumerate(active_accounts, start=1):
-            card = self._create_card(self.autovisor_accounts_container, padding=18, tone='white')
-            card.pack(fill=tk.X, pady=(0, 14))
-            header = tk.Frame(card, bg=self.colors['surface'])
-            header.pack(fill=tk.X, pady=(0, 10))
-            name_var = tk.StringVar(value=str(account.get('name') or f'账号 {index}'))
-            tk.Label(header, textvariable=name_var, font=('Microsoft YaHei', 13, 'bold'),
-                     bg=self.colors['surface'], fg=self.colors['text']).pack(side=tk.LEFT)
-            if multi:
-                ttk.Button(header, text="删除", style="Ghost.TButton",
-                           command=lambda current=index - 1: self._remove_autovisor_account(current)).pack(side=tk.RIGHT)
-
-            form = {
-                'account_id': account.get('account_id', index),
-                'name': name_var,
-                'username': tk.StringVar(value=str(account.get('username', ''))),
-                'password': tk.StringVar(value=str(account.get('password', ''))),
-                'driver': tk.StringVar(value=str(account.get('driver', 'Chrome'))),
-                'exe_path': tk.StringVar(value=str(account.get('exe_path', ''))),
-                'enable_auto_captcha': tk.BooleanVar(value=bool(account.get('enable_auto_captcha', True))),
-                'enable_hide_window': tk.BooleanVar(value=bool(account.get('enable_hide_window', False))),
-                'limit_max_time': tk.StringVar(value=str(account.get('limit_max_time', '30'))),
-                'limit_speed': tk.StringVar(value=str(account.get('limit_speed', '1.0'))),
-                'sound_off': tk.BooleanVar(value=bool(account.get('sound_off', True))),
-            }
-            top_grid = tk.Frame(card, bg=self.colors['surface'])
-            top_grid.pack(fill=tk.X)
-            top_grid.grid_columnconfigure(0, weight=1)
-            top_grid.grid_columnconfigure(1, weight=1)
-            left = tk.Frame(top_grid, bg=self.colors['surface'])
-            left.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-            right = tk.Frame(top_grid, bg=self.colors['surface'])
-            right.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-            self._create_labeled_input(left, "卡片名称", form['name'])
-            self._create_labeled_input(left, "手机号 / 学号", form['username'])
-            self._create_labeled_input(left, "密码", form['password'], show='*')
-            self._create_labeled_input(right, "播放倍速", form['limit_speed'],
-                                       combo_values=self.AUTOVISOR_SPEED_OPTIONS)
-            self._create_labeled_input(right, "单门课程最大时长（分钟）", form['limit_max_time'])
-
-            # Per-account browser settings (useful in multi-mode for different accounts)
-            if multi:
-                browser_card = self._create_card(card, padding=12, tone='soft')
-                browser_card.pack(fill=tk.X, pady=(6, 10))
-                tk.Label(browser_card, text="此账号浏览器（覆盖全局设置）", font=('Microsoft YaHei', 11, 'bold'),
-                         bg=self.colors['surface_alt'], fg=self.colors['text']).pack(anchor='w', pady=(0, 6))
-                browser_grid = tk.Frame(browser_card, bg=self.colors['surface_alt'])
-                browser_grid.pack(fill=tk.X)
-                browser_grid.grid_columnconfigure(0, weight=1)
-                browser_grid.grid_columnconfigure(1, weight=1)
-                b_left = tk.Frame(browser_grid, bg=self.colors['surface_alt'])
-                b_left.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-                b_right = tk.Frame(browser_grid, bg=self.colors['surface_alt'])
-                b_right.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
-                self._create_labeled_input(b_left, "浏览器类型", form['driver'],
-                                           combo_values=('Chrome', 'Edge'))
-                self._create_labeled_input(b_right, "浏览器路径（留空=全局）", form['exe_path'])
-                tk.Label(browser_card, text="留空则使用上方全局浏览器设置；填写则此账号使用独立浏览器。",
-                         font=('Microsoft YaHei', 8), bg=self.colors['surface_alt'],
-                         fg=self.colors['text_muted'], anchor='w').pack(fill=tk.X, pady=(4, 0))
-
-            self._create_surface_check(card, "自动验证码", form['enable_auto_captcha'])
-            self._create_surface_check(card, "隐藏浏览器窗口", form['enable_hide_window'])
-            tk.Label(
-                card,
-                text="提示：开启隐藏浏览器窗口后，必须填写账号和密码。",
-                font=('Microsoft YaHei', 9),
-                bg=self.colors['surface'],
-                fg=self.colors['text_muted'],
-                anchor='w',
-            ).pack(fill=tk.X, pady=(0, 8))
-            self._create_surface_check(card, "静音播放", form['sound_off'])
-            course_urls_text = self._create_labeled_text(
-                card,
-                "课程链接（每行一个）",
-                '\n'.join(account.get('course_urls', []) or []),
-                height=5,
-            )
-            form['course_urls'] = course_urls_text
-            self.autovisor_account_forms.append(form)
-
-    def _add_yatori_account(self):
-        accounts = self._collect_yatori_accounts_form_data()
-        accounts.append(self._default_yatori_user(len(accounts) + 1))
-        self._render_yatori_accounts(accounts)
-
-    def _remove_yatori_account(self, index):
-        accounts = self._collect_yatori_accounts_form_data()
-        if len(accounts) <= 1:
-            return
-        accounts.pop(index)
-        self._render_yatori_accounts(accounts)
-
-    def _add_autovisor_account(self):
-        accounts = self._collect_autovisor_accounts_form_data()
-        used_ids = {
-            self._as_int(account.get('account_id'), 0)
-            for account in accounts
-            if self._as_int(account.get('account_id'), 0) > 0
-        }
-        next_id = max(used_ids, default=0) + 1
-        accounts.append(self._default_autovisor_account(next_id))
-        self._set_autovisor_multi_mode(True)
-        self._render_autovisor_accounts(accounts)
-
-    def _remove_autovisor_account(self, index):
-        accounts = self._collect_autovisor_accounts_form_data()
-        if len(accounts) <= 1:
-            return
-        accounts.pop(index)
-        if len(accounts) <= 1:
-            self._set_autovisor_multi_mode(False)
-        self._render_autovisor_accounts(accounts)
-
-    def _detect_selected_browser_path(self):
-        browser_name = self.autovisor_browser_driver_var.get().strip() or 'Chrome'
-        normalized = self._normalize_browser_name(browser_name)
-        detected_path = self._find_browser_executable(normalized)
-        if detected_path:
-            self.autovisor_browser_path_var.set(detected_path)
-            self.log_system(f"已识别 {browser_name} 路径: {detected_path}")
-        else:
-            self._show_warning("未找到浏览器", f"没有在系统中找到 {browser_name} 的可执行文件。")
-
-    def _browse_browser_path(self):
-        file_path = filedialog.askopenfilename(
-            title="选择浏览器可执行文件",
-            filetypes=[("Executable", "*.exe"), ("All Files", "*.*")],
-        )
-        if file_path:
-            self.autovisor_browser_path_var.set(file_path)
-
-    def _build_yatori_config_from_form(self):
-        smtp_port = self._as_int(self.yatori_smtp_port_var.get(), 0)
-        return {
-            'setting': {
-                'basicSetting': {
-                    'completionTone': 1 if self.yatori_completion_tone_var.get() else 0,
-                    'colorLog': 1 if self.yatori_color_log_var.get() else 0,
-                    'logOutFileSw': 1 if self.yatori_log_out_file_var.get() else 0,
-                    'logLevel': self.yatori_log_level_var.get().strip() or 'INFO',
-                    'logModel': self._as_int(self.yatori_log_model_var.get(), 0),
-                    'WebModel': self._as_int(self.yatori_web_model_var.get(), 0),
-                },
-                'emailInform': {
-                    'sw': 1 if self.yatori_email_sw_var.get() else 0,
-                    'SMTPHost': self.yatori_smtp_host_var.get().strip(),
-                    'SMTPPort': smtp_port,
-                    'userName': self.yatori_email_user_var.get().strip(),
-                    'password': self.yatori_email_password_var.get(),
-                },
-                'aiSetting': {
-                    'aiType': self.yatori_ai_type_var.get().strip() or 'TONGYI',
-                    'aiUrl': self.yatori_ai_url_var.get().strip(),
-                    'model': self.yatori_ai_model_var.get().strip(),
-                    'API_KEY': self.yatori_ai_api_key_var.get(),
-                },
-                'apiQueSetting': {
-                    'url': self.yatori_api_url_var.get().strip() or 'http://127.0.0.1:8083/query',
-                },
-            },
-            'users': self._collect_yatori_accounts_form_data(),
-        }
-
-    def _build_autovisor_config_from_form(self):
-        accounts = self._collect_autovisor_accounts_form_data()
-        validation_error = self._validate_autovisor_accounts(accounts)
-        if validation_error:
-            raise ValueError(validation_error)
-        browser_path = self.autovisor_browser_path_var.get().strip()
-        browser_driver = self.autovisor_browser_driver_var.get().strip() or 'Chrome'
-        multi_mode = self._get_autovisor_multi_mode() and len(accounts) > 1
-        if not multi_mode:
-            accounts = accounts[:1]
-        for account in accounts:
-            account['driver'] = browser_driver
-            account['exe_path'] = browser_path
-        return {
-            'multi_mode': multi_mode,
-            'browser_driver': browser_driver,
-            'browser_path': browser_path,
-            'accounts': accounts,
-        }
-
-    def _save_yatori_form(self, silent=False):
-        if self.ui_mode != 'tk':
-            return True
-        try:
-            merged = self._load_yatori_config_data()
-            built = self._build_yatori_config_from_form()
-            merged.setdefault('setting', {})
-            merged['setting'].setdefault('basicSetting', {}).update(built['setting']['basicSetting'])
-            merged['setting'].setdefault('emailInform', {}).update(built['setting']['emailInform'])
-            merged['setting'].setdefault('aiSetting', {}).update(built['setting']['aiSetting'])
-            merged['setting'].setdefault('apiQueSetting', {}).update(built['setting']['apiQueSetting'])
-            # Merge users: preserve fields not exposed in the form (e.g. coursesSettings)
-            existing_users = merged.get('users') if isinstance(merged.get('users'), list) else []
-            built_users = built.get('users', [])
-            merged_users = []
-            for i, built_user in enumerate(built_users):
-                existing = existing_users[i] if i < len(existing_users) and isinstance(existing_users[i], dict) else {}
-                merged_user = dict(existing)
-                merged_user.update({k: v for k, v in built_user.items() if k != 'coursesCustom'})
-                existing_cc = existing.get('coursesCustom') if isinstance(existing.get('coursesCustom'), dict) else {}
-                merged_cc = dict(existing_cc)
-                merged_cc.update(built_user.get('coursesCustom', {}))
-                merged_user['coursesCustom'] = merged_cc
-                merged_users.append(merged_user)
-            merged['users'] = merged_users or [self._default_yatori_user(1)]
-            self._save_yatori_config_data(merged)
-            if not silent:
-                self.log_system("Yatori 配置已保存")
-            return True
-        except Exception as exc:
-            self._show_error("保存失败", f"保存 Yatori 配置失败：\n{exc}")
-            return False
-
-    def _save_autovisor_form(self, silent=False):
-        if self.ui_mode != 'tk':
-            return True
-        try:
-            self._save_autovisor_config_data(self._build_autovisor_config_from_form())
-            if not silent:
-                self.log_system("Autovisor 配置已保存")
-            return True
-        except Exception as exc:
-            self._show_error("保存失败", f"保存 Autovisor 配置失败：\n{exc}")
-            return False
-
-    def save_all_settings(self):
-        y_saved = self._save_yatori_form(silent=False)
-        a_saved = self._save_autovisor_form(silent=False)
-        if y_saved and a_saved:
-            self._show_info("保存成功", "启动器配置已写入对应配置文件。")
-
-    def open_current_settings_dir(self):
-        self.open_config_dir('yatori' if self.current_settings_tab == 'yatori' else 'autovisor')
 
     def log(self, source, message, tag='', replace_last=False):
         """添加日志到指定源"""
@@ -2817,76 +1435,12 @@ class UnifiedLauncher:
         log_line = f"[{timestamp}] {message}\n"
         self._append_log_history(source, log_line, replace_last=replace_last)
 
-        if source == 'system':
-            self.log_queues['system'].put((log_line, tag, replace_last))
-        elif source == 'yatori':
-            self.log_queues['yatori'].put((log_line, tag, replace_last))
-        elif source == 'autovisor':
-            self.log_queues['autovisor'].put((log_line, tag, replace_last))
-
     def log_system(self, message, replace_last=False):
         """记录系统日志"""
         self.log('system', message, 'system', replace_last=replace_last)
 
-    def start_log_update(self):
-        """启动日志更新循环"""
-        self.update_logs()
 
-    def _render_log_widget(self, widget, source):
-        widget.config(state='normal')
-        widget.delete('1.0', tk.END)
-        history = self.log_history.get(source, [])
-        if history:
-            widget.insert(tk.END, '\n'.join(history) + '\n')
-        widget.see(tk.END)
-        widget.config(state='disabled')
 
-    def update_logs(self):
-        """更新日志显示"""
-        # 更新系统日志
-        while not self.log_queues['system'].empty():
-            try:
-                log_line, tag, replace_last = self.log_queues['system'].get_nowait()
-                if replace_last:
-                    self._render_log_widget(self.system_log, 'system')
-                else:
-                    self.system_log.config(state='normal')
-                    self.system_log.insert(tk.END, log_line)
-                    self.system_log.see(tk.END)
-                    self.system_log.config(state='disabled')
-            except queue.Empty:
-                break
-
-        # 更新 Yatori 日志
-        while not self.log_queues['yatori'].empty():
-            try:
-                log_line, tag, replace_last = self.log_queues['yatori'].get_nowait()
-                if replace_last:
-                    self._render_log_widget(self.yatori_log, 'yatori')
-                else:
-                    self.yatori_log.config(state='normal')
-                    self.yatori_log.insert(tk.END, log_line)
-                    self.yatori_log.see(tk.END)
-                    self.yatori_log.config(state='disabled')
-            except queue.Empty:
-                break
-
-        # 更新 Autovisor 日志
-        while not self.log_queues['autovisor'].empty():
-            try:
-                log_line, tag, replace_last = self.log_queues['autovisor'].get_nowait()
-                if replace_last:
-                    self._render_log_widget(self.autovisor_log, 'autovisor')
-                else:
-                    self.autovisor_log.config(state='normal')
-                    self.autovisor_log.insert(tk.END, log_line)
-                    self.autovisor_log.see(tk.END)
-                    self.autovisor_log.config(state='disabled')
-            except queue.Empty:
-                break
-
-        # 继续循环
-        self._after(100, self.update_logs)
 
     def start_script(self, script_type):
         """启动指定脚本"""
@@ -2916,9 +1470,6 @@ class UnifiedLauncher:
         """启动 Yatori"""
         if self.running['yatori'] or self.starting['yatori']:
             self.log_system("Yatori 已经在运行或启动中")
-            return
-
-        if hasattr(self, '_save_yatori_form') and not self._save_yatori_form(silent=True):
             return
 
         self.yatori_path = self.find_yatori_path(self.get_base_dir())
@@ -2966,7 +1517,6 @@ class UnifiedLauncher:
                 )
 
                 self._mark_runtime_running('yatori', process)
-                self.update_ui_state('yatori', True)
                 if self.stop_requested.get('yatori'):
                     self._terminate_process_tree(process, "Yatori")
 
@@ -2979,7 +1529,6 @@ class UnifiedLauncher:
                 return_code = process.wait()
                 was_requested = self.stop_requested.get('yatori', False)
                 self._mark_runtime_stopped('yatori', process)
-                self.update_ui_state('yatori', False)
                 if return_code:
                     self.log_system(f"Yatori 已退出，返回码: {return_code}")
                 else:
@@ -2989,7 +1538,6 @@ class UnifiedLauncher:
             except Exception as e:
                 self.log_system(f"Yatori 启动失败: {str(e)}")
                 self._mark_runtime_stopped('yatori')
-                self.update_ui_state('yatori', False)
                 self._notify_runtime_event("Yatori 启动失败", str(e), error=True)
 
         # 在后台线程运行
@@ -3087,9 +1635,6 @@ class UnifiedLauncher:
 
         if self.running['autovisor'] or self.starting['autovisor']:
             self.log_system("Autovisor 已经在运行或启动中")
-            return
-
-        if hasattr(self, '_save_autovisor_form') and not self._save_autovisor_form(silent=True):
             return
 
         self.autovisor_path = self.find_autovisor_path(self.get_base_dir())
@@ -3216,7 +1761,6 @@ class UnifiedLauncher:
                 )
 
                 self._mark_runtime_running('autovisor', process)
-                self.update_ui_state('autovisor', True)
                 if self.stop_requested.get('autovisor'):
                     self._terminate_process_tree(process, "Autovisor")
 
@@ -3229,7 +1773,6 @@ class UnifiedLauncher:
                 return_code = process.wait()
                 was_requested = self.stop_requested.get('autovisor', False)
                 self._mark_runtime_stopped('autovisor', process)
-                self.update_ui_state('autovisor', False)
                 if return_code:
                     self.log_system(f"Autovisor 已退出，返回码: {return_code}")
                 else:
@@ -3239,7 +1782,6 @@ class UnifiedLauncher:
             except Exception as e:
                 self.log_system(f"Autovisor 启动失败: {str(e)}")
                 self._mark_runtime_stopped('autovisor')
-                self.update_ui_state('autovisor', False)
                 self._notify_runtime_event("Autovisor 启动失败", str(e), error=True)
 
         # 在后台线程运行
@@ -3284,7 +1826,6 @@ class UnifiedLauncher:
             self.stop_requested['yatori'] = True
             self._terminate_process_tree(self.processes['yatori'], "Yatori")
             self._mark_runtime_stopped('yatori')
-            self.update_ui_state('yatori', False)
             self.log_system("Yatori 已关闭刷课。")
 
     def stop_autovisor(self):
@@ -3298,7 +1839,6 @@ class UnifiedLauncher:
             self.stop_requested['autovisor'] = True
             self._terminate_process_tree(self.processes['autovisor'], "Autovisor")
             self._mark_runtime_stopped('autovisor')
-            self.update_ui_state('autovisor', False)
             self.log_system("Autovisor 已关闭刷课。")
 
     def stop_practice_mode(self):
@@ -3310,33 +1850,6 @@ class UnifiedLauncher:
         self.processes['practice'] = None
         self.running['practice'] = False
 
-    def update_ui_state(self, script_type, is_running):
-        """更新 UI 状态"""
-        if self.ui_mode != 'tk':
-            return
-
-        def update():
-            # 获取对应的标签索引 (系统动态:0, Yatori:1, Autovisor:2)
-            if script_type == 'yatori':
-                if is_running:
-                    self.yatori_btn.config(state='normal', text='停止运行', style='Danger.TButton', command=lambda: self.toggle_script('yatori'))
-                    self.yatori_status.config(text="● 运行中", fg=self.colors['success'])
-                    self.log_notebook.select(1)
-                else:
-                    self.yatori_btn.config(state='normal', text='启动核心', style='Primary.TButton', command=lambda: self.toggle_script('yatori'))
-                    self.yatori_status.config(text="● 未启动", fg=self.colors['text_muted'])
-
-            elif script_type == 'autovisor':
-                if is_running:
-                    self.autovisor_btn.config(state='normal', text='停止运行', style='Danger.TButton', command=lambda: self.toggle_script('autovisor'))
-                    self.autovisor_status.config(text="● 运行中", fg=self.colors['success'])
-                    self.log_notebook.select(2)
-                else:
-                    self.autovisor_btn.config(state='normal', text='启动核心', style='Primary.TButton', command=lambda: self.toggle_script('autovisor'))
-                    self.autovisor_status.config(text="● 未启动", fg=self.colors['text_muted'])
-
-        # 在主线程更新 UI
-        self._after(0, update)
 
     # ============================================================
     # 题库服务器管理
@@ -4114,12 +2627,6 @@ class UnifiedLauncher:
         """清空所有日志"""
         for key in self.log_history:
             self.log_history[key] = []
-
-        if self.ui_mode == 'tk':
-            for log_widget in [self.system_log, self.yatori_log, self.autovisor_log]:
-                log_widget.config(state='normal')
-                log_widget.delete(1.0, tk.END)
-                log_widget.config(state='disabled')
         self.log_system("日志面板已清空")
 
     def export_logs_to_file(self, tab, text):
@@ -4139,23 +2646,6 @@ class UnifiedLauncher:
             self.log_system(f"导出日志失败: {exc}")
             return {"ok": False, "message": f"导出失败: {exc}"}
 
-    def copy_current_log(self):
-        """复制当前显示的日志"""
-        if self.ui_mode != 'tk':
-            return
-        tab_id = self.log_notebook.index(self.log_notebook.select())
-        if tab_id == 0:
-            text = self.system_log.get(1.0, tk.END)
-        elif tab_id == 1:
-            text = self.yatori_log.get(1.0, tk.END)
-        elif tab_id == 2:
-            text = self.autovisor_log.get(1.0, tk.END)
-        else:
-            return
-
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text.strip())
-        self.log_system("日志内容已复制到剪贴板")
 
     def open_config_dir(self, script_type):
         """打开配置目录"""
@@ -4198,12 +2688,10 @@ class UnifiedLauncher:
                     installed = result.get('installed', False)
                     
                     if has_update and installed:
-                        # 有更新可用
                         version = result['info']['version']
                         self._after(0, lambda: self.show_update_available_notification(version))
                     elif not installed:
-                        # 未安装
-                        self._after(0, self.show_yatori_install_dialog)
+                        self.log_system("未安装 Yatori，可在 Web 界面点击“安装 Yatori 更新”。")
             except Exception as e:
                 self.log_system(f"检查更新失败: {e}")
         
@@ -4213,9 +2701,60 @@ class UnifiedLauncher:
     def show_update_available_notification(self, version):
         """显示更新可用通知"""
         self.log_system(f"检测到 Yatori 新版本: {version}")
-        # 更新按钮显示有新版本
-        if self.ui_mode == 'tk':
-            self.yatori_update_btn.config(text=f"⬆️ 更新可用 ({version})")
+
+    def install_yatori_update_async(self, release_info=None):
+        """Install Yatori after an explicit Web UI update action."""
+        if not self.core_manager:
+            self._show_error("系统错误", "核心管理器初始化失败")
+            return False
+        if self.is_updating:
+            self._show_info("管理中心", "正在处理任务，请勿重复操作")
+            return False
+        if self.running.get('yatori'):
+            self._show_warning("Yatori 更新", "请先停止 Yatori，再执行核心更新。")
+            return False
+
+        release_info = release_info or (self.update_info or {}).get('info')
+        if not release_info:
+            self._show_warning("Yatori 更新", "暂无可安装的版本信息，请先检查更新。")
+            return False
+
+        self.is_updating = True
+        self.log_system(f"开始安装 Yatori {release_info.get('version', 'unknown')}...")
+
+        def on_progress(info):
+            progress = info.get('progress', 0) or 0
+            downloaded = info.get('downloaded') or 0
+            total = info.get('total')
+            if total:
+                self.log_system(
+                    f"Yatori 下载中: {progress:.1f}% ({downloaded}/{total} bytes)",
+                    replace_last=True,
+                )
+            else:
+                self.log_system(f"Yatori 下载中: {downloaded} bytes", replace_last=True)
+
+        def install_worker():
+            success = False
+            error = None
+            try:
+                success = self.core_manager.install_yatori(release_info, on_progress)
+            except Exception as exc:
+                error = exc
+            finally:
+                self.is_updating = False
+                if success:
+                    self.update_info = None
+                    self.yatori_path = self.find_yatori_path(self.get_base_dir())
+                    self.log_system("✅ Yatori 核心处理完成")
+                    self._show_info("Yatori 更新", "Yatori 核心已成功安装/更新。")
+                else:
+                    message = str(error) if error else "下载或安装失败"
+                    self.log_system(f"❌ Yatori 安装失败: {message}")
+                    self._show_error("Yatori 更新", f"{message}\n\n请检查网络设置或稍后重试。")
+
+        threading.Thread(target=install_worker, daemon=True).start()
+        return True
 
     def check_autovisor_update_async(self):
         """异步检查 Autovisor 最新版本"""
@@ -4228,8 +2767,6 @@ class UnifiedLauncher:
             return
 
         self.autovisor_version_checking = True
-        if self.ui_mode == 'tk':
-            self.autovisor_update_btn.config(state='disabled', text="⏳ 正在检查...")
         self.log_system("正在检查 Autovisor 最新版本...")
 
         def check():
@@ -4242,8 +2779,6 @@ class UnifiedLauncher:
             finally:
                 def finish():
                     self.autovisor_version_checking = False
-                    if self.ui_mode == 'tk':
-                        self.autovisor_update_btn.config(state='normal', text="⬇️ 检查更新")
                     if error:
                         self.log_system(f"Autovisor 版本检查失败: {error}")
                         self._show_error("Autovisor 版本", f"检查版本失败：\n{error}")
@@ -4266,8 +2801,6 @@ class UnifiedLauncher:
         installed = result.get('installed', True)
 
         self.log_system(f"Autovisor 最新版本: {latest_version}")
-        if self.ui_mode == 'tk':
-            self.autovisor_update_btn.config(text=f"⬇️ 检查更新 ({latest_version})")
 
         if not has_update:
             self._show_info(
@@ -4282,13 +2815,8 @@ class UnifiedLauncher:
             f"当前版本: {current_version if installed else '未安装'}\n\n"
             "是否立即下载并自动覆盖更新？"
         )
-        if self.ui_mode == 'web':
-            self.log_system(message.replace("\n", " "))
-            self.log_system("Web UI 已记录更新信息，可通过 install_autovisor_update 动作触发安装。")
-            return
-
-        if self._ask_yes_no("Autovisor 版本", message, default=False):
-            self.install_autovisor_update_async(release_info)
+        self.log_system(message.replace("\n", " "))
+        self.log_system("Web UI 已记录更新信息，可通过 install_autovisor_update 动作触发安装。")
 
     def install_autovisor_update_async(self, release_info=None):
         """后台安装/更新 Autovisor。"""
@@ -4313,8 +2841,6 @@ class UnifiedLauncher:
 
         self.is_updating = True
         self.log_system(f"开始安装 Autovisor {release_info.get('version', 'unknown')}...")
-        if self.ui_mode == 'tk':
-            self.autovisor_update_btn.config(state='disabled', text="⏳ 正在安装...")
 
         def on_progress(info):
             progress = info.get('progress', 0) or 0
@@ -4335,15 +2861,11 @@ class UnifiedLauncher:
             finally:
                 def finish():
                     self.is_updating = False
-                    if self.ui_mode == 'tk':
-                        self.autovisor_update_btn.config(state='normal', text="⬇️ 检查更新")
                     if success:
                         self.autovisor_update_info = None
                         self.autovisor_path = self.find_autovisor_path(self.get_base_dir())
                         self.log_system("✅ Autovisor 核心处理完成")
                         self._show_info("Autovisor 更新", "Autovisor 核心已成功安装/更新。")
-                        if self.ui_mode == 'tk':
-                            self.autovisor_version_label.config(text=f"当前核心版本: {self._get_autovisor_display_version()}")
                     else:
                         message = str(error) if error else "下载或安装失败"
                         self.log_system(f"❌ Autovisor 安装失败: {message}")
@@ -4354,232 +2876,33 @@ class UnifiedLauncher:
         threading.Thread(target=install_worker, daemon=True).start()
         return True
 
-    def show_yatori_install_dialog(self):
-        """显示 Yatori 安装/更新对话框"""
-        if self.ui_mode != 'tk':
-            self.log_system("检测到 Yatori 需要安装或更新，可稍后通过更新流程处理。")
-            return
 
-        dialog = tk.Toplevel(self.root)
-        dialog.title("核心管理")
-        dialog.geometry("500x350")
-        dialog.configure(bg=self.colors['card'])
-        dialog.resizable(False, False)
-        dialog.transient(self.root)
-        dialog.grab_set()
 
-        # 居中显示
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
-        y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{x}+{y}")
-
-        # 内容容器
-        content_frame = tk.Frame(dialog, bg=self.colors['card'], padx=30, pady=30)
-        content_frame.pack(fill=tk.BOTH, expand=True)
-
-        if self.update_info and self.update_info.get('installed'):
-            title_text = "发现新版本"
-            icon_color = self.colors['primary']
-            # 修正：从 local_versions 读取当前版本
-            current_version = self._get_yatori_display_version()
-            latest_version = self.update_info['info']['version']
-            message = f"Yatori 有新版本可用\n\n当前版本: {current_version}\n最新版本: {latest_version}"
-        else:
-            title_text = "安装核心组件"
-            icon_color = self.colors['warning']
-            message = "检测到环境缺失 Yatori 核心组件。\n\nYatori 用于处理非智慧树平台的课程脚本，包含学习通、英华、各大学院等平台。"
-
-        # 标题
-        header_lbl = tk.Label(content_frame, text=title_text, font=('Microsoft YaHei', 16, 'bold'),
-                              bg=self.colors['card'], fg=self.colors['text'])
-        header_lbl.pack(anchor=tk.W, pady=(0, 5))
-
-        # 描述文字
-        msg_lbl = tk.Label(content_frame, text=message, font=('Microsoft YaHei', 10),
-                           bg=self.colors['card'], fg=self.colors['text_muted'],
-                           wraplength=440, justify=tk.LEFT)
-        msg_lbl.pack(anchor=tk.W, pady=(0, 25))
-
-        # 进度区域 (初始隐藏)
-        progress_container = tk.Frame(content_frame, bg=self.colors['card'])
-        
-        progress_bar = ttk.Progressbar(progress_container, style="Modern.Horizontal.TProgressbar",
-                                       maximum=100, length=440, mode='determinate')
-        progress_bar.pack(fill=tk.X, pady=(0, 10))
-
-        status_label = tk.Label(progress_container, text="准备就绪", font=('Microsoft YaHei', 9),
-                                bg=self.colors['card'], fg=self.colors['primary'])
-        status_label.pack(anchor=tk.W)
-
-        # 按钮区域
-        btn_frame = tk.Frame(content_frame, bg=self.colors['card'])
-        btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
-
-        def _fmt_size(size_bytes):
-            if size_bytes is None:
-                return "未知"
-            for unit in ['B', 'KB', 'MB', 'GB']:
-                if size_bytes < 1024:
-                    return f"{size_bytes:.1f} {unit}"
-                size_bytes /= 1024
-            return f"{size_bytes:.1f} TB"
-
-        def _fmt_time(seconds):
-            if seconds is None:
-                return "未知"
-            seconds = int(seconds)
-            if seconds < 60:
-                return f"{seconds}秒"
-            minutes, sec = divmod(seconds, 60)
-            if minutes < 60:
-                return f"{minutes}分{sec}秒"
-            hours, minutes = divmod(minutes, 60)
-            return f"{hours}时{minutes}分{sec}秒"
-
-        def on_progress(info):
-            def update():
-                progress = info.get('progress', 0) or 0
-                downloaded = info.get('downloaded')
-                total = info.get('total')
-                speed = info.get('speed')
-                elapsed = info.get('elapsed')
-                eta = info.get('eta')
-
-                progress_bar['value'] = progress
-
-                if total:
-                    status_label.config(
-                        text=(
-                            f"下载中 {progress:.1f}% | "
-                            f"{_fmt_size(downloaded)}/{_fmt_size(total)} | "
-                            f"{_fmt_size(speed)}/s | "
-                            f"已用 {_fmt_time(elapsed)} | "
-                            f"剩余 {_fmt_time(eta)}"
-                        ),
-                        fg=self.colors['primary']
-                    )
-                else:
-                    status_label.config(
-                        text=(
-                            f"下载中 | {_fmt_size(downloaded)} | "
-                            f"{_fmt_size(speed)}/s | "
-                            f"已用 {_fmt_time(elapsed)}"
-                        ),
-                        fg=self.colors['primary']
-                    )
-
-            self._after(0, update)
-
-        def do_install():
-            """执行安装"""
-            if self.is_updating:
-                return
-            
-            self.is_updating = True
-            install_btn.pack_forget()
-            cancel_btn.config(text="隐藏窗口", command=dialog.destroy)
-            
-            progress_container.pack(fill=tk.X, pady=10)
-            status_label.config(text="正在从 GitHub 下载资源包...")
-
-            def install_thread():
-                try:
-                    # 获取最新版本信息（如果没有）
-                    if not self.update_info or not self.update_info.get('info'):
-                        release_info = self.core_manager.get_yatori_latest_release()
-                    else:
-                        release_info = self.update_info['info']
-
-                    if not release_info:
-                        self._after(0, lambda: status_label.config(text="❌ 获取版本信息失败", fg=self.colors['danger']))
-                        return
-
-                    # 执行安装
-                    success = self.core_manager.install_yatori(release_info, on_progress)
-                    
-                    if success:
-                        self._after(0, lambda: self.on_install_success(dialog))
-                    else:
-                        self._after(0, lambda: self.on_install_failed(dialog, status_label))
-                except Exception as e:
-                    self._after(0, lambda: self.on_install_failed(dialog, status_label, str(e)))
-                finally:
-                    self.is_updating = False
-
-            thread = threading.Thread(target=install_thread, daemon=True)
-            thread.start()
-
-        def do_cancel():
-            """取消安装"""
-            dialog.destroy()
-            self.log_system("用户关闭了安装向导")
-
-        install_btn = ttk.Button(btn_frame, text=" 立即下载并安装 ", style="Primary.TButton", command=do_install)
-        install_btn.pack(side=tk.RIGHT)
-
-        cancel_btn = ttk.Button(btn_frame, text=" 稍后处理 ", style="Outline.TButton", command=do_cancel)
-        cancel_btn.pack(side=tk.RIGHT, padx=10)
-
-    def on_install_success(self, dialog):
-        """安装成功回调"""
-        self._show_info("管理中心", "Yatori 核心已成功安装/更新！\n\n现在您可以正常启动该核心了。")
-        dialog.destroy()
-        self.log_system("✅ Yatori 核心处理完成")
-        
-        # 刷新路径
-        self.yatori_path = os.path.join(self.get_base_dir(), "Yatori")
-        
-        # 清空更新信息，刷新安装状态
-        self.update_info = None
-        self.is_updating = False
-        
-        # 更新按钮状态
-        if self.ui_mode == 'tk':
-            self.yatori_update_btn.config(text="⬇️ 安装/更新核心")
-            self.yatori_version_label.config(text=f"当前核心版本: {self._get_yatori_display_version()}")
-        
-        # 延迟重新检查核心状态
-        self._after(500, self.auto_check_cores)
-
-    def on_install_failed(self, dialog, status_label, error=None):
-        """安装失败回调"""
-        msg = f"操作失败: {error}" if error else "下载失败，请查看系统日志了解详情"
-        status_label.config(text=f"❌ {msg}", fg=self.colors['danger'])
-        self._show_error("管理中心", f"{msg}\n\n常见原因:\n• 网络连接不稳定\n• GitHub 资源不存在\n• 代理镜像不可用\n\n请查看上方系统日志获取详细错误信息。")
-        self.log_system(f"❌ Yatori 安装失败: {error or '请查看日志了解详情'}")
 
     def show_update_dialog(self):
-        """显示手动更新对话框"""
+        """Check and install Yatori from the explicit Web UI action."""
         if not self.core_manager:
             self._show_error("系统错误", "核心管理器初始化失败")
-            return
+            return False
         
         if self.is_updating:
             self._show_info("管理中心", "正在处理任务，请勿重复操作")
-            return
+            return False
 
-        # 重新检查更新
         self.log_system("手动触发版本检查...")
-        if self.ui_mode == 'tk':
-            self.yatori_update_btn.config(state='disabled', text="⏳ 正在检查...")
-        
+
         def check():
             try:
                 result = self.core_manager.check_yatori_update()
                 self._after(0, lambda: self.handle_manual_check_result(result))
-            finally:
-                if self.ui_mode == 'tk':
-                    self._after(0, lambda: self.yatori_update_btn.config(state='normal'))
-        
-        thread = threading.Thread(target=check, daemon=True)
-        thread.start()
+            except Exception as exc:
+                self._show_error("管理中心", f"检查 Yatori 更新失败: {exc}")
+
+        threading.Thread(target=check, daemon=True).start()
+        return True
 
     def handle_manual_check_result(self, result):
-        """处理手动检查结果"""
-        if self.ui_mode == 'tk':
-            self.yatori_update_btn.config(text="⬇️ 安装/更新核心")
-        
+        """Handle the result of an explicit Web UI Yatori update request."""
         if not result:
             self._show_error("管理中心", "无法连接至 GitHub 节点，请检查网络环境。")
             return
@@ -4588,20 +2911,16 @@ class UnifiedLauncher:
         installed = result.get('installed', False)
         
         if not installed:
-            # 未安装
             self.update_info = result
-            self.show_yatori_install_dialog()
+            self.install_yatori_update_async(result.get('info'))
         elif has_update:
-            # 有更新
             self.update_info = result
             version = result['info']['version']
-            if self._ask_yes_no("管理中心", 
-                                   f"检测到 Yatori 新版本: {version}\n\n"
-                                   f"当前版本: {result.get('version', '未知')}\n\n"
-                                   f"是否立即开始下载并自动覆盖更新？"):
-                self.show_yatori_install_dialog()
+            self.log_system(
+                f"检测到 Yatori 新版本 {version}，Web 界面的安装操作已确认，开始更新。"
+            )
+            self.install_yatori_update_async(result.get('info'))
         else:
-            # 已是最新
             version = result.get('version', '未知')
             self._show_info("管理中心", f"当前已是最新版本 ({version})")
 
@@ -4612,32 +2931,16 @@ class UnifiedLauncher:
             self._minimize_main_window()
             return
 
-        if self.ui_mode == 'tk' and hasattr(self, '_save_yatori_form'):
-            self._save_yatori_form(silent=True)
-        elif self.ui_mode != 'tk':
-            try:
-                self.save_settings_from_web(
-                    {
-                        'yatori': self._load_yatori_config_data(),
-                        'autovisor': self._load_autovisor_config_data(),
-                    }
-                )
-            except Exception:
-                pass
-
-        if self.ui_mode == 'tk' and hasattr(self, '_save_autovisor_form'):
-            self._save_autovisor_form(silent=True)
-
-        if self.ui_mode == 'web' and self.web_window and not confirmed:
+        if self.web_window and not confirmed:
             if self._request_web_exit_confirmation():
                 return
 
         if any(self.running.get(name) for name in ('yatori', 'autovisor', 'practice')):
-            if confirmed or self._ask_yes_no("确认退出", "有脚本正在运行，确定要强行退出吗？\n(这可能会导致数据未保存)"):
-                self.stop_all()
-                self.stop_question_bank()
-        else:
-            self.stop_question_bank()
+            if not confirmed:
+                self.log_system("有核心任务正在运行，取消未确认的退出请求。")
+                return
+            self.stop_all()
+        self.stop_question_bank()
         self._close_main_window()
 
 
@@ -4679,6 +2982,9 @@ def main():
         except ImportError:
             pass
 
+    if webview is None:
+        raise RuntimeError("Web 界面依赖 pywebview 不可用，请重新安装项目依赖。")
+
     # FileDialog 兼容常量（不同 pywebview 版本 API 不一致）
     global FD_OPEN, FD_SAVE
     FD_OPEN = getattr(getattr(webview, 'FileDialog', None), 'OPEN',
@@ -4692,15 +2998,7 @@ def main():
     except:
         pass
 
-    root = tk.Tk()
-    root.withdraw()
-
-    if not webview:
-        app = UnifiedLauncher(root, ui_mode='tk')
-        root.mainloop()
-        return
-
-    app = UnifiedLauncher(root, ui_mode='web')
+    app = UnifiedLauncher()
     api = WebLauncherAPI(app)
     html_path = app.resolve_web_ui_path(app.get_base_dir())
     window = webview.create_window(
@@ -4713,23 +3011,17 @@ def main():
         confirm_close=False,
     )
     app.attach_web_window(window)
-    try:
-        dev_mode = '--dev' in sys.argv
-        # 非开发者模式启动后隐藏控制台
-        if not dev_mode and os.name == 'nt':
-            try:
-                import ctypes
-                ctypes.windll.user32.ShowWindow(
-                    ctypes.windll.kernel32.GetConsoleWindow(), 0
-                )
-            except Exception:
-                pass
-        webview.start(debug=dev_mode, http_server=True)
-    finally:
+    dev_mode = '--dev' in sys.argv
+    # 非开发者模式启动后隐藏控制台
+    if not dev_mode and os.name == 'nt':
         try:
-            root.destroy()
+            import ctypes
+            ctypes.windll.user32.ShowWindow(
+                ctypes.windll.kernel32.GetConsoleWindow(), 0
+            )
         except Exception:
             pass
+    webview.start(debug=dev_mode, http_server=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,119 @@
+import inspect
+import re
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import 统一启动器 as launcher_module
+from src.dependencies import CORE_DEPENDENCIES, OPTIONAL_DEPENDENCIES
+from src.launcher_api import WebLauncherAPI
+from 统一启动器 import UnifiedLauncher
+
+
+class _Event:
+    def __init__(self):
+        self.handlers = []
+
+    def __iadd__(self, handler):
+        self.handlers.append(handler)
+        return self
+
+
+class _Events:
+    def __init__(self):
+        self.closing = _Event()
+
+
+class _Window:
+    def __init__(self, selection=None):
+        self.events = _Events()
+        self.selection = selection
+
+    def create_file_dialog(self, *_args, **_kwargs):
+        return self.selection
+
+
+class WebOnlyLauncherTests(unittest.TestCase):
+    def test_launcher_has_no_tk_runtime_contract(self):
+        source = Path(launcher_module.__file__).read_text(encoding="utf-8")
+        forbidden = (
+            "import tkinter",
+            "from tkinter",
+            "tk.Tk(",
+            "ui_mode",
+            "messagebox",
+            "filedialog",
+            "_init_apple_ui",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, source)
+
+        self.assertEqual(
+            list(inspect.signature(UnifiedLauncher.__init__).parameters),
+            ["self"],
+        )
+
+    def test_pywebview_is_a_required_launcher_dependency(self):
+        core_modules = {dependency.module for dependency in CORE_DEPENDENCIES}
+        self.assertIn("webview", core_modules)
+        self.assertEqual(OPTIONAL_DEPENDENCIES, ())
+
+    def test_frontend_api_calls_exist_on_web_bridge(self):
+        project_root = Path(launcher_module.__file__).resolve().parent
+        frontend = (project_root / "web" / "app.js").read_text(encoding="utf-8")
+        called_methods = set(re.findall(r"apiCall\(['\"]([a-z_]+)['\"]", frontend))
+        called_methods.update(re.findall(r"\bapi\.([a-z_]+)\(", frontend))
+        bridge_methods = {
+            name
+            for name, member in inspect.getmembers(WebLauncherAPI, inspect.isfunction)
+            if not name.startswith("_")
+        }
+
+        self.assertTrue(called_methods)
+        self.assertEqual(called_methods - bridge_methods, set())
+
+    def test_attach_web_window_registers_close_handler_and_applies_preferences(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        window = _Window()
+        calls = []
+        launcher._apply_window_preferences = lambda initial=False: calls.append(initial)
+
+        launcher.attach_web_window(window)
+
+        self.assertIs(launcher.web_window, window)
+        self.assertEqual(window.events.closing.handlers, [launcher._handle_web_window_closing])
+        self.assertEqual(calls, [True])
+
+    def test_browser_path_dialog_uses_webview_window(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = _Window(selection=[r"C:\Program Files\Browser\browser.exe"])
+
+        with patch.object(launcher_module, "webview", object()):
+            result = launcher.browse_browser_path_for_web()
+
+        self.assertEqual(
+            result,
+            {"ok": True, "path": r"C:\Program Files\Browser\browser.exe"},
+        )
+
+    def test_unconfirmed_headless_exit_does_not_stop_running_core(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = None
+        launcher.running = {"yatori": True, "autovisor": False, "practice": False}
+        events = []
+        launcher._preference_enabled = lambda *_args, **_kwargs: False
+        launcher.log_system = events.append
+        launcher.stop_all = lambda: events.append("stop_all")
+        launcher.stop_question_bank = lambda: events.append("stop_question_bank")
+        launcher._close_main_window = lambda: events.append("close")
+
+        launcher.on_closing(confirmed=False)
+
+        self.assertNotIn("stop_all", events)
+        self.assertNotIn("close", events)
+        self.assertTrue(any("取消未确认" in entry for entry in events))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -6,7 +6,7 @@
 
 ```text
 .
-├─ 统一启动器.py              # 桌面应用组合入口（仍是后续拆分重点）
+├─ 统一启动器.py              # 仅 WebView 的桌面应用组合入口（仍是后续拆分重点）
 ├─ src/                       # 启动器后端、题库服务、更新与通用基础设施
 │  ├─ launcher_api.py         # pywebview 暴露给前端的最小 API
 │  ├─ dependencies.py         # 唯一的启动器依赖定义与检查入口
@@ -28,7 +28,7 @@
 
 ## 依赖
 
-- `requirements.txt`：统一启动器和 Autovisor 基础运行依赖。
+- `requirements.txt`：统一启动器和 Autovisor 基础运行依赖，包含必需的 `pywebview`。
 - `requirements-optional.txt`：不使用 `Autovisor/runtime_deps` 时安装 OpenCV/NumPy。
 - `Autovisor/requirements-web.txt`：实验性 FastAPI Dashboard。
 - `requirements-dev.txt`：测试环境。
@@ -54,6 +54,10 @@ py 统一启动器.py
 py Autovisor\Autovisor.py
 py Autovisor\Autovisor_Multi.py
 ```
+
+统一启动器只提供 `web/` 前端，并通过 `pywebview` 显示；项目不再包含 Tk
+界面或 Tk 降级入口。若启动时提示 `pywebview` 不可用，请重新安装
+`requirements.txt` 后再运行。
 
 多账号配置使用 `user-account-N`、`course-url-N` 等编号小节。未编号的浏览器、
 脚本和课程选项可作为所有账号的公共默认值；每个账号使用独立 Cookie 和进程，

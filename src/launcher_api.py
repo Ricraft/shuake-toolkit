@@ -1,7 +1,8 @@
 """Thin pywebview API adapter for :class:`UnifiedLauncher`.
 
 Keeping the bridge free of UI and process-management logic makes the public
-surface easy to inspect and test without importing the 5,000-line launcher.
+surface easy to inspect and test without coupling JavaScript to the large
+launcher implementation.
 """
 
 

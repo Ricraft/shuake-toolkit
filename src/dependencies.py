@@ -1,7 +1,7 @@
 """Launcher dependency discovery and the legacy auto-install bootstrap.
 
-The dependency list lives here so importing the launcher no longer mixes UI
-construction with package-management policy.  ``requirements.txt`` mirrors
+The dependency list lives here so importing the Web launcher no longer mixes
+startup logic with package-management policy. ``requirements.txt`` mirrors
 these constraints.
 """
 
@@ -27,11 +27,10 @@ CORE_DEPENDENCIES = (
     Dependency("jieba", "jieba>=0.42.1,<1"),
     Dependency("Crypto", "pycryptodome>=3.20,<4"),
     Dependency("playwright", "playwright>=1.52,<2"),
-)
-
-OPTIONAL_DEPENDENCIES = (
     Dependency("webview", "pywebview>=4,<5"),
 )
+
+OPTIONAL_DEPENDENCIES = ()
 
 
 def find_missing_dependencies(
