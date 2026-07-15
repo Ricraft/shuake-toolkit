@@ -32,6 +32,7 @@ from src.course_catalog import (
 )
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
+from src.process_supervisor import ProcessSupervisor
 try:
     import yaml
 except ImportError:
@@ -240,106 +241,55 @@ class UnifiedLauncher:
             return version_info.get('display', self.AUTOVISOR_DISPLAY_VERSION)
         return self.AUTOVISOR_DISPLAY_VERSION
 
-    def _build_encoding_candidates(self, *preferred):
-        candidates = list(preferred)
-        candidates.extend(
-            [
-                locale.getpreferredencoding(False),
-                getattr(sys.stdout, "encoding", None),
-                "utf-8-sig",
-                "utf-8",
-                "gb18030",
-                "gbk",
-                "cp936",
-            ]
-        )
+    def _get_process_supervisor(self):
+        supervisor = getattr(self, '_process_supervisor', None)
+        processes = getattr(self, 'processes', {})
+        running = getattr(self, 'running', {})
+        starting = getattr(self, 'starting', {})
+        stop_requested = getattr(self, 'stop_requested', {})
+        if (
+            supervisor is None
+            or supervisor.processes is not processes
+            or supervisor.running is not running
+            or supervisor.starting is not starting
+            or supervisor.stop_requested is not stop_requested
+        ):
+            supervisor = ProcessSupervisor(
+                processes=processes,
+                running=running,
+                starting=starting,
+                stop_requested=stop_requested,
+                state_lock=getattr(self, '_runtime_lock', None),
+                log_line=getattr(self, 'log', None),
+                log_system=getattr(self, 'log_system', None),
+            )
+            self._process_supervisor = supervisor
+        return supervisor
 
-        unique = []
-        seen = set()
-        for candidate in candidates:
-            if not candidate:
-                continue
-            normalized = candidate.lower()
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            unique.append(candidate)
-        return unique
+    def _build_encoding_candidates(self, *preferred):
+        return self._get_process_supervisor().build_encoding_candidates(*preferred)
 
     def _decode_output_line(self, raw_line, encodings):
-        for encoding in encodings:
-            try:
-                return raw_line.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-        return raw_line.decode(encodings[0], errors='replace')
+        return self._get_process_supervisor().decode_output_line(raw_line, encodings)
 
     def _clean_log_text(self, text):
-        text = self.ANSI_ESCAPE_RE.sub('', text)
-        text = text.replace('\t', ' ')
-        text = text.replace('\r', '')
-        return text.rstrip('\r\n ')
+        return self._get_process_supervisor().clean_log_text(text)
 
     def _normalize_progress_log(self, text):
-        if '%' not in text or '|' not in text:
-            return text
-
-        match = self.PROGRESS_LINE_RE.match(text.strip())
-        if not match:
-            return text
-
-        desc = ' '.join(match.group('desc').split())
-        percent = match.group('percent')
-        suffix = ' '.join(match.group('suffix').split())
-        if suffix:
-            return f"{desc} {percent} | {suffix}"
-        return f"{desc} {percent}"
+        return self._get_process_supervisor().normalize_progress_log(text)
 
     def _is_progress_log(self, text):
-        normalized = self._normalize_progress_log(text)
-        return normalized != text or ('%' in text and '进度' in text)
+        return self._get_process_supervisor().is_progress_log(text)
 
     def _get_subprocess_window_kwargs(self):
-        creationflags = 0
-        startupinfo = None
-        if sys.platform == 'win32':
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-            creationflags |= getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-            creationflags |= getattr(subprocess, 'DETACHED_PROCESS', 0)
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = 0
-        return creationflags, startupinfo
+        return self._get_process_supervisor().subprocess_window_kwargs()
 
     def _stream_process_output(self, process, source, encodings):
-        if not process or not process.stdout:
-            return
-
-        buffer = b''
-        while True:
-            raw_chunk = process.stdout.read(1)
-            if not raw_chunk:
-                break
-
-            if isinstance(raw_chunk, str):
-                raw_chunk = raw_chunk.encode(encodings[0], errors='replace')
-
-            if raw_chunk in (b'\r', b'\n'):
-                if buffer:
-                    line = self._decode_output_line(buffer, encodings)
-                    line = self._clean_log_text(line)
-                    if line:
-                        self.log(source, line, replace_last=self._is_progress_log(line))
-                    buffer = b''
-                continue
-
-            buffer += raw_chunk
-
-        if buffer:
-            line = self._decode_output_line(buffer, encodings)
-            line = self._clean_log_text(line)
-            if line:
-                self.log(source, line, replace_last=self._is_progress_log(line))
+        self._get_process_supervisor().stream_process_output(
+            process,
+            source,
+            encodings,
+        )
 
     def _get_yatori_command(self):
         exe_path = os.path.join(self.yatori_path, 'yatori-go-console.exe')
@@ -613,56 +563,18 @@ class UnifiedLauncher:
         }
 
     def _run_logged_command(self, cmd, cwd, source='system', env=None):
-        creationflags, startupinfo = self._get_subprocess_window_kwargs()
-
-        process = subprocess.Popen(
+        return self._get_process_supervisor().run_logged_command(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            text=False,
-            creationflags=creationflags,
-            startupinfo=startupinfo,
-            env=env,
-        )
-        self._stream_process_output(
-            process,
+            cwd,
             source,
-            self._build_encoding_candidates(locale.getpreferredencoding(False), 'utf-8', 'gb18030', 'gbk')
+            env,
         )
-        return process.wait()
 
     def _terminate_process_tree(self, process, label):
-        if not process:
-            return
-
-        pid = getattr(process, 'pid', None)
-        if pid is None:
-            return
-
-        if sys.platform == 'win32':
-            creationflags, startupinfo = self._get_subprocess_window_kwargs()
-            try:
-                subprocess.run(
-                    ['taskkill', '/PID', str(pid), '/T', '/F'],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    creationflags=creationflags,
-                    startupinfo=startupinfo,
-                )
-                return
-            except Exception as exc:
-                self.log_system(f"{label} 进程树终止失败，回退到普通终止: {exc}")
-
-        try:
-            process.terminate()
-            process.wait(timeout=5)
-        except Exception:
-            try:
-                process.kill()
-            except Exception:
-                pass
+        return self._get_process_supervisor().terminate_process_tree(
+            process,
+            label,
+        )
 
     def _install_autovisor_with_mirrors(self, python_exe, install_args):
         last_error = None
@@ -3250,26 +3162,16 @@ class UnifiedLauncher:
 
     def _claim_runtime_start(self, script_type):
         """Atomically reserve a runtime start so rapid clicks cannot fork twice."""
-        with self._runtime_lock:
-            if self.running.get(script_type) or self.starting.get(script_type):
-                return False
-            self.stop_requested[script_type] = False
-            self.starting[script_type] = True
-            return True
+        return self._get_process_supervisor().claim_start(script_type)
 
     def _mark_runtime_running(self, script_type, process):
-        with self._runtime_lock:
-            self.processes[script_type] = process
-            self.starting[script_type] = False
-            self.running[script_type] = True
+        self._get_process_supervisor().mark_running(script_type, process)
 
     def _mark_runtime_stopped(self, script_type, process=None):
-        with self._runtime_lock:
-            current = self.processes.get(script_type)
-            if process is None or current is None or current is process:
-                self.processes[script_type] = None
-                self.running[script_type] = False
-                self.starting[script_type] = False
+        return self._get_process_supervisor().mark_stopped(
+            script_type,
+            process,
+        )
 
     def start_yatori(self):
         """启动 Yatori"""
