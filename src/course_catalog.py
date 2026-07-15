@@ -41,7 +41,7 @@ def autovisor_account_section(account_index: int) -> str:
 
 
 def read_autovisor_username(base_dir: str | Path, account_index: int) -> str:
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     parser.read(Path(base_dir) / "Autovisor" / "configs.ini", encoding="utf-8")
     return parser.get(
         autovisor_account_section(account_index),

@@ -184,7 +184,7 @@ class ConfigManager:
 
     def update(self, data: ConfigUpdate) -> dict:
         import configparser
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(interpolation=None)
         if self.config_path.exists():
             parser.read(self.config_path, encoding="utf-8")
 

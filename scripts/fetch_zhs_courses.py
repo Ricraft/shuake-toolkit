@@ -23,7 +23,7 @@ from src.atomic_io import atomic_dump_json
 
 def _detect_browser_path():
     config_path = os.path.join(SCRIPT_DIR, "Autovisor", "configs.ini")
-    cfg = configparser.ConfigParser()
+    cfg = configparser.ConfigParser(interpolation=None)
     try:
         cfg.read(config_path, encoding='utf-8')
     except UnicodeDecodeError:
@@ -65,7 +65,7 @@ def load_config(account_index=1):
     )
 
     config_path = os.path.join(SCRIPT_DIR, "Autovisor", "configs.ini")
-    config = configparser.ConfigParser()
+    config = configparser.ConfigParser(interpolation=None)
     try:
         config.read(config_path, encoding='utf-8')
     except UnicodeDecodeError:

@@ -73,10 +73,37 @@ class LauncherStateTests(unittest.TestCase):
                 "缓存命中时不应检查 Python"
             )
 
-            result = launcher.get_autovisor_courses_from_web(1)
+            result = launcher.get_autovisor_courses_from_web(0)
 
             self.assertEqual(result["courses"][0]["name"], "缓存课程")
             self.assertEqual(catalog.request, ("zhs", 1, "second"))
+
+    def test_autovisor_course_fetch_maps_visible_position_to_numbered_account(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.log_system = lambda _message: None
+
+        class Catalog:
+            def __init__(self, base_dir):
+                self.base_dir = Path(base_dir)
+
+            def get_cached(self, provider, index, identity):
+                self.request = (provider, index, identity)
+                return {"ok": True, "courses": []}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "Autovisor").mkdir()
+            (root / "Autovisor" / "configs.ini").write_text(
+                "[user-account-2]\nusername = second\npassword = p2\n"
+                "[user-account-7]\nusername = seventh\npassword = p7\n",
+                encoding="utf-8",
+            )
+            catalog = Catalog(root)
+            launcher._course_catalog_service = catalog
+            launcher.get_base_dir = lambda: str(root)
+
+            self.assertTrue(launcher.get_autovisor_courses_from_web(1)["ok"])
+            self.assertEqual(catalog.request, ("zhs", 6, "seventh"))
 
     def test_autovisor_course_fetch_rejects_unconfigured_account(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)

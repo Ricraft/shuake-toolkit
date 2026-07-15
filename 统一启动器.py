@@ -15,28 +15,22 @@ import locale
 import glob
 import re
 import shutil
-import configparser
-import io
 import json
 import urllib.request
 from datetime import datetime
 import queue
 
-from src.atomic_io import atomic_dump_json, atomic_write_text
+from src.atomic_io import atomic_dump_json
+from src.config_service import ConfigService, read_ini_config
 from src.course_catalog import (
     CourseCatalogError,
     CourseCatalogService,
     normalize_account_index,
     parse_zhs_course_data,
-    read_autovisor_username,
 )
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
-try:
-    import yaml
-except ImportError:
-    yaml = None
 
 try:
     from src.题库服务器 import (
@@ -462,20 +456,7 @@ class UnifiedLauncher:
         return False
 
     def _read_autovisor_config(self, config_path):
-        for encoding in ('utf-8', 'utf-8-sig', 'gbk', 'gb18030'):
-            parser = configparser.ConfigParser()
-            parser.optionxform = str
-            try:
-                with open(config_path, 'r', encoding=encoding) as handle:
-                    parser.read_file(handle)
-                return parser
-            except (UnicodeDecodeError, configparser.Error):
-                continue
-        parser = configparser.ConfigParser()
-        parser.optionxform = str
-        with open(config_path, 'r', encoding='utf-8', errors='replace') as handle:
-            parser.read_file(handle)
-        return parser
+        return read_ini_config(config_path)
 
     def _copy_config_section(self, parser, source, target):
         if not parser.has_section(source) or parser.has_section(target):
@@ -670,75 +651,13 @@ class UnifiedLauncher:
                     self._after(0, self.start_autovisor)
 
     def _default_yatori_user(self, index=None):
-        return {
-            'accountType': 'XUEXITONG',
-            'url': '',
-            'remarkName': f'账号{index}' if index else '',
-            'account': '',
-            'password': '',
-            'isProxy': 0,
-            'informEmails': [],
-            'coursesCustom': {
-                'studyTime': '',
-                'cxNode': 3,
-                'cxChapterTestSw': 1,
-                'cxWorkSw': 1,
-                'cxExamSw': 1,
-                'shuffleSw': 0,
-                'videoModel': 1,
-                'autoExam': 0,
-                'examAutoSubmit': 0,
-                'includeCourses': [],
-                'excludeCourses': [],
-                'coursesSettings': [],
-            },
-        }
+        return ConfigService.default_yatori_user(index)
 
     def _default_yatori_config(self):
-        return {
-            'setting': {
-                'basicSetting': {
-                    'completionTone': 1,
-                    'colorLog': 1,
-                    'logOutFileSw': 1,
-                    'logLevel': 'INFO',
-                    'logModel': 0,
-                    'WebModel': 0,
-                },
-                'emailInform': {
-                    'sw': 0,
-                    'SMTPHost': '',
-                    'SMTPPort': 0,
-                    'userName': '',
-                    'password': '',
-                },
-                'aiSetting': {
-                    'aiType': 'TONGYI',
-                    'aiUrl': '',
-                    'model': '',
-                    'API_KEY': '',
-                },
-                'apiQueSetting': {
-                    'url': 'http://127.0.0.1:8083/query',
-                },
-            },
-            'users': [self._default_yatori_user(1)],
-        }
+        return ConfigService.default_yatori_config()
 
     def _default_autovisor_account(self, index=1):
-        return {
-            'name': f'账号 {index}',
-            'username': '',
-            'password': '',
-            'driver': 'Chrome',
-            'exe_path': self._find_browser_executable('chrome') or self._find_browser_executable('edge') or '',
-            'enable_auto_captcha': True,
-            'enable_hide_window': False,
-            'limit_max_time': '30',
-            'limit_speed': '1.0',
-            'sound_off': True,
-            'course_urls': [],
-        }
+        return self._get_config_service().default_autovisor_account(index)
 
     def _get_yatori_config_path(self):
         self.yatori_path = self.find_yatori_path(self.get_base_dir())
@@ -748,37 +667,36 @@ class UnifiedLauncher:
         self.autovisor_path = self.find_autovisor_path(self.get_base_dir())
         return os.path.join(self.autovisor_path, 'configs.ini')
 
+    def _get_config_service(self):
+        service = getattr(self, '_config_service', None)
+        if service is None:
+            service = ConfigService(
+                self._get_yatori_config_path,
+                self._get_autovisor_config_path,
+                browser_finder=self._find_browser_executable,
+                logger=self.log_system,
+                speed_options=self.AUTOVISOR_SPEED_OPTIONS,
+            )
+            self._config_service = service
+        return service
+
     def _as_int(self, value, default=0):
-        try:
-            return int(str(value).strip())
-        except (TypeError, ValueError):
-            return default
+        return ConfigService.as_int(value, default)
 
     def _as_float(self, value, default=0.0):
-        try:
-            return float(str(value).strip())
-        except (TypeError, ValueError):
-            return default
+        return ConfigService.as_float(value, default)
 
     def _normalize_autovisor_speed(self, value, default='1.0'):
-        normalized = str(value or '').strip()
-        return normalized if normalized in self.AUTOVISOR_SPEED_OPTIONS else default
+        return self._get_config_service().normalize_autovisor_speed(value, default)
 
     def _validate_autovisor_accounts(self, accounts):
-        for index, account in enumerate(accounts or [], start=1):
-            if account.get('enable_hide_window') and (not account.get('username', '').strip() or not account.get('password', '')):
-                return f"Autovisor 账号 {index} 开启隐藏窗口时必须填写账号和密码"
-        return None
+        return ConfigService.validate_autovisor_accounts(accounts)
 
     def _split_lines(self, value):
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        return [line.strip() for line in str(value or '').replace('\r', '').split('\n') if line.strip()]
+        return ConfigService.split_lines(value)
 
     def _split_csv(self, value):
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        return [item.strip() for item in str(value or '').split(',') if item.strip()]
+        return ConfigService.split_csv(value)
 
     def _read_text_widget(self, widget):
         return widget.get('1.0', tk.END).strip() if widget else ''
@@ -832,6 +750,7 @@ class UnifiedLauncher:
                 exe_path = global_path if not per_path else per_path
             collected.append(
                 {
+                    'account_id': form.get('account_id', index),
                     'name': form['name'].get().strip() or f'账号 {index}',
                     'username': form['username'].get().strip(),
                     'password': form['password'].get(),
@@ -848,209 +767,22 @@ class UnifiedLauncher:
         return collected or [self._default_autovisor_account(1)]
 
     def _load_yatori_config_data(self):
-        config = self._default_yatori_config()
-        config_path = self._get_yatori_config_path()
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, 'r', encoding='utf-8') as handle:
-                    loaded = yaml.safe_load(handle) or {}
-                if isinstance(loaded, dict):
-                    # Merge all keys from loaded config, preserving unknown keys
-                    for key, value in loaded.items():
-                        if key in config and isinstance(config[key], dict) and isinstance(value, dict):
-                            config[key].update(value)
-                        else:
-                            config[key] = value
-            except Exception as exc:
-                self.log_system(f"读取 Yatori 配置失败，已回退默认值: {exc}")
-
-        setting = config.setdefault('setting', {})
-        basic = setting.setdefault('basicSetting', {})
-        basic_defaults = self._default_yatori_config()['setting']['basicSetting']
-        for key, value in basic_defaults.items():
-            basic.setdefault(key, value)
-
-        email = setting.setdefault('emailInform', {})
-        for key, value in self._default_yatori_config()['setting']['emailInform'].items():
-            email.setdefault(key, value)
-
-        ai = setting.setdefault('aiSetting', {})
-        for key, value in self._default_yatori_config()['setting']['aiSetting'].items():
-            ai.setdefault(key, value)
-
-        api = setting.setdefault('apiQueSetting', {})
-        api.setdefault('url', 'http://127.0.0.1:8083/query')
-
-        users = config.get('users') if isinstance(config.get('users'), list) else []
-        normalized_users = []
-        default_user = self._default_yatori_user(0)
-        for index, user in enumerate(users, start=1):
-            if not isinstance(user, dict):
-                continue
-            user_data = dict(default_user)
-            user_data['remarkName'] = user.get('remarkName', f'账号{index}')
-            # Merge all top-level user fields from loaded config
-            for key, value in user.items():
-                if key == 'coursesCustom':
-                    continue
-                user_data[key] = value
-            # Deep-merge coursesCustom
-            courses_custom = dict(default_user['coursesCustom'])
-            loaded_cc = user.get('coursesCustom') if isinstance(user.get('coursesCustom'), dict) else {}
-            courses_custom.update(loaded_cc)
-            user_data['coursesCustom'] = courses_custom
-            normalized_users.append(user_data)
-        config['users'] = normalized_users or [self._default_yatori_user(1)]
-        return config
+        return self._get_config_service().load_yatori()
 
     def _save_yatori_config_data(self, config_data):
-        config_path = self._get_yatori_config_path()
-        buffer = io.StringIO()
-        yaml.safe_dump(config_data, buffer, allow_unicode=True, sort_keys=False)
-        atomic_write_text(config_path, buffer.getvalue())
+        self._get_config_service().save_yatori(config_data)
 
     def _extract_autovisor_index(self, section_name, prefix):
-        if section_name == prefix:
-            return 1
-        if section_name.startswith(prefix + '-'):
-            suffix = section_name[len(prefix) + 1:]
-            if suffix.isdigit():
-                return int(suffix)
-        return None
+        return ConfigService.extract_autovisor_index(section_name, prefix)
 
     def _sorted_url_keys(self, option_names):
-        def sort_key(name):
-            match = re.search(r'(\d+)', name or '')
-            return (0, int(match.group(1))) if match else (1, name)
-
-        return sorted(option_names, key=sort_key)
+        return ConfigService.sorted_url_keys(option_names)
 
     def _load_autovisor_config_data(self):
-        parser = configparser.ConfigParser()
-        parser.optionxform = str
-        config_path = self._get_autovisor_config_path()
-        indices = set()
-        if os.path.exists(config_path):
-            try:
-                parser = self._read_autovisor_config(config_path)
-            except Exception as exc:
-                self.log_system(f"读取 Autovisor 配置失败，已回退默认值: {exc}")
-                parser = configparser.ConfigParser()
-                parser.optionxform = str
-
-        section_prefixes = ('user-account', 'browser-option', 'script-option', 'course-option', 'course-url')
-        for section in parser.sections():
-            for prefix in section_prefixes:
-                index = self._extract_autovisor_index(section, prefix)
-                if index:
-                    indices.add(index)
-                    break
-
-        if not indices:
-            indices = {1}
-
-        accounts = []
-        raw_sections = set(parser.sections())
-        for index in sorted(indices):
-            suffixed = any(section.endswith(f'-{index}') for section in raw_sections)
-            suffix = f'-{index}' if index > 1 or suffixed else ''
-            user_section = f'user-account{suffix}'
-            browser_section = f'browser-option{suffix}'
-            script_section = f'script-option{suffix}'
-            course_section = f'course-option{suffix}'
-            url_section = f'course-url{suffix}'
-            account = self._default_autovisor_account(index)
-            if parser.has_section(user_section):
-                account['name'] = parser.get(user_section, 'name', fallback=account['name']).strip() or account['name']
-                account['username'] = parser.get(user_section, 'username', fallback=account['username']).strip()
-                account['password'] = parser.get(user_section, 'password', fallback=account['password'])
-            if parser.has_section(browser_section):
-                account['driver'] = parser.get(browser_section, 'driver', fallback=account['driver']).strip() or account['driver']
-                account['exe_path'] = parser.get(browser_section, 'EXE_PATH', fallback=account['exe_path']).strip()
-            if parser.has_section(script_section):
-                account['enable_auto_captcha'] = parser.getboolean(script_section, 'enableAutoCaptcha', fallback=account['enable_auto_captcha'])
-                account['enable_hide_window'] = parser.getboolean(script_section, 'enableHideWindow', fallback=account['enable_hide_window'])
-            if parser.has_section(course_section):
-                account['limit_max_time'] = parser.get(course_section, 'limitMaxTime', fallback=account['limit_max_time']).strip()
-                account['limit_speed'] = parser.get(course_section, 'limitSpeed', fallback=account['limit_speed']).strip()
-                account['sound_off'] = parser.getboolean(course_section, 'soundOff', fallback=account['sound_off'])
-            if parser.has_section(url_section):
-                course_urls = []
-                for option_name in self._sorted_url_keys(parser.options(url_section)):
-                    value = parser.get(url_section, option_name, fallback='').strip()
-                    if value:
-                        course_urls.append(value)
-                account['course_urls'] = course_urls
-            accounts.append(account)
-
-        return {
-            'multi_mode': len(accounts) > 1,
-            'browser_driver': accounts[0]['driver'] if accounts else 'Chrome',
-            'browser_path': accounts[0]['exe_path'] if accounts else '',
-            'accounts': accounts or [self._default_autovisor_account(1)],
-        }
+        return self._get_config_service().load_autovisor()
 
     def _save_autovisor_config_data(self, config_data):
-        config_path = self._get_autovisor_config_path()
-        if os.path.exists(config_path):
-            try:
-                parser = self._read_autovisor_config(config_path)
-            except Exception:
-                parser = configparser.ConfigParser()
-                parser.optionxform = str
-        else:
-            parser = configparser.ConfigParser()
-            parser.optionxform = str
-
-        for section in list(parser.sections()):
-            if any(
-                section == prefix or section.startswith(prefix + '-')
-                for prefix in ('user-account', 'browser-option', 'script-option', 'course-option', 'course-url')
-            ):
-                parser.remove_section(section)
-
-        accounts = config_data.get('accounts') or [self._default_autovisor_account(1)]
-        multi_mode = bool(config_data.get('multi_mode'))
-        shared_driver = config_data.get('browser_driver', 'Chrome') or 'Chrome'
-        shared_path = config_data.get('browser_path', '').strip()
-
-        for index, account in enumerate(accounts, start=1):
-            suffix = '' if index == 1 else f'-{index}'
-            user_section = f'user-account{suffix}'
-            browser_section = f'browser-option{suffix}'
-            script_section = f'script-option{suffix}'
-            course_section = f'course-option{suffix}'
-            url_section = f'course-url{suffix}'
-
-            parser.add_section(user_section)
-            parser.set(user_section, 'name', account.get('name', f'账号 {index}').strip() or f'账号 {index}')
-            parser.set(user_section, 'username', account.get('username', '').strip())
-            parser.set(user_section, 'password', account.get('password', ''))
-
-            parser.add_section(browser_section)
-            parser.set(browser_section, 'driver', shared_driver)
-            parser.set(browser_section, 'EXE_PATH', shared_path)
-
-            parser.add_section(script_section)
-            parser.set(script_section, 'enableAutoCaptcha', 'True' if account.get('enable_auto_captcha', True) else 'False')
-            parser.set(script_section, 'enableHideWindow', 'True' if account.get('enable_hide_window', False) else 'False')
-
-            parser.add_section(course_section)
-            parser.set(course_section, 'limitMaxTime', str(self._as_int(account.get('limit_max_time', '30'), 30)))
-            parser.set(course_section, 'limitSpeed', str(self._as_float(account.get('limit_speed', '1.0'), 1.0)))
-            parser.set(course_section, 'soundOff', 'True' if account.get('sound_off', True) else 'False')
-
-            parser.add_section(url_section)
-            course_urls = self._split_lines(account.get('course_urls', []))
-            if not course_urls:
-                parser.set(url_section, 'URL1', '')
-            else:
-                for url_index, course_url in enumerate(course_urls, start=1):
-                    parser.set(url_section, f'URL{url_index}', course_url)
-
-        buffer = io.StringIO()
-        parser.write(buffer)
-        atomic_write_text(config_path, buffer.getvalue())
+        self._get_config_service().save_autovisor(config_data)
 
     def _core_manager_log(self, message):
         """核心管理器日志回调"""
@@ -2853,6 +2585,7 @@ class UnifiedLauncher:
                            command=lambda current=index - 1: self._remove_autovisor_account(current)).pack(side=tk.RIGHT)
 
             form = {
+                'account_id': account.get('account_id', index),
                 'name': name_var,
                 'username': tk.StringVar(value=str(account.get('username', ''))),
                 'password': tk.StringVar(value=str(account.get('password', ''))),
@@ -2934,7 +2667,13 @@ class UnifiedLauncher:
 
     def _add_autovisor_account(self):
         accounts = self._collect_autovisor_accounts_form_data()
-        accounts.append(self._default_autovisor_account(len(accounts) + 1))
+        used_ids = {
+            self._as_int(account.get('account_id'), 0)
+            for account in accounts
+            if self._as_int(account.get('account_id'), 0) > 0
+        }
+        next_id = max(used_ids, default=0) + 1
+        accounts.append(self._default_autovisor_account(next_id))
         self._set_autovisor_multi_mode(True)
         self._render_autovisor_accounts(accounts)
 
@@ -3736,24 +3475,21 @@ class UnifiedLauncher:
             account_index = normalize_account_index(account_index)
         except CourseCatalogError as e:
             return {'ok': False, 'message': str(e)}
-        account_number = account_index + 1
-        self.log_system(f"[课程获取] 正在获取第 {account_number} 个账号的课程...")
-
-        try:
-            target_username = read_autovisor_username(
-                self.get_base_dir(),
-                account_index,
-            )
-        except Exception as e:
-            target_username = ''
-            self.log_system(f"[课程获取] 读取账号身份失败: {e}")
+        accounts = self._load_autovisor_config_data().get('accounts') or []
+        if account_index >= len(accounts):
+            return {'ok': False, 'message': f'智慧树账号索引 {account_index} 不存在'}
+        account = accounts[account_index]
+        account_number = self._as_int(account.get('account_id'), account_index + 1)
+        catalog_account_index = max(account_number - 1, 0)
+        self.log_system(f"[课程获取] 正在获取账号配置 {account_number} 的课程...")
+        target_username = str(account.get('username', '')).strip()
         if not target_username:
             return {
                 'ok': False,
-                'message': f'第 {account_number} 个智慧树账号未配置用户名',
+                'message': f'智慧树账号配置 {account_number} 未配置用户名',
             }
         catalog = self._get_course_catalog_service()
-        cached = catalog.get_cached('zhs', account_index, target_username)
+        cached = catalog.get_cached('zhs', catalog_account_index, target_username)
         if cached is not None:
             self.log_system("[课程获取] 账号身份匹配，使用30分钟内缓存")
             return cached
@@ -3888,7 +3624,7 @@ class UnifiedLauncher:
         try:
             catalog.put_cached(
                 'zhs',
-                account_index,
+                catalog_account_index,
                 selected_identity,
                 result,
             )

@@ -29,7 +29,7 @@ class Config:
         self.config_path = str(config_path) if config_path else None
         self.requested_account_id = account_id
         self.account_id: Optional[int] = account_id
-        self._config = configparser.ConfigParser()
+        self._config = configparser.ConfigParser(interpolation=None)
 
         # 安全默认值也供 installer 等只使用镜像配置的调用方使用。
         self.driver = "edge"

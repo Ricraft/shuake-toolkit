@@ -61,7 +61,7 @@ class MultiAccountConfig:
 
     def __init__(self, config_path: str = "configs.ini"):
         self.config_path = config_path
-        self._config = configparser.ConfigParser()
+        self._config = configparser.ConfigParser(interpolation=None)
         self._read_config()
         self.accounts: List[AccountConfig] = []
         self._parse_accounts()
