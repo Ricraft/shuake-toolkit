@@ -1,14 +1,9 @@
-import asyncio
 import json
 import os
-import random
 import re
 import http.client  # 兼容外部通过 tasks.http.client 注入连接实现
 
 from playwright.async_api import Page
-from pygetwindow import Win32Window
-from modules.course_types import CourseKind, CourseProfile
-from playwright._impl._errors import TargetClosedError
 from modules.logger import Logger
 from modules.floating_widget import inject_widget
 from modules.chapter_learning import (
@@ -32,6 +27,14 @@ from modules.test_page_controls import (
     wait_for_widget_submit,
 )
 from modules import question_bank_client as _question_bank_client
+from modules.in_class_questions import (
+    _extract_options,
+    _extract_question_title,
+    _extract_wisdom_options,
+    _extract_wisdom_question,
+    skip_questions as _run_skip_questions,
+    wait_for_question_resolution,
+)
 from modules.page_monitor import (
     STATUS_PROBE_JS,
     smart_click_text,
@@ -45,7 +48,6 @@ from modules.question_bank_client import (
     _extract_answer_from_json,
     _extract_last_balanced_json,
     _is_model_error,
-    _match_option,
     _normalize_qb,
 )
 from modules.test_capture import TestResponseHandler
@@ -108,201 +110,17 @@ def clean_html_tags(text):
 
 # 页面通用点击与状态监控已拆分至 modules.page_monitor，并在顶部兼容导出。
 
-async def _extract_question_title(page: Page) -> str:
-    """从页面提取当前题目文本"""
-    try:
-        title_el = await page.query_selector(".topic-title")
-        if title_el:
-            text = await title_el.text_content()
-            return text.strip() if text else ""
-    except Exception:
-        pass
-    # 备选: 尝试 .subject-title / .question-title
-    for sel in (".subject-title", ".question-title", ".el-dialog__body"):
-        try:
-            el = await page.query_selector(sel)
-            if el:
-                text = await el.text_content()
-                return text.strip()[:500] if text else ""
-        except Exception:
-            continue
-    return ""
-
-
-async def _extract_options(page: Page):
-    """从页面提取选项文本列表"""
-    options = []
-    try:
-        items = await page.query_selector_all(".topic-item")
-        for item in items:
-            text = await item.text_content()
-            if text:
-                options.append(text.strip())
-    except Exception:
-        pass
-    return options
-
-
-async def _extract_wisdom_question(page: Page):
-    """提取智慧课题目信息"""
-    try:
-        question_info = page.locator(".question-info")
-        if await question_info.count() > 0:
-            text = await question_info.first.text_content()
-            return text.strip() if text else ""
-    except Exception:
-        pass
-    return ""
-
-async def _extract_wisdom_options(page: Page):
-    """提取智慧课选项"""
-    options = []
-    try:
-        items = page.locator(".option")
-        count = await items.count()
-        for i in range(count):
-            item = items.nth(i)
-            letter_el = item.locator(".class-question-select")
-            answer_el = item.locator(".answer")
-            if await letter_el.count() > 0 and await answer_el.count() > 0:
-                letter = await letter_el.text_content()
-                answer = await answer_el.text_content()
-                options.append(f"{letter}. {answer}")
-    except Exception:
-        pass
-    return options
-
 async def skip_questions(page: Page, event_loop) -> None:
-    await page.wait_for_load_state("domcontentloaded")
-    last_question_hash = 0
-    while True:
-        try:
-            profile = CourseProfile.from_url(page.url)
-            if profile.kind is CourseKind.NATIONAL_WISDOM:
-                await asyncio.sleep(2)
-                try:
-                    ai_dialog = page.locator(".ai-class-exercise-dialog")
-                    if await ai_dialog.count() > 0 and await ai_dialog.is_visible():
-                        logger.info("智慧课 - 检测到AI随堂练习弹窗")
+    """兼容旧入口，并传入当前 tasks 题库配置。"""
+    await _run_skip_questions(
+        page,
+        event_loop,
+        query_answer=query_question_bank,
+        logger_instance=logger,
+    )
 
-                        try:
-                            close_btn = ai_dialog.locator(".header-icon").first
-                            if await close_btn.count() > 0 and await close_btn.is_visible():
-                                await close_btn.click(timeout=1000)
-                                await page.wait_for_timeout(800)
-                                if await ai_dialog.count() == 0 or not await ai_dialog.is_visible():
-                                    logger.info("智慧课 - 直接关闭弹窗成功")
-                                    event_loop.set()
-                                    continue
-                        except Exception:
-                            pass
 
-                        logger.info("智慧课 - 弹窗无法直接关闭，随机作答")
-                        try:
-                            options = ai_dialog.locator(".option")
-                            opt_count = await options.count()
-                            if opt_count > 0:
-                                rand_idx = random.randint(0, opt_count - 1)
-                                await options.nth(rand_idx).click(timeout=1000)
-                                logger.info(f"智慧课 - 随机选择第 {rand_idx + 1} 个选项")
-                                await page.wait_for_timeout(500)
-                        except Exception as e:
-                            logger.warn(f"智慧课 - 选择选项失败: {repr(e)[:60]}")
-
-                        try:
-                            submit_btn = ai_dialog.locator("button.btn, .dialog-footer button").first
-                            if await submit_btn.count() > 0 and await submit_btn.is_visible():
-                                await submit_btn.click(timeout=2000)
-                                logger.info("智慧课 - 已点击提交作答")
-                                await page.wait_for_timeout(1000)
-                        except Exception as e:
-                            logger.warn(f"智慧课 - 提交作答失败: {repr(e)[:60]}")
-
-                        try:
-                            await page.wait_for_timeout(500)
-                            if await ai_dialog.count() > 0 and await ai_dialog.is_visible():
-                                close_btn = ai_dialog.locator(".header-icon").first
-                                if await close_btn.count() > 0:
-                                    await close_btn.click(timeout=1000)
-                                    logger.info("智慧课 - 提交后关闭弹窗")
-                                else:
-                                    await page.keyboard.press("Escape")
-                                    logger.info("智慧课 - ESC关闭弹窗")
-                        except Exception:
-                            await page.keyboard.press("Escape")
-
-                        event_loop.set()
-                except TargetClosedError:
-                    logger.write_log("浏览器已关闭,答题模块已下线.\n")
-                    return
-                except Exception:
-                    pass
-                continue
-            
-            if profile.kind is CourseKind.HIKE:
-                logger.warn("当前课程为新版本,不支持自动答题.", shift=True)
-                return
-            await asyncio.sleep(2)
-            ques_element = await page.wait_for_selector(".el-scrollbar__view", state="attached", timeout=1000)
-            total_ques = await ques_element.query_selector_all(".number")
-            if total_ques:
-                logger.write_log(f"检测到{len(total_ques)}道题目.\n")
-
-            for ques in total_ques:
-                await ques.click(timeout=500)
-                await page.wait_for_timeout(300)
-
-                if await page.query_selector(".answer"):
-                    continue  # 已作答
-
-                # 提取题目和选项
-                title = await _extract_question_title(page)
-                option_texts = await _extract_options(page)
-
-                if title and option_texts:
-                    options_joined = "\n".join(option_texts)
-                    answer, is_ai = query_question_bank(title, options_joined)
-
-                    if answer:
-                        source = "AI" if is_ai else "题库"
-                        logger.write_log(f"[{source}] 匹配到答案: {answer[:80]}\n")
-                        matched = _match_option(answer, option_texts)
-
-                        if matched:
-                            choices = await page.query_selector_all(".topic-item")
-                            for idx in matched:
-                                if idx < len(choices):
-                                    await choices[idx].click(timeout=500)
-                                    await page.wait_for_timeout(100)
-                            continue
-
-                # 题库未命中或无答案，回退到盲点前2个
-                logger.write_log("未匹配到答案,使用默认策略.\n")
-                choices = await page.query_selector_all(".topic-item")
-                for each in choices[:2]:
-                    await each.click(timeout=500)
-                    await page.wait_for_timeout(100)
-
-            await page.press(".el-dialog", "Escape", timeout=1000)
-            event_loop.set()
-        except TargetClosedError:
-            logger.write_log("浏览器已关闭,答题模块已下线.\n")
-            return
-        except Exception as e:
-            profile = CourseProfile.from_url(page.url)
-            if profile.kind is CourseKind.FUSION:
-                not_finish_close = await page.query_selector(".el-dialog")
-                if not_finish_close:
-                    await page.press(".el-dialog", "Escape", timeout=1000)
-            elif profile.kind is CourseKind.HIKE:
-                logger.warn("当前课程为新版本,不支持自动答题.", shift=True)
-                return
-            else:
-                not_finish_close = await page.query_selector(".el-message-box__headerbtn")
-                if not_finish_close:
-                    await not_finish_close.click()
-            continue
-
+# 随堂题提取与监听已拆分至 modules.in_class_questions，并在顶部兼容导出。
 
 # 测验响应监听器已拆分至 modules.test_capture，并在本模块顶部兼容导出。
 

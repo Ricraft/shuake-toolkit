@@ -51,7 +51,12 @@ from modules.utils import get_video_attr, hide_window, \
     is_playwright_window
 from modules.slider import slider_verify
 from modules.async_utils import cancel_background_tasks
-from modules.tasks import skip_questions, wait_for_verify, handle_test_page
+from modules.tasks import (
+    handle_test_page,
+    skip_questions,
+    wait_for_question_resolution,
+    wait_for_verify,
+)
 from modules.test_capture import TestResponseHandler
 from modules.video_tasks import (
     activate_window,
@@ -336,9 +341,17 @@ async def learning_loop(page: Page, start_time, is_new_version=False, is_hike_cl
             if await page.query_selector(".yidun_modal__title"):
                 await event_loop_verify.wait()
             elif await page.query_selector(".topic-title"):
-                await event_loop_answer.wait()
+                await wait_for_question_resolution(
+                    page,
+                    event_loop_answer,
+                    (".topic-title",),
+                )
             elif is_hike_class and await page.query_selector(".question-info"):
-                await event_loop_answer.wait()
+                await wait_for_question_resolution(
+                    page,
+                    event_loop_answer,
+                    (".question-info",),
+                )
             else:
                 logger.warn(repr(e))
 
@@ -361,7 +374,11 @@ async def review_loop(page: Page, start_time, is_hike_class=False):
             if await page.query_selector(".yidun_modal__title"):
                 await event_loop_verify.wait()
             elif await page.query_selector(".topic-title"):
-                await event_loop_answer.wait()
+                await wait_for_question_resolution(
+                    page,
+                    event_loop_answer,
+                    (".topic-title",),
+                )
             else:
                 logger.warn(repr(e))
 
