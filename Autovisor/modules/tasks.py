@@ -12,12 +12,24 @@ from modules.utils import display_window, hide_window
 from playwright._impl._errors import TargetClosedError
 from modules.logger import Logger
 from modules.floating_widget import inject_widget
-from modules.answer_strategy import build_answer_actions
 from modules.chapter_learning import (
     _extract_test_questions_from_dom,
     chapter_learning_flow,
     get_chapter_videos_status,
     wait_for_video_completion,
+)
+from modules.test_page_controls import (
+    _force_click_locator,
+    answer_question,
+    click_next_button,
+    click_option_by_index,
+    click_option_by_text,
+    click_prev_button,
+    submit_exam,
+    wait_for_page_option_click,
+    wait_for_user_action,
+    wait_for_widget_next_button,
+    wait_for_widget_submit,
 )
 from modules import question_bank_client as _question_bank_client
 from modules.question_bank_client import (
@@ -596,14 +608,18 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
                 logger.info("[手动模式] 用户点击下一题")
                 # 点击页面上的下一题按钮
                 if i < total - 1:
-                    await click_next_button(page)
+                    if not await click_next_button(page):
+                        logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
+                        return False
                     await page.wait_for_timeout(300)
                 current_index += 1
             elif action == "prev":
                 logger.info("[手动模式] 用户点击上一题")
                 # 点击页面上的上一题按钮（如果有）
                 if i > 0:
-                    await click_prev_button(page)
+                    if not await click_prev_button(page):
+                        logger.error("[ERROR] 上一题按钮点击失败，停止答题以防题号错位")
+                        return False
                     await page.wait_for_timeout(300)
                     current_index -= 1
             elif action == "option_click":
@@ -612,7 +628,9 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
                 if not is_multiple:
                     await page.wait_for_timeout(500)
                     if i < total - 1:
-                        await click_next_button(page)
+                        if not await click_next_button(page):
+                            logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
+                            return False
                         await page.wait_for_timeout(300)
                     current_index += 1
                 else:
@@ -621,11 +639,16 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
             elif action == "submit":
                 logger.info("[手动模式] 用户点击提交试卷")
                 break
+            elif action == "closed":
+                logger.warn("[WARN] 答题页面已关闭，答题流程终止")
+                return False
             else:
                 # 超时
                 logger.warn("[手动模式] 超时，自动下一题")
                 if i < total - 1:
-                    await click_next_button(page)
+                    if not await click_next_button(page):
+                        logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
+                        return False
                     await page.wait_for_timeout(300)
                 current_index += 1
         else:
@@ -643,7 +666,9 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
             
             await page.wait_for_timeout(500)
             if i < total - 1:
-                await click_next_button(page)
+                if not await click_next_button(page):
+                    logger.error("[ERROR] 下一题按钮点击失败，停止答题以防题号错位")
+                    return False
                 await page.wait_for_timeout(300)
             current_index += 1
     
@@ -693,518 +718,4 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
     return success
 
 
-async def wait_for_page_option_click(page: Page, timeout: float = 120) -> bool:
-    """等待用户在页面上点击选项"""
-    try:
-        # 注入点击监听器
-        await page.evaluate('''
-            window._optionClicked = false;
-            document.querySelectorAll('.nodeLab, .examquestions-answer, .flagChecked').forEach(el => {
-                el.addEventListener('click', () => {
-                    window._optionClicked = true;
-                    console.log('选项被点击');
-                }, { once: false });
-            });
-        ''')
-        
-        # 轮询检测点击
-        start_time = asyncio.get_event_loop().time()
-        while asyncio.get_event_loop().time() - start_time < timeout:
-            clicked = await page.evaluate('window._optionClicked')
-            if clicked:
-                # 重置状态
-                await page.evaluate('window._optionClicked = false')
-                await page.wait_for_timeout(300)  # 等待点击效果
-                return True
-            await asyncio.sleep(0.2)
-        return False
-    except:
-        return False
-
-
-async def wait_for_user_action(page: Page, is_multiple: bool = False, timeout: float = 180) -> str:
-    """等待用户操作，返回操作类型
-    
-    返回值：
-    - "next": 用户点击了下一题按钮
-    - "prev": 用户点击了上一题按钮
-    - "option_click": 用户点击了页面选项
-    - "submit": 用户点击了提交试卷
-    - "timeout": 超时
-    """
-    try:
-        # 重置所有状态
-        await page.evaluate('''
-            window._optionClicked = false;
-            window._widgetNextClicked = false;
-            window._widgetPrevClicked = false;
-            
-            // 注入选项点击监听
-            document.querySelectorAll('.nodeLab, .examquestions-answer, .flagChecked').forEach(el => {
-                el.addEventListener('click', () => {
-                    window._optionClicked = true;
-                }, { once: false });
-            });
-        ''')
-        
-        # 轮询检测各种操作
-        start_time = asyncio.get_event_loop().time()
-        while asyncio.get_event_loop().time() - start_time < timeout:
-            # 检查浮动窗口按钮
-            widget_next = await page.evaluate('window._widgetNextClicked')
-            if widget_next:
-                await page.evaluate('window._widgetNextClicked = false')
-                # 判断是最后一题（提交）还是下一题
-                is_last = await page.evaluate('''
-                    const widget = document.getElementById('ai-answer-widget');
-                    if (widget) {
-                        const btn = widget.querySelector('.nav-btn.next');
-                        return btn && btn.textContent.includes('提交');
-                    }
-                    return false;
-                ''')
-                return "submit" if is_last else "next"
-            
-            widget_prev = await page.evaluate('window._widgetPrevClicked')
-            if widget_prev:
-                await page.evaluate('window._widgetPrevClicked = false')
-                return "prev"
-            
-            # 检查页面选项点击（仅单选题有效）
-            if not is_multiple:
-                option_clicked = await page.evaluate('window._optionClicked')
-                if option_clicked:
-                    await page.evaluate('window._optionClicked = false')
-                    await page.wait_for_timeout(300)
-                    return "option_click"
-            
-            await asyncio.sleep(0.2)
-        
-        return "timeout"
-    except:
-        return "timeout"
-
-
-async def click_prev_button(page: Page):
-    """点击上一题按钮"""
-    try:
-        # 尝试多种选择器
-        selectors = [
-            "text='上一题'",
-            "text*='上一题'",
-            ".prev-btn",
-            "button:has-text('上一题')",
-            ".exam-btn-prev"
-        ]
-        
-        for selector in selectors:
-            try:
-                btn = page.locator(selector).first
-                if await btn.count() > 0:
-                    await btn.click(timeout=2000)
-                    logger.info("[OK] 点击上一题")
-                    return
-            except:
-                continue
-        
-        logger.warn("[FAIL] 未找到上一题按钮")
-    except Exception as e:
-        logger.warn("[FAIL] 点击上一题异常: %s" % str(e)[:30])
-
-
-async def wait_for_widget_next_button(page: Page, timeout: float = 180) -> bool:
-    """等待用户点击悬浮窗的下一题按钮"""
-    try:
-        # 重置状态
-        await page.evaluate('window._widgetNextClicked = false')
-        
-        # 轮询检测点击
-        start_time = asyncio.get_event_loop().time()
-        while asyncio.get_event_loop().time() - start_time < timeout:
-            clicked = await page.evaluate('window._widgetNextClicked')
-            if clicked:
-                await page.evaluate('window._widgetNextClicked = false')
-                return True
-            await asyncio.sleep(0.3)
-        return False
-    except:
-        return False
-
-
-async def wait_for_widget_submit(page: Page, timeout: float = 60) -> bool:
-    """等待浮动组件的提交事件"""
-    # ⚠️ 注意: answerSubmitted 事件在项目任何地方均未被触发（floating_widget.py 未 dispatch 此事件）
-    # 保留此函数以备第三方扩展使用，但默认不会返回 True
-    try:
-        # 创建一个 Promise 等待提交事件
-        result = await page.evaluate(f'''
-            new Promise((resolve) => {{
-                if (window.AIAnswerWidget) {{
-                    const handler = () => {{
-                        resolve(true);
-                    }};
-                    document.getElementById('ai-answer-widget').addEventListener('answerSubmitted', handler, {{ once: true }});
-                    setTimeout(() => resolve(false), {timeout * 1000});
-                }} else {{
-                    resolve(false);
-                }}
-            }})
-        ''')
-        return result
-    except:
-        return False
-
-
-async def _force_click_locator(locator):
-    """对 locator 执行多重点击策略：click → click(force) → dispatchEvent"""
-    try:
-        await locator.click(timeout=3000)
-        return "click"
-    except Exception:
-        pass
-    try:
-        await locator.click(force=True, timeout=3000)
-        return "click-force"
-    except Exception:
-        pass
-    try:
-        await locator.dispatchEvent('click')
-        return "dispatchEvent-click"
-    except Exception:
-        pass
-    try:
-        await locator.dispatchEvent('mousedown')
-        await locator.dispatchEvent('mouseup')
-        await locator.dispatchEvent('click')
-        return "dispatchEvent-chain"
-    except Exception:
-        pass
-    return None
-
-
-async def click_option_by_index(page: Page, index: int, option_value: str = None):
-    """通过索引点击选项（Playwright locator 层级兜底 + dispatchEvent 最终兜底）"""
-    try:
-        if option_value:
-            # 方案A: 通过 input[value] 定位 → 点击 .label 或 .nodeLab
-            sel_info = await page.evaluate(f'''
-                (function() {{
-                    const input = document.querySelector('input[value="{option_value}"]');
-                    if (!input) return null;
-                    const nodeLab = input.closest('.nodeLab');
-                    const allLabs = document.querySelectorAll('.nodeLab');
-                    if (nodeLab) {{
-                        const gIdx = Array.from(allLabs).indexOf(nodeLab);
-                        const lab = nodeLab.querySelector('.label');
-                        if (lab) return {{ what: "label", idx: gIdx }};
-                        return {{ what: "nodeLab", idx: gIdx }};
-                    }}
-                    return null;
-                }})()
-            ''')
-            if sel_info:
-                target = page.locator('.nodeLab').nth(sel_info["idx"])
-                if sel_info["what"] == "label":
-                    target = target.locator('.label')
-                r = await _force_click_locator(target)
-                if r:
-                    logger.info("[OK] 通过value点击: value=%s (%s)" % (option_value, r))
-                    await page.wait_for_timeout(200)
-                    return True
-
-            # 方案A兜底: 直接 force 点 input
-            try:
-                loc = page.locator('input[value="%s"]' % option_value)
-                if await loc.count() > 0:
-                    r = await _force_click_locator(loc.first)
-                    if r:
-                        logger.info("[OK] 通过value点input: value=%s (%s)" % (option_value, r))
-                        await page.wait_for_timeout(200)
-                        return True
-            except Exception:
-                pass
-
-        # 方案B: 按索引定位
-        idx_info = await page.evaluate(f'''
-            (function() {{
-                const subjects = document.querySelectorAll('.examPaper_subject');
-                for (const subject of subjects) {{
-                    const p = subject.parentElement;
-                    if (p && p.style.display === 'none') continue;
-                    const rect = subject.getBoundingClientRect();
-                    if (rect.height > 0 && rect.width > 0) {{
-                        const nodeLabs = subject.querySelectorAll('.nodeLab');
-                        if (nodeLabs[{index}]) {{
-                            const allLabs = document.querySelectorAll('.nodeLab');
-                            const gIdx = Array.from(allLabs).indexOf(nodeLabs[{index}]);
-                            return {{ idx: gIdx }};
-                        }}
-                    }}
-                }}
-                const allLabs = document.querySelectorAll('.nodeLab');
-                const visLabs = [];
-                for (const nl of allLabs) {{
-                    const sub = nl.closest('.examPaper_subject');
-                    if (sub) {{
-                        const p = sub.parentElement;
-                        if (p && p.style.display === 'none') continue;
-                    }}
-                    if (nl.offsetParent !== null) visLabs.push(nl);
-                }}
-                if (visLabs[{index}]) {{
-                    return {{ idx: Array.from(allLabs).indexOf(visLabs[{index}]) }};
-                }}
-                if (allLabs[{index}]) {{
-                    return {{ idx: {index} }};
-                }}
-                return null;
-            }})()
-        ''')
-        if idx_info:
-            main = page.locator('.nodeLab').nth(idx_info["idx"])
-            label = main.locator('.label')
-            r = await _force_click_locator(label)
-            if r:
-                logger.info("[OK] 通过索引点击label: 选项%d (%s)" % (index+1, r))
-                await page.wait_for_timeout(200)
-                return True
-            r = await _force_click_locator(main)
-            if r:
-                logger.info("[OK] 通过索引点击nodeLab: 选项%d (%s)" % (index+1, r))
-                await page.wait_for_timeout(200)
-                return True
-
-        # 方案C: .topic-item / .option-item / .el-radio / .el-checkbox
-        for sel in ['.topic-item', '.option-item', '.el-radio', '.el-checkbox']:
-            loc = page.locator(sel)
-            cnt = await loc.count()
-            if cnt > 0 and index < cnt:
-                r = await _force_click_locator(loc.nth(index))
-                if r:
-                    logger.info("[OK] 通过%s点击: 选项%d (%s)" % (sel, index+1, r))
-                    return True
-
-        # 方案D: input[type=radio/checkbox] 全局
-        for sel in ['input[type="radio"]', 'input[type="checkbox"]']:
-            loc = page.locator(sel)
-            cnt = await loc.count()
-            if cnt > 0 and index < cnt:
-                r = await _force_click_locator(loc.nth(index))
-                if r:
-                    logger.info("[OK] 通过%s点击: 选项%d (%s)" % (sel, index+1, r))
-                    return True
-
-        logger.warn("[FAIL] 所有方案失败: index=%d" % index)
-        return False
-    except Exception as e:
-        logger.warn("[FAIL] 点击异常: %s" % str(e)[:80])
-        return False
-
-
-async def click_option_by_text(page: Page, text: str):
-    """通过文本匹配点击选项（_force_click_locator 多重点击策略）"""
-    try:
-        escaped = text.replace("'", "\\'")
-        # 方案A: .nodeLab 按文本匹配
-        idx_info = await page.evaluate(f'''
-            (function() {{
-                const allLabs = document.querySelectorAll('.nodeLab');
-                for (let i = 0; i < allLabs.length; i++) {{
-                    const lab = allLabs[i];
-                    if (!lab.textContent.includes('{escaped}')) continue;
-                    const sub = lab.closest('.examPaper_subject');
-                    if (sub) {{
-                        const p = sub.parentElement;
-                        if (p && p.style.display === 'none') continue;
-                    }}
-                    if (lab.offsetParent === null) continue;
-                    return {{ idx: i }};
-                }}
-                for (let i = 0; i < allLabs.length; i++) {{
-                    const lab = allLabs[i];
-                    if (!lab.textContent.includes('{escaped}')) continue;
-                    const sub = lab.closest('.examPaper_subject');
-                    if (sub) {{
-                        const p = sub.parentElement;
-                        if (p && p.style.display === 'none') continue;
-                    }}
-                    return {{ idx: i, hidden: true }};
-                }}
-                return null;
-            }})()
-        ''')
-        if idx_info:
-            main = page.locator('.nodeLab').nth(idx_info["idx"])
-            label = main.locator('.label')
-            for target, name in [(label, "label"), (main, "nodeLab")]:
-                r = await _force_click_locator(target)
-                if r:
-                    logger.info("[OK] 通过文本点击%s: text=%s (%s)" % (name, text, r))
-                    await page.wait_for_timeout(200)
-                    return True
-
-        # 方案B: .topic-item / .option-item 按文本匹配
-        for sel in ['.topic-item', '.option-item']:
-            locs = page.locator(sel)
-            count = await locs.count()
-            for i in range(count):
-                el_text = await locs.nth(i).text_content()
-                if el_text and text in el_text:
-                    r = await _force_click_locator(locs.nth(i))
-                    if r:
-                        logger.info("[OK] 通过文本点击%s: text=%s (%s)" % (sel, text, r))
-                        return True
-
-        logger.warn("[FAIL] 通过文本所有方法失败: text=%s" % text)
-        return False
-    except Exception as e:
-        logger.warn("[FAIL] 通过文本点击异常: %s" % str(e)[:80])
-        return False
-
-
-async def answer_question(page: Page, answer: str, options: list = None, raw_options: list = None):
-    """
-    答题主函数
-    answer: 答案文本（如 "对"、"A"、"正确" 等），多选题答案用 ### 分隔
-    options: 选项文本列表（用于索引匹配）
-    raw_options: 原始选项列表 [(id, text), ...] 用于 input[value] 定位
-    """
-    actions = build_answer_actions(answer, options, raw_options)
-    if not actions:
-        logger.info("[ANS] 答题: 答案为空，跳过")
-        return False
-
-    answer = str(answer).strip()
-    logger.info("[ANS] 答题: %s" % answer)
-    if options:
-        logger.info("[ANS] 选项列表: %s" % str(options[:5]))
-
-    all_succeeded = True
-    for action_index, action in enumerate(actions):
-        if action.kind == "index":
-            logger.info("[ANS] 按索引点击选项: %s" % action.value)
-            succeeded = await click_option_by_index(
-                page,
-                int(action.value),
-                action.option_value,
-            )
-        else:
-            logger.info("[ANS] 按文本点击选项: %s" % action.value)
-            succeeded = await click_option_by_text(page, str(action.value))
-        all_succeeded = bool(succeeded) and all_succeeded
-        if action_index < len(actions) - 1:
-            await page.wait_for_timeout(300)
-    return all_succeeded
-
-
-async def click_next_button(page: Page):
-    """点击下一题按钮"""
-    try:
-        # 方法1：通过按钮文本
-        next_btn = page.locator("button:has-text('下一题')").first
-        await next_btn.click(timeout=3000)
-        logger.info("[OK] 点击下一题")
-        return
-    except:
-        pass
-    
-    try:
-        # 方法2：通过 class
-        next_btn = page.locator(".switch-btn-box button").last
-        await next_btn.click(timeout=3000)
-        logger.info("[OK] 点击下一题（备用）")
-        return
-    except:
-        pass
-    
-    try:
-        # 方法3：其他选择器
-        next_btn = page.locator(".next-btn, [class*='next']").first
-        await next_btn.click(timeout=3000)
-        logger.info("[OK] 点击下一题（选择器）")
-        return
-    except:
-        pass
-    
-    try:
-        # 方法4：键盘右键
-        await page.keyboard.press("ArrowRight")
-        logger.info("[OK] 使用键盘下一题")
-    except Exception as e:
-        logger.warn("[FAIL] 点击下一题失败: %s" % str(e)[:50])
-
-
-async def submit_exam(page: Page) -> bool:
-    """提交作业
-    
-    返回值：
-    - True: 提交成功
-    - False: 提交失败
-    """
-    try:
-        # 1. 点击提交按钮
-        submit_btn = page.locator("button:has-text('提交作业'), .btnStyleXSumit").first
-        await submit_btn.click(timeout=5000)
-        logger.info("[OK] 点击提交作业按钮")
-        
-        # 2. 等待确认对话框出现并点击确定
-        await page.wait_for_timeout(1000)
-        
-        # 尝试多种确认按钮选择器
-        confirm_selectors = [
-            "button.el-button--primary:has-text('确定')",
-            ".el-message-box__btns button.el-button--primary",
-            "button.el-button.el-button--default.el-button--small.el-button--primary",
-            ".el-message-box__confirm",
-            ".confirm-btn"
-        ]
-        
-        confirmed = False
-        for selector in confirm_selectors:
-            try:
-                confirm_btn = page.locator(selector).first
-                if await confirm_btn.count() > 0:
-                    await confirm_btn.click(timeout=3000)
-                    logger.info("[OK] 点击确认按钮")
-                    confirmed = True
-                    break
-            except:
-                continue
-        
-        if not confirmed:
-            logger.warn("[WARN] 未找到确认按钮，可能已自动提交")
-        
-        # 3. 等待提交完成
-        await page.wait_for_timeout(2000)
-        logger.info("[OK] 作业提交完成")
-        
-        # 4. 关闭当前页面（测验窗口）
-        try:
-            # 检查是否有关闭按钮
-            close_selectors = [
-                ".close-btn",
-                "button:has-text('关闭')",
-                ".el-dialog__close",
-                ".exam-close-btn"
-            ]
-            
-            for selector in close_selectors:
-                try:
-                    close_btn = page.locator(selector).first
-                    if await close_btn.count() > 0:
-                        await close_btn.click(timeout=2000)
-                        logger.info("[OK] 关闭测验窗口")
-                        break
-                except:
-                    continue
-        except Exception as e:
-            logger.warn("[WARN] 关闭窗口失败: %s" % str(e)[:30])
-        
-        return True
-        
-    except Exception as e:
-        logger.warn("[FAIL] 提交失败：%s" % str(e)[:50])
-        return False
-
-
-# 章节学习辅助流程已拆分至 modules.chapter_learning，并在本模块顶部兼容导出。
+# 测验页面控件已拆分至 modules.test_page_controls，并在本模块顶部兼容导出。
