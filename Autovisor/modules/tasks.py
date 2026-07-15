@@ -8,7 +8,6 @@ import http.client  # 兼容外部通过 tasks.http.client 注入连接实现
 from playwright.async_api import Page
 from pygetwindow import Win32Window
 from modules.course_types import CourseKind, CourseProfile
-from modules.utils import display_window, hide_window
 from playwright._impl._errors import TargetClosedError
 from modules.logger import Logger
 from modules.floating_widget import inject_widget
@@ -33,6 +32,13 @@ from modules.test_page_controls import (
     wait_for_widget_submit,
 )
 from modules import question_bank_client as _question_bank_client
+from modules.page_monitor import (
+    STATUS_PROBE_JS,
+    smart_click_text,
+    status_ocr_stream,
+    trigger_restart,
+    wait_for_verify,
+)
 from modules.question_bank_client import (
     _build_model_query_prompt,
     _detect_question_kind,
@@ -100,154 +106,7 @@ def clean_html_tags(text):
     
     return text.strip()
 
-async def smart_click_text(page, text: str) -> bool:
-    selectors = ['div', 'span', 'p', 'label', 'a', 'li', 'button', '[role="option"]']
-
-    # 方法1：JS 直接精确匹配 textContent
-    try:
-        clicked = await page.evaluate(f'''
-            (function() {{
-                const selectors = {selectors};
-                for (const sel of selectors) {{
-                    for (const el of document.querySelectorAll(sel)) {{
-                        if (el.textContent.trim() === '{text}') {{
-                            el.click();
-                            return true;
-                        }}
-                    }}
-                }}
-                return false;
-            }})()
-        ''')
-        if clicked:
-            logger.info(f"JS方式点击成功: {text}")
-            return True
-    except Exception as e:
-        logger.debug(f"JS方式失败: {e}")
-
-    # 方法2：XPath 精确匹配直接文本节点
-    try:
-        await page.click(f'xpath=//div[text()="{text}"]', timeout=2000)
-        logger.info(f"XPath直接文本节点点击成功: {text}")
-        return True
-    except:
-        pass
-
-    # 方法3：XPath 包含文本（匹配子元素）
-    try:
-        await page.click(f'xpath=//div[contains(text(),"{text}")]', timeout=2000)
-        logger.info(f"XPath包含文本点击成功: {text}")
-        return True
-    except:
-        pass
-
-    # 方法4：get_by_text + force
-    try:
-        await page.get_by_text(text, exact=True).click(force=True, timeout=2000)
-        logger.info(f"force点击成功: {text}")
-        return True
-    except:
-        pass
-
-    logger.warn("[FAIL] 点击失败: %s" % text)
-    return False
-
-STATUS_PROBE_JS = r"""
-() => {
-    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim();
-    const visibleText = [];
-    for (const el of Array.from(document.querySelectorAll('body *'))) {
-        if (visibleText.length >= 5) break;
-        const text = normalize(el.textContent || '');
-        if (!text) continue;
-        if (!(text.includes('学习进度') || text.includes('掌握度') || text.includes('%'))) continue;
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        if (rect.width < 40 || rect.height < 16) continue;
-        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
-        if (!visibleText.includes(text)) {
-            visibleText.push(text.slice(0, 80));
-        }
-    }
-
-    const titleSelectors = ['#lessonOrder', '.current_play [title]', '.current_play', 'h1', 'h2', '[title]'];
-    let lessonTitle = '';
-    for (const selector of titleSelectors) {
-        const el = document.querySelector(selector);
-        if (!el) continue;
-        lessonTitle = normalize(el.getAttribute && el.getAttribute('title') ? el.getAttribute('title') : el.textContent);
-        if (lessonTitle) break;
-    }
-
-    const video = document.querySelector('video');
-    const currentTime = video ? Number(video.currentTime || 0) : null;
-    const duration = video ? Number(video.duration || 0) : null;
-    const percent = video && duration > 0 ? Math.floor((currentTime / duration) * 100) : null;
-    return {
-        pageTitle: normalize(document.title || ''),
-        lessonTitle,
-        hasVideo: !!video,
-        paused: video ? !!video.paused : null,
-        ended: video ? !!video.ended : null,
-        currentTime,
-        duration,
-        percent,
-        text: visibleText,
-        url: location.href,
-    };
-}
-"""
-
-async def trigger_restart(page: Page, worker_name: str, restart_event: asyncio.Event | None = None) -> None:
-    if restart_event is not None and restart_event.is_set():
-        return
-    if restart_event is not None:
-        restart_event.set()
-    logger.warn(f"[{worker_name}] 触发强制重建，立即关闭当前上下文.", shift=True)
-    try:
-        await page.context.close()
-    except Exception:
-        pass
-
-async def status_ocr_stream(
-    page: Page,
-    worker_name: str,
-    interval_sec: int = 5,
-    restart_event: asyncio.Event | None = None,
-) -> None:
-    await page.wait_for_load_state("domcontentloaded")
-    while True:
-        try:
-            await asyncio.sleep(interval_sec)
-            data = await page.evaluate(STATUS_PROBE_JS)
-            if data["hasVideo"]:
-                cur = 0 if data["currentTime"] is None else data["currentTime"]
-                dur = 0 if data["duration"] is None else data["duration"]
-                logger.info(
-                    f"[{worker_name}/OCR] {data['lessonTitle'] or data['pageTitle']} | "
-                    f"{data['percent'] if data['percent'] is not None else 0}% | "
-                    f"paused={data['paused']} | ended={data['ended']} | {cur:.0f}/{dur:.0f}s"
-                )
-                if data["ended"]:
-                    logger.warn(f"[{worker_name}/OCR] 检测到 ended=True，等待 worker 重建.", shift=True)
-                    await trigger_restart(page, worker_name, restart_event)
-            elif data["text"]:
-                logger.info(f"[{worker_name}/OCR] {' | '.join(data['text'][:3])}")
-        except TargetClosedError:
-            logger.write_log(f"{worker_name} status stream offline.\n")
-            return
-        except Exception:
-            continue
-
-# 题库查询实现已拆分至 modules.question_bank_client；本模块顶部保留兼容入口。
-
-
-
-
-# 视频后台任务已拆分至 modules.video_tasks，并在本模块顶部兼容导出。
-
-
-
+# 页面通用点击与状态监控已拆分至 modules.page_monitor，并在顶部兼容导出。
 
 async def _extract_question_title(page: Page) -> str:
     """从页面提取当前题目文本"""
@@ -442,28 +301,6 @@ async def skip_questions(page: Page, event_loop) -> None:
                 not_finish_close = await page.query_selector(".el-message-box__headerbtn")
                 if not_finish_close:
                     await not_finish_close.click()
-            continue
-
-
-async def wait_for_verify(page: Page, config, event_loop) -> None:
-    await page.wait_for_load_state("domcontentloaded")
-    while True:
-        try:
-            await asyncio.sleep(3)
-            await page.wait_for_selector(".yidun_modal__title", state="attached", timeout=1000)
-            logger.warn("检测到安全验证,请手动完成验证...", shift=True)
-            if config.enableHideWindow:
-                await display_window(page)
-            await page.wait_for_selector(".yidun_modal__title", state="hidden", timeout=24 * 3600 * 1000)
-            event_loop.set()
-            if config.enableHideWindow:
-                await hide_window(page)
-            logger.info("安全验证已完成.", shift=True)
-            await asyncio.sleep(30)  # 较长时间内不会再次触发验证
-        except TargetClosedError:
-            logger.write_log("浏览器已关闭,安全验证模块已下线.\n")
-            return
-        except Exception as e:
             continue
 
 
