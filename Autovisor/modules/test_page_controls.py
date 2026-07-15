@@ -16,6 +16,68 @@ from modules.logger import Logger
 logger = Logger()
 
 
+async def has_selected_answer(page: Page) -> bool:
+    """判断当前可见题目是否存在真实选中或填写的答案。"""
+    try:
+        return bool(
+            await page.evaluate(
+                """
+                (() => {
+                    const visible = element => {
+                        if (!element) return false;
+                        const style = window.getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return style.display !== 'none'
+                            && style.visibility !== 'hidden'
+                            && rect.width > 0
+                            && rect.height > 0;
+                    };
+                    const questionSelectors = [
+                        '.examPaper_subject',
+                        '.subject_node',
+                        '.examquestions',
+                        '.question-item'
+                    ];
+                    const questions = questionSelectors.flatMap(
+                        selector => Array.from(document.querySelectorAll(selector))
+                    );
+                    const scope = questions.find(question =>
+                        visible(question)
+                        && question.querySelector(
+                            '.nodeLab, input, textarea, [contenteditable="true"]'
+                        )
+                    ) || document;
+                    const choiceSelected = Array.from(scope.querySelectorAll(
+                        'input[type="radio"], input[type="checkbox"]'
+                    )).some(input => input.checked);
+                    if (choiceSelected) return true;
+                    if (scope.querySelector(
+                        '.nodeLab.flagChecked, .nodeLab.is-checked, '
+                        + '.nodeLab[aria-checked="true"], '
+                        + '.el-radio.is-checked, .el-checkbox.is-checked, '
+                        + '[role="radio"][aria-checked="true"], '
+                        + '[role="checkbox"][aria-checked="true"]'
+                    )) return true;
+                    const textInputs = scope.querySelectorAll(
+                        'textarea, input[type="text"], '
+                        + 'input:not([type]), [contenteditable="true"]'
+                    );
+                    return Array.from(textInputs).some(element => {
+                        const value = element.isContentEditable
+                            ? element.textContent
+                            : element.value;
+                        return visible(element) && Boolean(value && value.trim());
+                    });
+                })()
+                """
+            )
+        )
+    except TargetClosedError:
+        return False
+    except Exception:
+        return False
+
+
 async def wait_for_page_option_click(
     page: Page,
     timeout: float = 120,

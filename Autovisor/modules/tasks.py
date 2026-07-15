@@ -25,6 +25,7 @@ from modules.test_page_controls import (
     click_option_by_index,
     click_option_by_text,
     click_prev_button,
+    has_selected_answer,
     submit_exam,
     wait_for_page_option_click,
     wait_for_user_action,
@@ -603,6 +604,14 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
             
             # 同时监听页面点击和浮动窗口按钮
             action = await wait_for_user_action(page, is_multiple, timeout=180)
+
+            if action != "closed":
+                q["answer_applied"] = await has_selected_answer(page)
+                if (
+                    action in {"next", "option_click", "submit", "timeout"}
+                    and not q["answer_applied"]
+                ):
+                    logger.warn("[WARN] 当前题未检测到已选择或已填写的答案")
             
             if action == "next":
                 logger.info("[手动模式] 用户点击下一题")
@@ -683,12 +692,7 @@ async def handle_test_page(page: Page, questions_data: list, auto_submit: bool =
         return True
 
     # 检查未答题比例，防止无答案自动交卷
-    if auto_submit:
-        answered = sum(1 for q in questions_data if q.get("answer_applied"))
-    else:
-        answered = sum(
-            1 for q in questions_data if q.get("answer") and q["answer"].strip()
-        )
+    answered = sum(1 for q in questions_data if q.get("answer_applied"))
     unanswered = total - answered
     if unanswered > total * 0.5:
         logger.warn(f"\n[WARN] 未答题数 {unanswered}/{total} 超过 50%，跳过自动交卷，请手动检查后提交")

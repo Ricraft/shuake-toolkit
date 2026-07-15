@@ -197,6 +197,23 @@ def test_click_option_by_text_embeds_special_text_as_json():
     assert f"const expected = {json.dumps(expected, ensure_ascii=False)};" in page.scripts[0]
 
 
+def test_has_selected_answer_uses_current_page_state():
+    class Page:
+        def __init__(self):
+            self.script = ""
+
+        async def evaluate(self, script):
+            self.script = script
+            return True
+
+    page = Page()
+    result = asyncio.run(controls.has_selected_answer(page))
+
+    assert result is True
+    assert 'input[type="radio"]' in page.script
+    assert '[contenteditable="true"]' in page.script
+
+
 class _FlowPage:
     async def wait_for_load_state(self, _state):
         return None
@@ -260,4 +277,122 @@ def test_handle_test_page_stops_when_next_button_click_fails(monkeypatch):
     assert result is False
     assert questions[0]["answer_applied"] is True
     assert "answer_applied" not in questions[1]
+    assert submit_calls == []
+
+
+def _manual_question(question_type="单选题"):
+    return {
+        "name": "手动作答测试题",
+        "type": question_type,
+        "type_id": 2 if "多选" in question_type else 1,
+        "options": [("A", "甲"), ("B", "乙")],
+    }
+
+
+def test_manual_answer_uses_page_selection_even_without_bank_answer(monkeypatch):
+    submit_calls = []
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def next_action(*_args, **_kwargs):
+        return "next"
+
+    async def selected(*_args, **_kwargs):
+        return True
+
+    async def submit(*_args, **_kwargs):
+        submit_calls.append(True)
+        return True
+
+    monkeypatch.setattr(task_module, "inject_widget", no_op)
+    monkeypatch.setattr(
+        task_module,
+        "query_question_bank",
+        lambda *_args, **_kwargs: (None, False),
+    )
+    monkeypatch.setattr(task_module, "wait_for_user_action", next_action)
+    monkeypatch.setattr(task_module, "has_selected_answer", selected)
+    monkeypatch.setattr(task_module, "submit_exam", submit)
+
+    question = _manual_question("多选题")
+    result = asyncio.run(
+        task_module.handle_test_page(_FlowPage(), [question])
+    )
+
+    assert result is True
+    assert question["answer_applied"] is True
+    assert submit_calls == [True]
+
+
+def test_manual_answer_does_not_use_bank_hit_as_page_selection(monkeypatch):
+    submit_calls = []
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def next_action(*_args, **_kwargs):
+        return "next"
+
+    async def not_selected(*_args, **_kwargs):
+        return False
+
+    async def submit(*_args, **_kwargs):
+        submit_calls.append(True)
+        return True
+
+    monkeypatch.setattr(task_module, "inject_widget", no_op)
+    monkeypatch.setattr(
+        task_module,
+        "query_question_bank",
+        lambda *_args, **_kwargs: ("A", False),
+    )
+    monkeypatch.setattr(task_module, "wait_for_user_action", next_action)
+    monkeypatch.setattr(task_module, "has_selected_answer", not_selected)
+    monkeypatch.setattr(task_module, "submit_exam", submit)
+
+    question = _manual_question()
+    result = asyncio.run(
+        task_module.handle_test_page(_FlowPage(), [question])
+    )
+
+    assert result is False
+    assert question["answer_applied"] is False
+    assert submit_calls == []
+
+
+def test_manual_answer_stops_cleanly_when_page_is_closed(monkeypatch):
+    selection_checks = []
+    submit_calls = []
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def closed_action(*_args, **_kwargs):
+        return "closed"
+
+    async def selected(*_args, **_kwargs):
+        selection_checks.append(True)
+        return True
+
+    async def submit(*_args, **_kwargs):
+        submit_calls.append(True)
+        return True
+
+    monkeypatch.setattr(task_module, "inject_widget", no_op)
+    monkeypatch.setattr(
+        task_module,
+        "query_question_bank",
+        lambda *_args, **_kwargs: ("A", False),
+    )
+    monkeypatch.setattr(task_module, "wait_for_user_action", closed_action)
+    monkeypatch.setattr(task_module, "has_selected_answer", selected)
+    monkeypatch.setattr(task_module, "submit_exam", submit)
+
+    result = asyncio.run(
+        task_module.handle_test_page(_FlowPage(), [_manual_question()])
+    )
+
+    assert result is False
+    assert selection_checks == []
     assert submit_calls == []
