@@ -23,6 +23,13 @@ from datetime import datetime
 import queue
 
 from src.atomic_io import atomic_dump_json, atomic_write_text
+from src.course_catalog import (
+    CourseCatalogError,
+    CourseCatalogService,
+    normalize_account_index,
+    parse_zhs_course_data,
+    read_autovisor_username,
+)
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 try:
@@ -3806,40 +3813,59 @@ class UnifiedLauncher:
         except Exception as e:
             return {'ok': False, 'message': f'保存题库设置失败: {e}'}
 
+    def _get_course_catalog_service(self):
+        service = getattr(self, '_course_catalog_service', None)
+        base_dir = self.get_base_dir()
+        if (
+            service is None
+            or os.path.abspath(str(service.base_dir)) != os.path.abspath(base_dir)
+        ):
+            service = CourseCatalogService(base_dir, logger=self.log_system)
+            self._course_catalog_service = service
+        return service
+
     def get_autovisor_courses_from_web(self, account_index=0):
         """从Web获取Autovisor课程列表 - 运行 fetch_zhs_courses.py"""
         import subprocess
         import os
         import json
 
-        script_path = os.path.join(self.get_base_dir(), "scripts", "fetch_zhs_courses.py")
-        if not os.path.exists(script_path):
-            return {'ok': False, 'message': f'未找到课程获取脚本: {script_path}'}
-
-        python_exe = self.get_python_executable()
-        if not python_exe:
-            return {'ok': False, 'message': '未找到 Python 解释器'}
-
+        try:
+            account_index = normalize_account_index(account_index)
+        except CourseCatalogError as e:
+            return {'ok': False, 'message': str(e)}
         account_number = account_index + 1
         self.log_system(f"[课程获取] 正在获取第 {account_number} 个账号的课程...")
 
-        # 检查本地缓存 (30分钟有效期)
-        cache_file = os.path.join(self.get_base_dir(), "data", "course_cache.json")
-        cache_key = f"account_{account_index}"
         try:
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                cached_entry = cache_data.get(cache_key)
-                if cached_entry:
-                    cached_at = datetime.fromisoformat(cached_entry['cached_at'])
-                    age = (datetime.now() - cached_at).total_seconds()
-                    if age < 1800:
-                        self.log_system(f"[课程获取] 缓存命中 ({(age/60):.0f}分钟前), 直接返回")
-                        return cached_entry['data']
-                    self.log_system(f"[课程获取] 缓存已过期 ({(age/60):.0f}分钟前), 重新获取")
+            target_username = read_autovisor_username(
+                self.get_base_dir(),
+                account_index,
+            )
         except Exception as e:
-            self.log_system(f"[课程获取] 缓存读取失败: {e}, 将重新获取")
+            target_username = ''
+            self.log_system(f"[课程获取] 读取账号身份失败: {e}")
+        if not target_username:
+            return {
+                'ok': False,
+                'message': f'第 {account_number} 个智慧树账号未配置用户名',
+            }
+        catalog = self._get_course_catalog_service()
+        cached = catalog.get_cached('zhs', account_index, target_username)
+        if cached is not None:
+            self.log_system("[课程获取] 账号身份匹配，使用30分钟内缓存")
+            return cached
+
+        script_path = os.path.join(
+            self.get_base_dir(),
+            "scripts",
+            "fetch_zhs_courses.py",
+        )
+        if not os.path.exists(script_path):
+            return {'ok': False, 'message': f'未找到课程获取脚本: {script_path}'}
+        python_exe = self.get_python_executable()
+        if not python_exe:
+            return {'ok': False, 'message': '未找到 Python 解释器'}
 
         # 检查并安装playwright依赖
         is_playwright_available, error = self._python_module_available(python_exe, 'playwright')
@@ -3875,6 +3901,16 @@ class UnifiedLauncher:
             except Exception as e:
                 return {'ok': False, 'message': f'准备Playwright环境失败: {e}'}
 
+        course_file = os.path.join(
+            self.get_base_dir(),
+            "data",
+            "zhs_course.json",
+        )
+        previous_course_mtime = (
+            os.stat(course_file).st_mtime_ns
+            if os.path.exists(course_file)
+            else None
+        )
         try:
             creationflags, startupinfo = self._get_subprocess_window_kwargs()
             env = os.environ.copy()
@@ -3916,9 +3952,16 @@ class UnifiedLauncher:
         except Exception as e:
             return {'ok': False, 'message': f'运行脚本失败: {e}'}
 
-        course_file = os.path.join(self.get_base_dir(), "data", "zhs_course.json")
         if not os.path.exists(course_file):
             return {'ok': False, 'message': '未找到课程数据文件'}
+        if (
+            previous_course_mtime is not None
+            and os.stat(course_file).st_mtime_ns == previous_course_mtime
+        ):
+            return {
+                'ok': False,
+                'message': '课程获取脚本未刷新数据文件，请检查登录或验证状态',
+            }
 
         try:
             with open(course_file, 'r', encoding='utf-8') as f:
@@ -3926,277 +3969,62 @@ class UnifiedLauncher:
         except Exception as e:
             return {'ok': False, 'message': f'读取课程数据失败: {e}'}
 
-        if not data:
-            return {'ok': True, 'courses': []}
-
-        # 从 configs.ini 读取当前账号的用户名，用于查找对应课程数据
         try:
-            ini_path = os.path.join(self.get_base_dir(), "Autovisor", "configs.ini")
-            section_map = {0: "user-account", 1: "user-account-2", 2: "user-account-3", 3: "user-account-4", 4: "user-account-5"}
-            section = section_map.get(account_index, "user-account")
-            parser = configparser.ConfigParser()
-            parser.read(ini_path, encoding='utf-8')
-            target_username = parser.get(section, 'username', fallback=None)
-        except Exception:
-            target_username = None
-
-        if target_username and target_username in data:
-            account_data = data[target_username]
-            self.log_system(f"[课程获取] 找到账号 {target_username} 的课程数据")
-        elif target_username:
-            self.log_system(f"[课程获取] 未找到账号 {target_username} 的数据，该账号可能未登录过")
-            return {'ok': True, 'courses': []}
-        else:
-            # 回退：取第一个键
-            first_key = list(data.keys())[0]
-            account_data = data[first_key]
-            self.log_system(f"[课程获取] 无法确定当前账号，使用默认数据: {first_key}")
-
-        raw_courses = account_data.get('courses', [])
-        raw_notices = account_data.get('notices', [])
-        
-        courses = []
-        for c in raw_courses:
-            secret = c.get('secret', '')
-            course_type = c.get('courseType', 1)
-            course_name = c.get('courseName', '未知课程')
-            
-            if course_type == 1:
-                course_url = f'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId={secret}' if secret else ''
-                type_label = '普通课'
-            elif course_type == 7:
-                course_url = f'https://wisdom-mooc.zhihuishu.com/study/index?recruitAndCourseId={secret}' if secret else ''
-                type_label = '共享课'
-            else:
-                course_url = f'https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId={secret}' if secret else ''
-                type_label = '未知类型'
-            
-            courses.append({
-                'name': course_name,
-                'title': c.get('lessonName', ''),
-                'id': secret,
-                'url': course_url,
-                'progress': c.get('progress', '0%'),
-                'type': type_label,
-                'courseType': course_type
-            })
-        
-        for n in raw_notices:
-            live_id = n.get('liveCourseId', '')
-            course_id = n.get('courseId', '')
-            recruit_id = n.get('recruitId', '')
-            task_name = n.get('taskName', '见面课')
-            course_name = n.get('courseName', '未知课程')
-            
-            if live_id and course_id and recruit_id:
-                live_url = f'https://lc.zhihuishu.com/live/vod_room.html?liveId={live_id}&courseId={course_id}&recruitId={recruit_id}'
-                courses.append({
-                    'name': f'{course_name} - {task_name}',
-                    'title': '见面课',
-                    'id': f'live_{live_id}',
-                    'url': live_url,
-                    'progress': '-',
-                    'type': '见面课',
-                    'courseType': 'live'
-                })
-
-        # 存入缓存
+            courses, selected_identity = parse_zhs_course_data(
+                data,
+                target_username,
+            )
+        except CourseCatalogError as e:
+            return {'ok': False, 'message': str(e)}
+        if target_username and not courses and target_username not in data:
+            self.log_system(
+                f"[课程获取] 未找到账号 {target_username} 的数据，该账号可能未登录过"
+            )
+        elif selected_identity:
+            self.log_system(f"[课程获取] 使用账号 {selected_identity} 的课程数据")
         result = {'ok': True, 'courses': courses}
         try:
-            cache_full = {}
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    cache_full = json.load(f)
-            cache_full[cache_key] = {
-                'cached_at': datetime.now().isoformat(),
-                'data': result
-            }
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(cache_full, f, ensure_ascii=False, indent=2)
+            catalog.put_cached(
+                'zhs',
+                account_index,
+                selected_identity,
+                result,
+            )
         except Exception as e:
             self.log_system(f"[课程获取] 缓存写入失败: {e}")
-
         return result
 
     def get_xuexitong_courses_from_web(self, account_index=0):
-        """获取学习通课程列表 - 直接调用 学习通 API (基于 Yatori XueXiTPullCourseAction 原理)"""
-        import subprocess
-        import json
-        from Crypto.Cipher import AES as AES_CTR
-        import base64
-
-        # 1. 从 Yatori 配置中读取指定账号
+        """获取学习通课程列表，使用身份隔离缓存与 HTTPS API。"""
+        try:
+            account_index = normalize_account_index(account_index)
+        except CourseCatalogError as e:
+            return {'ok': False, 'message': str(e)}
         yatori_config = self._load_yatori_config_data()
         users = yatori_config.get('users', [])
         if account_index >= len(users):
-            return {'ok': False, 'message': f'账号索引 {account_index} 超出范围 (共 {len(users)} 个账号)'}
-
-        user = users[account_index]
-        account_type = user.get('accountType', '')
-        if account_type != 'XUEXITONG':
-            return {'ok': False, 'message': f'账号类型 {account_type} 不是学习通，无法获取课程'}
-
-        username = user.get('account', '').strip()
-        password = user.get('password', '').strip()
-        if not username or not password:
-            return {'ok': False, 'message': '账号或密码为空，请先在配置中填写'}
-
-        self.log_system(f"[学习通课程] 正在获取账号 {account_index} 的课程...")
-
-        # 2. 检查本地缓存 (30分钟有效期)
-        cache_file = os.path.join(self.get_base_dir(), "data", "course_cache.json")
-        cache_key = f"xxt_account_{account_index}"
-        try:
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                cached_entry = cache_data.get(cache_key)
-                if cached_entry:
-                    cached_at = datetime.fromisoformat(cached_entry['cached_at'])
-                    age = (datetime.now() - cached_at).total_seconds()
-                    if age < 1800:
-                        self.log_system(f"[学习通课程] 缓存命中 ({(age/60):.0f}分钟前), 直接返回")
-                        return cached_entry['data']
-                    self.log_system(f"[学习通课程] 缓存已过期 ({(age/60):.0f}分钟前), 重新获取")
-        except Exception as e:
-            self.log_system(f"[学习通课程] 缓存读取失败: {e}, 将重新获取")
-
-        # 3. AES 加密 + 登录
-        AES_KEY = "u2oh6Vu^HWe4_AES"
-
-        def aes_encrypt(message):
-            key_bytes = AES_KEY.encode("utf-8")
-            iv_bytes = AES_KEY.encode("utf-8")
-            block_size = AES_CTR.block_size
-            pad_len = block_size - len(message.encode("utf-8")) % block_size
-            padded = message.encode("utf-8") + bytes([pad_len] * pad_len)
-            cipher = AES_CTR.new(key_bytes, AES_CTR.MODE_CBC, iv_bytes)
-            return base64.b64encode(cipher.encrypt(padded)).decode("utf-8")
-
-        session = self._xxt_http_session if hasattr(self, '_xxt_http_session') else None
-        if session is None:
-            import requests as req_lib
-            session = req_lib.Session()
-            session.trust_env = False
-            self._xxt_http_session = session
-
-        # 登录
-        login_url = "https://passport2.chaoxing.com/fanyalogin"
-        login_data = {
-            "fid": "-1",
-            "uname": aes_encrypt(username),
-            "password": aes_encrypt(password),
-            "refer": "http%253A%252F%252Fi.chaoxing.com",
-            "t": "true",
-            "forbidotherlogin": "0",
-            "validate": "",
-            "doubleFactorLogin": "0",
-            "independentId": "0",
-        }
-        login_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        }
-
-        try:
-            resp = session.post(login_url, data=login_data, headers=login_headers, timeout=30)
-        except Exception as e:
-            return {'ok': False, 'message': f'登录请求失败: {e}'}
-
-        # 处理登录响应
-        login_ok = False
-        if resp.status_code in (302, 301):
-            login_ok = True
-            redirect_url = resp.headers.get("Location", "http://i.chaoxing.com")
-            try:
-                session.get(redirect_url, headers=login_headers, timeout=30)
-            except Exception:
-                pass
-        else:
-            try:
-                login_result = resp.json()
-                if login_result.get("mes") == "成功" or login_result.get("status") is True:
-                    login_ok = True
-                else:
-                    return {'ok': False, 'message': f'学习通登录失败: {login_result.get("mes", "未知错误")}'}
-            except Exception:
-                login_ok = len(session.cookies) > 0
-
-        if not login_ok:
-            return {'ok': False, 'message': '学习通登录失败，请检查账号密码'}
-
-        self.log_system(f"[学习通课程] 登录成功 (cookies: {len(session.cookies)} 个)")
-
-        # 4. 获取课程列表
-        course_url = "http://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1"
-        course_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "http://mooc1-1.chaoxing.com/visit/courses",
-        }
-
-        try:
-            resp2 = session.get(course_url, headers=course_headers, timeout=30)
-            if resp2.status_code != 200:
-                return {'ok': False, 'message': f'课程列表请求失败 (HTTP {resp2.status_code})'}
-            data = resp2.json()
-        except Exception as e:
-            return {'ok': False, 'message': f'课程列表请求失败: {e}'}
-
-        # 5. 解析课程数据
-        channels = data.get("channelList", [])
-        courses = []
-        seen_names = set()
-        for ch in channels:
-            content = ch.get("content") or {}
-            course_obj = content.get("course") or {}
-            course_data_list = course_obj.get("data") or []
-            main_name = content.get("name", "")
-
-            if course_data_list:
-                for cd in course_data_list:
-                    cname = cd.get("name") or main_name
-                    if cname and cname not in seen_names:
-                        seen_names.add(cname)
-                        courses.append({
-                            'name': cname,
-                            'courseId': str(cd.get("id", "")),
-                            'teacher': cd.get("teacherfactor", ""),
-                            'school': cd.get("schools", ""),
-                            'imageurl': cd.get("imageurl", ""),
-                            'isstart': content.get("isstart", False),
-                            'isretire': content.get("isretire", 0),
-                        })
-            elif main_name and main_name not in seen_names:
-                seen_names.add(main_name)
-                courses.append({
-                    'name': main_name,
-                    'courseId': str(ch.get("key", "")),
-                    'teacher': '',
-                    'school': '',
-                    'imageurl': '',
-                    'isstart': content.get("isstart", False),
-                    'isretire': content.get("isretire", 0),
-                })
-
-        self.log_system(f"[学习通课程] 获取到 {len(courses)} 门课程")
-
-        # 6. 存入缓存
-        result = {'ok': True, 'courses': courses}
-        try:
-            cache_full = {}
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    cache_full = json.load(f)
-            cache_full[cache_key] = {
-                'cached_at': datetime.now().isoformat(),
-                'data': result
+            return {
+                'ok': False,
+                'message': f'账号索引 {account_index} 超出范围 (共 {len(users)} 个账号)',
             }
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(cache_full, f, ensure_ascii=False, indent=2)
+        user = users[account_index]
+        account_type = str(user.get('accountType', '')).upper()
+        if account_type != 'XUEXITONG':
+            return {
+                'ok': False,
+                'message': f'账号类型 {account_type} 不是学习通，无法获取课程',
+            }
+        username = str(user.get('account', '')).strip()
+        password = str(user.get('password', '')).strip()
+        self.log_system(f"[学习通课程] 正在获取账号 {account_index} 的课程...")
+        try:
+            return self._get_course_catalog_service().get_xuexitong_courses(
+                account_index,
+                username,
+                password,
+            )
         except Exception as e:
-            self.log_system(f"[学习通课程] 缓存写入失败: {e}")
-
-        return result
+            return {'ok': False, 'message': f'获取学习通课程失败: {e}'}
 
     def start_practice_mode_from_web(self):
         """启动刷题模式 - 运行 Practice_Mode.py，日志接入 Autovisor 面板"""

@@ -15,6 +15,10 @@ if sys.stderr and sys.stderr.encoding and "gbk" in sys.stderr.encoding.lower():
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from src.atomic_io import atomic_dump_json
 
 
 def _detect_browser_path():
@@ -46,14 +50,19 @@ def _detect_browser_path():
 
 
 def load_config(account_index=1):
-    section_map = {
-        1: "user-account",
-        2: "user-account-2",
-        3: "user-account-3",
-        4: "user-account-4",
-        5: "user-account-5",
-    }
-    section = section_map.get(account_index, "user-account")
+    try:
+        account_index = int(account_index)
+    except (TypeError, ValueError):
+        print("账号索引格式错误", flush=True)
+        return None, None
+    if account_index < 1:
+        print("账号索引必须从 1 开始", flush=True)
+        return None, None
+    section = (
+        "user-account"
+        if account_index == 1
+        else f"user-account-{account_index}"
+    )
 
     config_path = os.path.join(SCRIPT_DIR, "Autovisor", "configs.ini")
     config = configparser.ConfigParser()
@@ -245,8 +254,7 @@ def save_course_data(file_path, username, courses, notices):
     }
 
     try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_dump_json(file_path, data)
         _safe_print(f"数据已保存到 {file_path}")
     except Exception as e:
         _safe_print(f"保存数据失败: {e}")
@@ -454,4 +462,5 @@ async def main():
         print("课程读取完成", flush=True)
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
