@@ -11,6 +11,7 @@
 │  ├─ launcher_api.py         # pywebview 暴露给前端的最小 API
 │  ├─ dependencies.py         # 唯一的启动器依赖定义与检查入口
 │  ├─ question_bank_controller.py # 题库设置与本地服务生命周期
+│  ├─ update_controller.py    # 核心检查、安装与并发状态机
 │  ├─ atomic_io.py            # 配置文件原子写入
 │  ├─ core_manager.py         # Yatori/Autovisor 下载和更新
 │  └─ 题库服务器.py            # 本地题库 HTTP 服务

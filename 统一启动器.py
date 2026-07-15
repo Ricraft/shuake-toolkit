@@ -29,6 +29,7 @@ from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
 from src.question_bank_controller import QuestionBankController
+from src.update_controller import UpdateController
 
 try:
     import webview
@@ -669,6 +670,14 @@ class UnifiedLauncher:
         """核心管理器日志回调"""
         self.log_system(f"[核心] {message}")
 
+    def _handle_core_installed(self, core):
+        """Refresh launcher paths after the update controller installs a core."""
+        base_dir = self.get_base_dir()
+        if core == 'yatori':
+            self.yatori_path = self.find_yatori_path(base_dir)
+        elif core == 'autovisor':
+            self.autovisor_path = self.find_autovisor_path(base_dir)
+
     def auto_check_cores(self):
         """自动检查核心安装情况和更新"""
         if not self.core_manager:
@@ -723,11 +732,7 @@ class UnifiedLauncher:
         self.autovisor_path = self.find_autovisor_path(base_dir)
 
         self.core_manager = None
-        self.update_info = None
-        self.autovisor_update_info = None
-        self.is_updating = False
         self.autovisor_installing = False
-        self.autovisor_version_checking = False
         self._shutdown_pending = False
 
         self.question_bank = QuestionBankController(
@@ -747,6 +752,17 @@ class UnifiedLauncher:
         self.autovisor_multi_mode = len(initial_autovisor_config.get('accounts', [])) > 1
         if CoreManager:
             self.core_manager = CoreManager(base_dir, log_callback=self._core_manager_log)
+        self.update_controller = UpdateController(
+            self.core_manager,
+            log=self.log_system,
+            show_info=self._show_info,
+            show_warning=self._show_warning,
+            show_error=self._show_error,
+            is_core_running=lambda core: bool(self.running.get(core)),
+            on_installed=self._handle_core_installed,
+            get_autovisor_version=self._get_autovisor_display_version,
+            schedule=self._after,
+        )
 
         self.log_system("统一启动器已就绪")
         self._after(600, self.auto_start_question_bank)
@@ -775,6 +791,22 @@ class UnifiedLauncher:
     @property
     def _qb_port(self):
         return self.question_bank.port
+
+    @property
+    def update_info(self):
+        return self.update_controller.yatori_update_info
+
+    @property
+    def autovisor_update_info(self):
+        return self.update_controller.autovisor_update_info
+
+    @property
+    def is_updating(self):
+        return self.update_controller.installing
+
+    @property
+    def autovisor_version_checking(self):
+        return self.update_controller.autovisor_checking
 
     def _get_autovisor_multi_mode(self):
         return bool(getattr(self, 'autovisor_multi_mode', True))
@@ -2489,254 +2521,29 @@ class UnifiedLauncher:
     # ==================== 核心管理功能 ====================
 
     def check_yatori_update_async(self):
-        """异步检查 Yatori 更新"""
-        if not self.core_manager or self.is_updating:
-            return
-        
-        def check():
-            try:
-                result = self.core_manager.check_yatori_update()
-                if result:
-                    self.update_info = result
-                    has_update = result.get('has_update', False)
-                    installed = result.get('installed', False)
-                    
-                    if has_update and installed:
-                        version = result['info']['version']
-                        self._after(0, lambda: self.show_update_available_notification(version))
-                    elif not installed:
-                        self.log_system("未安装 Yatori，可在 Web 界面点击“安装 Yatori 更新”。")
-            except Exception as e:
-                self.log_system(f"检查更新失败: {e}")
-        
-        thread = threading.Thread(target=check, daemon=True)
-        thread.start()
+        return self.update_controller.check_yatori_async(explicit=False)
 
     def show_update_available_notification(self, version):
-        """显示更新可用通知"""
         self.log_system(f"检测到 Yatori 新版本: {version}")
 
     def install_yatori_update_async(self, release_info=None):
-        """Install Yatori after an explicit Web UI update action."""
-        if not self.core_manager:
-            self._show_error("系统错误", "核心管理器初始化失败")
-            return False
-        if self.is_updating:
-            self._show_info("管理中心", "正在处理任务，请勿重复操作")
-            return False
-        if self.running.get('yatori'):
-            self._show_warning("Yatori 更新", "请先停止 Yatori，再执行核心更新。")
-            return False
-
-        release_info = release_info or (self.update_info or {}).get('info')
-        if not release_info:
-            self._show_warning("Yatori 更新", "暂无可安装的版本信息，请先检查更新。")
-            return False
-
-        self.is_updating = True
-        self.log_system(f"开始安装 Yatori {release_info.get('version', 'unknown')}...")
-
-        def on_progress(info):
-            progress = info.get('progress', 0) or 0
-            downloaded = info.get('downloaded') or 0
-            total = info.get('total')
-            if total:
-                self.log_system(
-                    f"Yatori 下载中: {progress:.1f}% ({downloaded}/{total} bytes)",
-                    replace_last=True,
-                )
-            else:
-                self.log_system(f"Yatori 下载中: {downloaded} bytes", replace_last=True)
-
-        def install_worker():
-            success = False
-            error = None
-            try:
-                success = self.core_manager.install_yatori(release_info, on_progress)
-            except Exception as exc:
-                error = exc
-            finally:
-                self.is_updating = False
-                if success:
-                    self.update_info = None
-                    self.yatori_path = self.find_yatori_path(self.get_base_dir())
-                    self.log_system("✅ Yatori 核心处理完成")
-                    self._show_info("Yatori 更新", "Yatori 核心已成功安装/更新。")
-                else:
-                    message = str(error) if error else "下载或安装失败"
-                    self.log_system(f"❌ Yatori 安装失败: {message}")
-                    self._show_error("Yatori 更新", f"{message}\n\n请检查网络设置或稍后重试。")
-
-        threading.Thread(target=install_worker, daemon=True).start()
-        return True
+        return self.update_controller.install_yatori_async(release_info)
 
     def check_autovisor_update_async(self):
-        """异步检查 Autovisor 最新版本"""
-        if not self.core_manager:
-            self._show_error("提示", "核心管理器初始化失败，无法检查版本。")
-            return
-
-        if self.autovisor_version_checking:
-            self.log_system("Autovisor 版本检查正在进行中，请稍候。")
-            return
-
-        self.autovisor_version_checking = True
-        self.log_system("正在检查 Autovisor 最新版本...")
-
-        def check():
-            result = None
-            error = None
-            try:
-                result = self.core_manager.check_autovisor_update()
-            except Exception as exc:
-                error = exc
-            finally:
-                def finish():
-                    self.autovisor_version_checking = False
-                    if error:
-                        self.log_system(f"Autovisor 版本检查失败: {error}")
-                        self._show_error("Autovisor 版本", f"检查版本失败：\n{error}")
-                    elif not result:
-                        self.log_system("Autovisor 版本检查失败: 未获取到版本信息")
-                        self._show_error("Autovisor 版本", "未能获取最新版本信息，请稍后重试。")
-                    else:
-                        self.handle_autovisor_version_result(result)
-
-                self._after(0, finish)
-
-        threading.Thread(target=check, daemon=True).start()
+        return self.update_controller.check_autovisor_async()
 
     def handle_autovisor_version_result(self, result):
-        """处理 Autovisor 版本检查结果"""
-        release_info = result.get('info') or result
-        latest_version = release_info.get('version', '未知')
-        current_version = result.get('version') or self._get_autovisor_display_version()
-        has_update = result.get('has_update', False)
-        installed = result.get('installed', True)
-
-        self.log_system(f"Autovisor 最新版本: {latest_version}")
-
-        if not has_update:
-            self._show_info(
-                "Autovisor 版本",
-                f"当前已是最新版本。\n\n当前版本: {current_version}",
-            )
-            return
-
-        self.autovisor_update_info = result
-        message = (
-            f"检测到 Autovisor 新版本: {latest_version}\n\n"
-            f"当前版本: {current_version if installed else '未安装'}\n\n"
-            "是否立即下载并自动覆盖更新？"
-        )
-        self.log_system(message.replace("\n", " "))
-        self.log_system("Web UI 已记录更新信息，可通过 install_autovisor_update 动作触发安装。")
+        return self.update_controller.handle_autovisor_result(result)
 
     def install_autovisor_update_async(self, release_info=None):
-        """后台安装/更新 Autovisor。"""
-        if not self.core_manager:
-            self._show_error("系统错误", "核心管理器初始化失败")
-            return False
-
-        if self.is_updating:
-            self._show_info("管理中心", "正在处理任务，请勿重复操作")
-            return False
-
-        if self.running.get('autovisor'):
-            self._show_warning("Autovisor 更新", "请先停止 Autovisor，再执行核心更新。")
-            return False
-
-        if release_info is None:
-            release_info = (self.autovisor_update_info or {}).get('info')
-
-        if not release_info:
-            self._show_warning("Autovisor 更新", "暂无可安装的版本信息，请先检查更新。")
-            return False
-
-        self.is_updating = True
-        self.log_system(f"开始安装 Autovisor {release_info.get('version', 'unknown')}...")
-
-        def on_progress(info):
-            progress = info.get('progress', 0) or 0
-            total = info.get('total')
-            downloaded = info.get('downloaded')
-            if total:
-                self.log_system(f"Autovisor 下载中: {progress:.1f}% ({downloaded}/{total} bytes)", replace_last=True)
-            else:
-                self.log_system(f"Autovisor 下载中: {downloaded or 0} bytes", replace_last=True)
-
-        def install_worker():
-            success = False
-            error = None
-            try:
-                success = self.core_manager.install_autovisor(release_info, on_progress)
-            except Exception as exc:
-                error = exc
-            finally:
-                def finish():
-                    self.is_updating = False
-                    if success:
-                        self.autovisor_update_info = None
-                        self.autovisor_path = self.find_autovisor_path(self.get_base_dir())
-                        self.log_system("✅ Autovisor 核心处理完成")
-                        self._show_info("Autovisor 更新", "Autovisor 核心已成功安装/更新。")
-                    else:
-                        message = str(error) if error else "下载或安装失败"
-                        self.log_system(f"❌ Autovisor 安装失败: {message}")
-                        self._show_error("Autovisor 更新", f"{message}\n\n请检查网络设置或稍后重试。")
-
-                self._after(0, finish)
-
-        threading.Thread(target=install_worker, daemon=True).start()
-        return True
-
-
-
+        return self.update_controller.install_autovisor_async(release_info)
 
     def show_update_dialog(self):
         """Check and install Yatori from the explicit Web UI action."""
-        if not self.core_manager:
-            self._show_error("系统错误", "核心管理器初始化失败")
-            return False
-        
-        if self.is_updating:
-            self._show_info("管理中心", "正在处理任务，请勿重复操作")
-            return False
-
-        self.log_system("手动触发版本检查...")
-
-        def check():
-            try:
-                result = self.core_manager.check_yatori_update()
-                self._after(0, lambda: self.handle_manual_check_result(result))
-            except Exception as exc:
-                self._show_error("管理中心", f"检查 Yatori 更新失败: {exc}")
-
-        threading.Thread(target=check, daemon=True).start()
-        return True
+        return self.update_controller.check_yatori_async(explicit=True)
 
     def handle_manual_check_result(self, result):
-        """Handle the result of an explicit Web UI Yatori update request."""
-        if not result:
-            self._show_error("管理中心", "无法连接至 GitHub 节点，请检查网络环境。")
-            return
-        
-        has_update = result.get('has_update', False)
-        installed = result.get('installed', False)
-        
-        if not installed:
-            self.update_info = result
-            self.install_yatori_update_async(result.get('info'))
-        elif has_update:
-            self.update_info = result
-            version = result['info']['version']
-            self.log_system(
-                f"检测到 Yatori 新版本 {version}，Web 界面的安装操作已确认，开始更新。"
-            )
-            self.install_yatori_update_async(result.get('info'))
-        else:
-            version = result.get('version', '未知')
-            self._show_info("管理中心", f"当前已是最新版本 ({version})")
+        return self.update_controller.handle_explicit_yatori_result(result)
 
     def on_closing(self, confirmed=False):
         """关闭窗口时清理"""
