@@ -8,6 +8,7 @@ import traceback
 import sys
 import types
 from typing import Optional
+from urllib.parse import urlsplit
 
 from runtime_bootstrap import activate_runtime_dependencies
 
@@ -40,6 +41,7 @@ _ensure_simplejson_compat()
 from modules.logger import Logger
 from modules.configs import Config
 from modules.course_queue import run_course_queue
+from modules.course_portal import is_login_url
 from modules.course_session import CourseAuthenticationError
 from modules.hike_course_flow import run_hike_course
 from modules.login_flow import login_to_zhihuishu
@@ -179,7 +181,22 @@ async def close_popup(page: Page, logger_instance=None):
     return False
 
 
-async def learning_loop(page: Page, start_time, is_new_version=False, is_hike_class=False, is_national_wisdom=False, is_meeting_class=False):
+async def learning_loop(
+    page: Page,
+    start_time,
+    is_new_version=False,
+    is_hike_class=False,
+    is_national_wisdom=False,
+    is_meeting_class=False,
+    *,
+    clock=time.time,
+    sleep_func=asyncio.sleep,
+    minimum_watch_seconds=10,
+    stuck_timeout=60,
+    max_recovery_attempts=3,
+    health_check_interval=30,
+    position_check_interval=10,
+) -> bool:
     # 见面课完成阈值：80%（签到进度达到80%即完成签到）
     completion_threshold = 0.8 if is_meeting_class else (0.98 if is_national_wisdom else 1.0)
     
@@ -221,22 +238,39 @@ async def learning_loop(page: Page, start_time, is_new_version=False, is_hike_cl
             except Exception as e:
                 logger.warn(f"重置视频失败: {repr(e)}", shift=True)
     
-    min_duration = time.time() + 10
+    min_duration = clock() + minimum_watch_seconds
     loop_counter = 0
     last_progress = cur_time
-    stuck_since = time.time()
-    while cur_time != "100%" or time.time() < min_duration:
+    stuck_since = clock()
+    last_video_position = None
+    recovery_attempts = 0
+    while cur_time != "100%" or clock() < min_duration:
         try:
             loop_counter += 1
             
             limit_time = config.limitMaxTime
-            time_period = (time.time() - start_time) / 60
+            time_period = (clock() - start_time) / 60
             if 0 < limit_time <= time_period:
                 logger.info(f"已达学习时限 {limit_time}min，退出学习循环", shift=True)
                 break
+
+            if loop_counter % position_check_interval == 0:
+                try:
+                    position = await page.evaluate(
+                        'document.querySelector("video")?.currentTime ?? null'
+                    )
+                    if isinstance(position, (int, float)) and (
+                        last_video_position is None
+                        or position > last_video_position + 0.5
+                    ):
+                        stuck_since = clock()
+                    if isinstance(position, (int, float)):
+                        last_video_position = position
+                except Exception:
+                    pass
             
             # P0-1: 每30次循环检查一次视频加载状态
-            if loop_counter % 30 == 0:
+            if loop_counter % health_check_interval == 0:
                 video_state = await page.evaluate('''() => {
                     const v = document.querySelector('video');
                     if (!v) return { error: 'no_video' };
@@ -250,44 +284,78 @@ async def learning_loop(page: Page, start_time, is_new_version=False, is_hike_cl
                     };
                 }''')
                 if video_state.get('error') is not None:
+                    if recovery_attempts >= max_recovery_attempts:
+                        logger.error(
+                            f"视频加载持续失败，已达到 {max_recovery_attempts} 次恢复上限",
+                            shift=True,
+                        )
+                        return False
+                    recovery_attempts += 1
                     logger.warn(f"视频加载错误(code={video_state['error']})，刷新页面重试", shift=True)
                     try:
                         await page.reload(wait_until="domcontentloaded")
                         await page.wait_for_selector("video", timeout=15000)
                         await page.evaluate(config.remove_pause)
-                        logger.info("页面已刷新，继续播放", shift=True)
+                        last_progress = "0%"
+                        last_video_position = None
+                        stuck_since = clock()
+                        cur_time = "0%"
+                        logger.info(
+                            f"页面已刷新，继续播放（恢复 {recovery_attempts}/{max_recovery_attempts}）",
+                            shift=True,
+                        )
+                        continue
                     except Exception as reload_e:
                         logger.error(f"刷新页面失败: {str(reload_e)[:50]}", shift=True)
                         break
             
             # P0-2: 每30次循环检查登录态是否过期
-            if loop_counter % 30 == 0:
+            if loop_counter % health_check_interval == 0:
                 current_url = page.url
-                if "www.zhihuishu.com" in current_url or "login" in current_url:
-                    logger.error("检测到被重定向到首页或登录页，登录态可能已过期，退出", shift=True)
-                    break
+                current_host = (urlsplit(current_url).hostname or "").lower()
+                if (
+                    current_host == "www.zhihuishu.com"
+                    or is_login_url(current_url)
+                ):
+                    raise CourseAuthenticationError(
+                        "视频播放期间被重定向到首页或登录页"
+                    )
             
             cur_time = await get_course_progress(page, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class, completion_threshold)
             
             # 【修复】检测进度停滞：如果连续60秒进度没有变化，刷新页面
             if cur_time == last_progress:
-                if time.time() - stuck_since > 60:
-                    logger.warn(f"进度已停滞超过60秒({cur_time})，刷新页面重试", shift=True)
+                if clock() - stuck_since > stuck_timeout:
+                    if recovery_attempts >= max_recovery_attempts:
+                        logger.error(
+                            f"进度连续停滞，已达到 {max_recovery_attempts} 次恢复上限",
+                            shift=True,
+                        )
+                        return False
+                    recovery_attempts += 1
+                    logger.warn(
+                        f"进度已停滞超过{stuck_timeout}秒({cur_time})，刷新页面重试",
+                        shift=True,
+                    )
                     try:
                         await page.reload(wait_until="domcontentloaded")
                         await page.wait_for_selector("video", timeout=15000)
                         await page.evaluate(config.remove_pause)
                         last_progress = "0%"
-                        stuck_since = time.time()
+                        last_video_position = None
+                        stuck_since = clock()
                         cur_time = "0%"
-                        logger.info("页面已刷新，继续播放", shift=True)
+                        logger.info(
+                            f"页面已刷新，继续播放（恢复 {recovery_attempts}/{max_recovery_attempts}）",
+                            shift=True,
+                        )
                         continue
                     except Exception as reload_e:
                         logger.error(f"刷新页面失败: {str(reload_e)[:50]}", shift=True)
                         break
             else:
                 last_progress = cur_time
-                stuck_since = time.time()
+                stuck_since = clock()
             
             # 见面课特殊提示
             if is_meeting_class and cur_time == "100%":
@@ -321,7 +389,7 @@ async def learning_loop(page: Page, start_time, is_new_version=False, is_hike_cl
             except Exception as e:
                 pass
             
-            await asyncio.sleep(0.5)
+            await sleep_func(0.5)
         except TimeoutError as e:
             if await page.query_selector(".yidun_modal__title"):
                 await event_loop_verify.wait()
@@ -339,6 +407,11 @@ async def learning_loop(page: Page, start_time, is_new_version=False, is_hike_cl
                 )
             else:
                 logger.warn(repr(e))
+
+    completed = cur_time == "100%"
+    if not completed:
+        logger.warn(f"视频未确认完成，最终进度: {cur_time}", shift=True)
+    return completed
 
 
 async def review_loop(page: Page, start_time, is_hike_class=False):

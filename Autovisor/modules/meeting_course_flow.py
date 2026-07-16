@@ -167,7 +167,7 @@ async def run_meeting_course(
             close_popup=close_popup,
             set_speed=True,
         )
-        await learning_loop(
+        completed = await learning_loop(
             page,
             start_time,
             is_new_version,
@@ -175,6 +175,8 @@ async def run_meeting_course(
             is_national_wisdom,
             True,
         )
+        if completed is False:
+            raise RuntimeError("见面课视频未确认完成")
         logger.info("见面课已完成！", shift=True)
         return
 
@@ -217,7 +219,7 @@ async def run_meeting_course(
         if should_set_speed and speed_applied:
             speed_configured = True
 
-        await learning_loop(
+        completed = await learning_loop(
             page,
             start_time,
             is_new_version,
@@ -225,6 +227,9 @@ async def run_meeting_course(
             is_national_wisdom,
             True,
         )
+        if completed is False:
+            logger.warn(f"视频 '{video['title']}' 未确认完成", shift=True)
+            continue
         completed_this_run += 1
         logger.info(f"视频 '{video['title']}' 已完成！", shift=True)
 
@@ -236,4 +241,7 @@ async def run_meeting_course(
             f"本轮完成 {completed_this_run}/{len(incomplete_videos)} 个视频，"
             f"仍有 {remaining} 个未确认完成",
             shift=True,
+        )
+        raise RuntimeError(
+            f"见面课仍有 {remaining} 个视频未确认完成"
         )

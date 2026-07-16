@@ -307,7 +307,11 @@ async def run_normal_course(
         await page.wait_for_selector("video", state="attached")
         await page.evaluate(config.remove_pause)
         if learning:
-            await learning_loop(page, start_time, is_new_version, False, False, False)
+            completed = await learning_loop(
+                page, start_time, is_new_version, False, False, False
+            )
+            if completed is False:
+                raise RuntimeError(f"视频未确认完成: {title}")
         else:
             await review_loop(page, start_time, False)
 

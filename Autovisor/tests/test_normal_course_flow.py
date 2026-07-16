@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -217,6 +218,50 @@ def test_empty_normal_course_list_finishes_cleanly():
     )
 
     assert logger.infos[-1] == "本页课程列表已遍历完毕。"
+
+
+def test_false_video_result_is_not_advanced_as_completed():
+    page = _Page()
+    course = _ClickableCourse()
+
+    async def close_popup(*_args):
+        return False
+
+    async def class_provider(*_args, **_kwargs):
+        return [course]
+
+    async def test_scanner(*_args):
+        return []
+
+    async def failed_learning(*_args):
+        return False
+
+    async def title_reader(*_args):
+        return "未完成视频"
+
+    with pytest.raises(RuntimeError, match="视频未确认完成"):
+        asyncio.run(
+            run_normal_course(
+                page,
+                SimpleNamespace(
+                    remove_pause="js",
+                    course_urls=["course"],
+                    limitMaxTime=0,
+                ),
+                _Logger(),
+                close_popup=close_popup,
+                learning_loop=failed_learning,
+                review_loop=None,
+                handler_factory=lambda: _Handler(),
+                answer_handler=None,
+                class_provider=class_provider,
+                test_scanner=test_scanner,
+                title_reader=title_reader,
+                clock=lambda: 0,
+            )
+        )
+
+    assert course.clicked is True
 
 
 def test_answered_test_is_not_repeated_when_completion_state_is_stale():

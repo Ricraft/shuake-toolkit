@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -216,21 +217,56 @@ def test_speed_is_configured_on_first_successfully_opened_video():
         calls.learns += 1
 
     logger = _Logger()
-    asyncio.run(
-        run_meeting_course(
-            _Page(),
-            SimpleNamespace(playbackRate=1.5),
-            logger,
-            close_popup=_noop,
-            learning_loop=learning_loop,
-            scanner=scanner,
-            video_preparer=preparer,
-            clock=lambda: 20,
+    with pytest.raises(RuntimeError, match="仍有 1 个视频"):
+        asyncio.run(
+            run_meeting_course(
+                _Page(),
+                SimpleNamespace(playbackRate=1.5),
+                logger,
+                close_popup=_noop,
+                learning_loop=learning_loop,
+                scanner=scanner,
+                video_preparer=preparer,
+                clock=lambda: 20,
+            )
         )
-    )
 
     assert failed.clicked is False
     assert opened.clicked is True
     assert calls.prepares == [True]
     assert calls.learns == 1
     assert logger.warnings[-1] == "本轮完成 1/2 个视频，仍有 1 个未确认完成"
+
+
+def test_false_learning_result_is_not_reported_as_completed():
+    element = _VideoElement()
+
+    async def scanner(_page):
+        return [
+            {
+                "completed": False,
+                "element": element,
+                "title": "未完成",
+                "duration": "1:00",
+            }
+        ]
+
+    async def failed_learning(*_args):
+        return False
+
+    logger = _Logger()
+    with pytest.raises(RuntimeError, match="仍有 1 个视频"):
+        asyncio.run(
+            run_meeting_course(
+                _Page(),
+                SimpleNamespace(playbackRate=1.5),
+                logger,
+                close_popup=_noop,
+                learning_loop=failed_learning,
+                scanner=scanner,
+                video_preparer=_noop,
+            )
+        )
+
+    assert "视频 '未完成' 已完成！" not in logger.infos
+    assert any("未确认完成" in warning for warning in logger.warnings)

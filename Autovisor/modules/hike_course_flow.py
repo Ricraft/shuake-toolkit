@@ -82,7 +82,7 @@ async def run_hike_course(
         except Exception:
             logger.warn("未及时检测到视频元素,进入宽松等待模式.", shift=True)
 
-        await learning_loop(
+        completed = await learning_loop(
             page,
             start_time,
             is_new_version,
@@ -99,6 +99,8 @@ async def run_hike_course(
             True,
             is_national_wisdom,
         )
+        if completed is False:
+            raise RuntimeError(f"视频未确认完成: {current_title}")
 
         refreshed_lessons, _summary = await scanner(page)
         if not refreshed_lessons:

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -230,5 +231,41 @@ def test_video_is_learned_and_returns_to_course_list():
     )
 
     assert len(learn_calls) == 1
+    assert page.go_back_calls == 1
+    assert is_course_list_url(page.url, _config().course_urls[0])
+
+
+def test_false_video_result_returns_to_list_then_fails_course():
+    card = _video_card()
+
+    async def scanner(_page):
+        return [card], _summary(1, 1), False
+
+    page = _Page(_config().course_urls[0])
+
+    async def clicker(*_args):
+        page.url = "https://wisdom-mooc.zhihuishu.com/video/index"
+        return True
+
+    async def failed_learning(*_args):
+        return False
+
+    with pytest.raises(RuntimeError, match="视频未确认完成"):
+        asyncio.run(
+            run_national_course(
+                page,
+                _config(),
+                _Logger(),
+                close_popup=_close_popup,
+                learning_loop=failed_learning,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+                card_clicker=clicker,
+                title_reader=lambda *_args: None,
+                clock=lambda: 10,
+            )
+        )
+
     assert page.go_back_calls == 1
     assert is_course_list_url(page.url, _config().course_urls[0])

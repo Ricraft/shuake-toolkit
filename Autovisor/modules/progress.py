@@ -189,13 +189,12 @@ async def get_course_progress(page: Page, is_new_version=False, is_hike_class=Fa
 def show_course_progress(desc, cur_time=None, limit_time=0, is_meeting_class=False):
     assert limit_time >= 0, "limit_time 必须为非负数!"
     if limit_time == 0:
-        cur_time = "0%" if cur_time == '' else cur_time
-        percent = int(cur_time.split("%")[0]) + 1  # Handles a 1% rendering error
-        
-        # 见面课：80%即视为完成，但显示实际进度
-        # 其他课程：80%进度即视为完成
-        if not is_meeting_class and percent >= 80:
-            percent = 100
+        cur_time = "0%" if not cur_time else cur_time
+        try:
+            percent = int(float(str(cur_time).split("%")[0]))
+        except (TypeError, ValueError):
+            percent = 0
+        percent = max(0, min(100, percent))
         
         length = int(percent * 30 // 100)
         progress = ("█" * length).ljust(30, " ")

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -161,6 +162,32 @@ def test_click_failure_skips_lesson_without_starting_learning():
 
     assert calls.learns == []
     assert logger.warnings == ["未能定位卡片:课程-a, 本轮跳过."]
+
+
+def test_false_learning_result_fails_course_after_returning_to_list():
+    lesson = _lesson("a")
+    calls, dependencies = _dependencies([([lesson], _summary(1, 1))])
+
+    async def failed_learning(*_args):
+        return False
+
+    dependencies["learning_loop"] = failed_learning
+    page = _Page()
+    with pytest.raises(RuntimeError, match="视频未确认完成"):
+        asyncio.run(
+            run_hike_course(
+                page,
+                SimpleNamespace(
+                    limitMaxTime=0,
+                    course_urls=["course"],
+                    remove_pause="js",
+                ),
+                _Logger(),
+                **dependencies,
+            )
+        )
+
+    assert page.goto_calls == [("course", "domcontentloaded")]
 
 
 def test_time_limit_stops_before_clicking_next_lesson():
