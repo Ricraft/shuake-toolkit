@@ -184,6 +184,7 @@ def test_time_limit_is_checked_without_global_config_state():
 
     assert result is True
     assert logger.infos[-1] == "即将进入下门课程!"
+    assert page.default_timeouts == []
 
 
 def test_empty_normal_course_list_finishes_cleanly():

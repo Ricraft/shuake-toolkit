@@ -27,11 +27,10 @@ from playwright.async_api import async_playwright, Playwright, Page, BrowserCont
 
 from modules.logger import Logger
 from modules.configs import Config
-from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
+from modules.login_flow import login_to_zhihuishu
 from modules.tasks import handle_test_page
 from modules.test_capture import TestResponseHandler
 from modules.utils import (
-    save_cookies,
     load_cookies,
 )
 from modules.slider import slider_verify
@@ -69,73 +68,21 @@ async def init_page(p: Playwright, config: Config):
     page = await context.new_page()
     logger.write_log(f"{config.driver} 浏览器启动完成.\n")
     
-    page.set_default_timeout(24 * 3600 * 1000)
+    page.set_default_timeout(30_000)
     return browser, page, context
 
 
 async def auto_login(context: BrowserContext, page: Page, config: Config, modules=None):
-    """自动登录（参考 fetch_zhs_courses.py 的流程）"""
-    async def request_handler(request):
-        if "https://www.zhihuishu.com" in request.url:
-            cookies = await context.cookies()
-            save_cookies(cookies, "res/cookies.json")
-            logger.info("已保存登录凭证，下次可免密登录")
-            page.remove_listener("request", request_handler)
-
-    await page.goto(config.login_url, wait_until="commit", timeout=30000)
-    await page.wait_for_timeout(2000)
-    
-    if "login" not in page.url:
-        logger.info("检测到已登录，跳过登录步骤")
-        return
-    
-    await page.wait_for_selector(LOGIN_PANEL, state="attached")
-    logger.info("检测到登录表单")
-    
-    if config.username and config.password:
-        logger.info(f"正在自动填入账号密码 (用户名: {config.username})...")
-        try:
-            await page.wait_for_selector(USERNAME_INPUT, state="attached")
-            await page.wait_for_selector(PASSWORD_INPUT, state="attached")
-            
-            await page.locator(USERNAME_INPUT).fill(config.username)
-            await page.wait_for_timeout(500)
-            await page.locator(PASSWORD_INPUT).fill(config.password)
-            await page.wait_for_timeout(500)
-            
-            await page.wait_for_selector(LOGIN_SUBMIT, state="attached")
-            await page.wait_for_timeout(500)
-            await page.locator(LOGIN_SUBMIT).click()
-            logger.info("已提交登录信息")
-            
-            await page.wait_for_timeout(1500)
-            
-            if config.enableAutoCaptcha and modules:
-                logger.info("正在检查是否需要滑块验证...")
-                await slider_verify(page)
-            
-            await page.wait_for_timeout(2000)
-            
-            error_tip = await page.query_selector('.error-tip, .wall-error, [class*="error"]')
-            if error_tip:
-                error_text = await error_tip.text_content()
-                if error_text and error_text.strip():
-                    logger.error(f"登录失败: {error_text.strip()}")
-                    return
-            
-            if "login" in page.url:
-                logger.error("登录失败: 仍在登录页，请检查账号密码是否正确")
-                return
-                
-        except Exception as e:
-            logger.error(f"自动登录失败: {e}")
-            return
-    
-    try:
-        await page.wait_for_selector(".wall-main", state="hidden", timeout=8000)
-        logger.info("登录成功")
-    except Exception:
-        logger.warn("等待登录表单消失超时，请检查是否需要手动操作")
+    """Run the same bounded login flow used by the normal course worker."""
+    return await login_to_zhihuishu(
+        context,
+        page,
+        config,
+        logger,
+        modules=modules,
+        cookie_path="res/cookies.json",
+        slider_handler=slider_verify,
+    )
 
 
 async def navigate_to_my_course(page: Page, config: Config):
@@ -429,7 +376,10 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
             try:
                 if "passport" in main_page.url and "login" in main_page.url:
                     logger.warn("检测到登录页，session 已过期，正在重新登录...")
-                    await auto_login(context, main_page, config)
+                    if not await auto_login(context, main_page, config):
+                        logger.error("重新登录失败，保持当前页面等待下一次重试")
+                        await asyncio.sleep(5)
+                        continue
                     await navigate_to_my_course(main_page, config)
                     test_handler.remove_listener()
                     test_handler = TestResponseHandler()
@@ -462,6 +412,7 @@ async def main():
         if not config.username or not config.password:
             logger.info("请手动填写账号密码...")
         logger.info("正在登录...")
-        await auto_login(context, page, config, modules)
+        if not await auto_login(context, page, config, modules):
+            raise RuntimeError("登录未完成，刷题模式已停止")
 
         await practice_loop(page, context, config)

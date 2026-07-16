@@ -41,13 +41,13 @@ from modules.logger import Logger
 from modules.configs import Config
 from modules.course_session import CourseSession
 from modules.hike_course_flow import run_hike_course
-from modules.login_selectors import LOGIN_PANEL, LOGIN_SUBMIT, PASSWORD_INPUT, USERNAME_INPUT
+from modules.login_flow import login_to_zhihuishu
 from modules.meeting_course_flow import run_meeting_course
 from modules.national_course_flow import run_national_course
 from modules.normal_course_flow import run_normal_course
 from modules.progress import get_course_progress, show_course_progress
 from modules.utils import get_video_attr, hide_window, \
-    get_browser_window, bring_console_to_front, save_cookies, load_cookies, \
+    get_browser_window, bring_console_to_front, load_cookies, \
     is_playwright_window
 from modules.slider import slider_verify
 from modules.async_utils import cancel_background_tasks
@@ -94,36 +94,20 @@ async def init_page(p: Playwright) -> tuple[Page, BrowserContext]:
         logger.info("未找到 Cookies,将跳转至登录页.")
     page = await context.new_page()
     logger.write_log(f"{config.driver}浏览器启动完成.\n")
-    page.set_default_timeout(24 * 3600 * 1000)
+    page.set_default_timeout(30_000)
 
     return page, context
 
 async def auto_login(context: BrowserContext, page: Page, modules=None):
-    async def request_handler(request):
-        if "https://www.zhihuishu.com" in request.url:
-            cookies = await context.cookies()
-            save_cookies(cookies, config.cookies_file)
-            logger.info(f"已保存登录凭证到: {config.cookies_file},下次可免密登录.")
-            # 停止监听
-            page.remove_listener('request', request_handler)
-
-    await page.goto(config.login_url, wait_until="commit")
-    if "login" not in page.url:
-        logger.info("检测到已登录,跳过登录步骤.")
-        return
-    await page.wait_for_selector(LOGIN_PANEL, state='attached')  # 等待登陆界面加载
-    page.on('request', request_handler)
-    if config.username and config.password:
-        await page.wait_for_selector(USERNAME_INPUT, state="attached")
-        await page.wait_for_selector(PASSWORD_INPUT, state="attached")
-        await page.locator(USERNAME_INPUT).fill(config.username)
-        await page.locator(PASSWORD_INPUT).fill(config.password)
-        await page.wait_for_selector(LOGIN_SUBMIT, state="attached")
-        await page.wait_for_timeout(500)
-        await page.locator(LOGIN_SUBMIT).click()
-    if config.enableAutoCaptcha and modules:
-        await slider_verify(page)
-    await page.wait_for_selector(LOGIN_PANEL, state='hidden')
+    return await login_to_zhihuishu(
+        context,
+        page,
+        config,
+        logger,
+        modules=modules,
+        cookie_path=config.cookies_file,
+        slider_handler=slider_verify,
+    )
 
 
 async def close_popup(page: Page, logger_instance=None):
@@ -456,7 +440,9 @@ async def main():
         logger.info("正在等待登录完成...")
         # 先启动人机验证协程
         verify_task = asyncio.create_task(wait_for_verify(page, config, event_loop_verify))
-        await auto_login(context, page, modules)
+        if not await auto_login(context, page, modules):
+            await cancel_background_tasks([verify_task])
+            raise RuntimeError("登录未完成，已停止刷课任务")
 
         # 启动协程任务
         video_optimize_task = asyncio.create_task(video_optimize(page, config))

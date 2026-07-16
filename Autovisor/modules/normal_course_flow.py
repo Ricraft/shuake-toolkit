@@ -141,7 +141,6 @@ async def check_normal_course_time_limit(
     *,
     clock=time.time,
 ) -> bool:
-    page.set_default_timeout(24 * 3600 * 1000)
     time_period = (clock() - start_time) / 60
     if 0 < config.limitMaxTime <= time_period:
         logger.info(f"当前课程已达时限:{config.limitMaxTime}min", shift=True)
