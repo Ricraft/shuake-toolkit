@@ -749,13 +749,13 @@
                                         <span class="qb-action-desc">清理重复的题目数据</span>
                                     </div>
                                 </button>
-                                <button class="qb-action-btn" onclick="performAction('clear_question_bank')">
+                                <button class="qb-action-btn" onclick="confirmAndPerform('clear_question_bank', '确定要清空本地题库吗？此操作无法撤销。')">
                                     <div class="qb-action-icon qb-action-danger">
                                         <i class="fas fa-trash-alt"></i>
                                     </div>
                                     <div class="qb-action-info">
-                                        <span class="qb-action-title">清空缓存</span>
-                                        <span class="qb-action-desc">删除所有 AI 缓存数据</span>
+                                        <span class="qb-action-title">清空题库</span>
+                                        <span class="qb-action-desc">删除所有本地题目数据</span>
                                     </div>
                                 </button>
                                 <button class="qb-action-btn" onclick="performAction('export_question_bank')">

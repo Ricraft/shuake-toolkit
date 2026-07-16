@@ -184,6 +184,69 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("if (action === 'start')", core_action)
         self.assertLess(core_action.index("const action"), core_action.index("saveSettings"))
 
+    def test_start_all_reports_partial_failure_to_web(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.question_bank = SimpleNamespace(running=True, available=True)
+        launcher.running = {"yatori": False, "autovisor": False}
+        launcher._last_start_error = {}
+        launcher.log_system = lambda _message: None
+        launcher.start_yatori = lambda: launcher._reject_runtime_start(
+            "yatori", "Yatori 配置缺失"
+        )
+        launcher.start_autovisor = lambda: True
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+
+        result = launcher.perform_web_action("start_all")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "Yatori 配置缺失")
+        self.assertIn("state", result)
+
+    def test_cancelled_question_bank_import_is_not_reported_as_failure(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.question_bank = SimpleNamespace(available=True)
+        launcher.web_window = _Window(selection=None)
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+
+        with patch.object(launcher_module, "webview", object()):
+            result = launcher.perform_web_action("import_question_bank")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["cancelled"])
+
+    def test_unknown_config_directory_target_is_rejected(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+
+        result = launcher.perform_web_action("open_config_dir", "unknown")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("未知核心类型", result["message"])
+
+    def test_question_bank_deduplicate_failure_is_not_reported_as_success(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._deduplicate_question_bank = lambda: (False, "题库文件被占用")
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+
+        result = launcher.perform_web_action("deduplicate_question_bank")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "题库文件被占用")
+        self.assertNotIn("toast", result)
+
+    def test_question_bank_clear_requires_frontend_confirmation(self):
+        project_root = Path(launcher_module.__file__).resolve().parent
+        frontend = (project_root / "web" / "app.js").read_text(encoding="utf-8")
+        page = (project_root / "web" / "现代启动器_UI_预览.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("async function confirmAndPerform", frontend)
+        self.assertIn("confirmAndPerform('clear_question_bank'", page)
+        self.assertIn("此操作无法撤销", page)
+        self.assertIn("清空题库", page)
+        self.assertIn("删除所有本地题目数据", page)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -529,6 +529,11 @@
             catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }
         }
 
+        async function confirmAndPerform(action, message) {
+            if (!window.confirm(message)) return;
+            await performAction(action);
+        }
+
         function copyApiUrl() {
              const urlInput = document.getElementById('y-api-url');
              if (urlInput) {

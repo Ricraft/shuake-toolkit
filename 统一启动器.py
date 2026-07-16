@@ -1124,6 +1124,16 @@ class UnifiedLauncher:
             return {'ok': False, 'message': f'无法切换核心: {script_type}', 'state': self.get_web_initial_state()}
         return {'ok': True, 'state': self.get_web_initial_state()}
 
+    def _with_web_action_state(self, result):
+        """Attach a fresh runtime snapshot to a structured action result."""
+        if isinstance(result, dict):
+            response = dict(result)
+        else:
+            response = {'ok': bool(result)}
+        response.setdefault('ok', False)
+        response['state'] = self.get_web_initial_state()
+        return response
+
     def perform_web_action(self, action, script_type=None):
         try:
             if action == 'start':
@@ -1137,15 +1147,17 @@ class UnifiedLauncher:
                 if not self.stop_script(script_type):
                     return {'ok': False, 'message': f'未知核心类型: {script_type}'}
             elif action == 'start_all':
-                self.start_all()
+                return self._with_web_action_state(self.start_all())
             elif action == 'stop_all':
-                self.stop_all()
+                return self._with_web_action_state(self.stop_all())
             elif action == 'open_config_dir':
-                self.open_config_dir(script_type)
+                return self._with_web_action_state(self.open_config_dir(script_type))
             elif action == 'open_config_generator':
-                self.open_config_generator()
+                return self._with_web_action_state(self.open_config_generator())
             elif action == 'show_settings_dir':
-                self.open_config_dir(script_type or 'yatori')
+                return self._with_web_action_state(
+                    self.open_config_dir(script_type or 'yatori')
+                )
             elif action == 'show_update_dialog':
                 if not self.show_update_dialog():
                     return {'ok': False, 'message': '无法检查或安装 Yatori 更新'}
@@ -1179,17 +1191,17 @@ class UnifiedLauncher:
             elif action == 'stop_question_bank':
                 self.stop_question_bank()
             elif action == 'clear_question_bank':
-                self._clear_question_bank()
+                return self._with_web_action_state(self._clear_question_bank())
             elif action == 'export_question_bank':
-                self._export_question_bank()
+                return self._with_web_action_state(self._export_question_bank())
             elif action == 'import_question_bank':
-                self._import_question_bank()
+                return self._with_web_action_state(self._import_question_bank())
             elif action == 'deduplicate_question_bank':
                 ok, msg = self._deduplicate_question_bank()
-                r = {'ok': True, 'state': self.get_web_initial_state()}
-                r['toast'] = msg
-                r['toastType'] = 'success' if ok else 'error'
-                return r
+                result = {'ok': ok, 'message': msg}
+                if ok:
+                    result.update({'toast': msg, 'toastType': 'success'})
+                return self._with_web_action_state(result)
             else:
                 return {'ok': False, 'message': f'未知操作: {action}'}
         except Exception as exc:
@@ -1967,8 +1979,9 @@ class UnifiedLauncher:
     def _import_question_bank(self):
         """Choose a JSON file in WebView and delegate the import."""
         if not self.question_bank.available:
-            self._show_error("导入失败", "题库服务器不可用")
-            return
+            message = "题库服务器不可用"
+            self._show_error("导入失败", message)
+            return {'ok': False, 'message': message}
         file_path = ""
         if self.web_window and webview:
             selection = self.web_window.create_file_dialog(
@@ -1978,18 +1991,22 @@ class UnifiedLauncher:
             if selection:
                 file_path = selection[0]
         if not file_path:
-            return
+            return {'ok': True, 'cancelled': True}
         result = self.question_bank.import_questions(file_path)
         if result.get("ok"):
             self._show_info("导入成功", result["message"])
+            result = dict(result)
+            result.update({'toast': result['message'], 'toastType': 'success'})
         else:
             self._show_error("导入失败", result.get("message", "未知错误"))
+        return result
 
     def _export_question_bank(self):
         """Choose a JSON destination in WebView and delegate the export."""
         if not self.question_bank.available:
-            self._show_error("导出失败", "题库服务器不可用")
-            return
+            message = "题库服务器不可用"
+            self._show_error("导出失败", message)
+            return {'ok': False, 'message': message}
         file_path = ""
         if self.web_window and webview:
             selection = self.web_window.create_file_dialog(
@@ -2001,19 +2018,25 @@ class UnifiedLauncher:
                 if not file_path.lower().endswith(".json"):
                     file_path += ".json"
         if not file_path:
-            return
+            return {'ok': True, 'cancelled': True}
         result = self.question_bank.export_questions(file_path)
         if result.get("ok"):
             self._show_info("导出成功", result["message"])
+            result = dict(result)
+            result.update({'toast': result['message'], 'toastType': 'success'})
         else:
             self._show_error("导出失败", result.get("message", "未知错误"))
+        return result
 
     def _clear_question_bank(self):
         result = self.question_bank.clear_questions()
         if result.get("ok"):
             self._show_info("清空成功", result["message"])
+            result = dict(result)
+            result.update({'toast': result['message'], 'toastType': 'success'})
         else:
             self._show_error("清空失败", result.get("message", "未知错误"))
+        return result
 
     def _deduplicate_question_bank(self):
         result = self.question_bank.deduplicate_questions()
@@ -2069,12 +2092,36 @@ class UnifiedLauncher:
     def start_all(self):
         """启动所有脚本"""
         self.log_system("正在一键启动所有脚本...")
-        if not self.question_bank.running and self.question_bank.available:
-            self.start_question_bank(silent=True)
+        failures = []
+        if not self.question_bank.available:
+            failures.append("题库服务器模块不可用")
+        elif not self.question_bank.running:
+            if not self.start_question_bank(silent=True):
+                failures.append("题库服务器启动失败")
         if not self.running['yatori']:
-            self.start_yatori()
+            if not self.start_yatori():
+                failures.append(
+                    getattr(self, '_last_start_error', {}).get(
+                        'yatori', 'Yatori 启动失败'
+                    )
+                )
         if not self.running['autovisor']:
-            self.start_autovisor()
+            if not self.start_autovisor():
+                failures.append(
+                    getattr(self, '_last_start_error', {}).get(
+                        'autovisor', 'Autovisor 启动失败'
+                    )
+                )
+        if failures:
+            message = '；'.join(dict.fromkeys(failures))
+            self.log_system(f"一键启动未全部成功: {message}")
+            return {'ok': False, 'message': message}
+        return {
+            'ok': True,
+            'message': '全部启动请求已提交',
+            'toast': '全部启动请求已提交',
+            'toastType': 'success',
+        }
 
     def stop_all(self):
         """停止所有脚本"""
@@ -2082,6 +2129,7 @@ class UnifiedLauncher:
         self.stop_yatori()
         self.stop_autovisor()
         self.stop_practice_mode()
+        return {'ok': True}
 
     def clear_all_logs(self):
         """清空所有日志"""
@@ -2111,13 +2159,18 @@ class UnifiedLauncher:
         """打开配置目录"""
         if script_type == 'yatori':
             path = self.yatori_path
-        else:
+        elif script_type == 'autovisor':
             path = self.autovisor_path
+        else:
+            return {'ok': False, 'message': f'未知核心类型: {script_type}'}
 
         if os.path.exists(path):
             os.startfile(path)
+            return {'ok': True}
         else:
-            self._show_error("错误", f"目录不存在: {path}")
+            message = f"目录不存在: {path}"
+            self._show_error("错误", message)
+            return {'ok': False, 'message': message}
 
     def open_config_generator(self):
         """打开配置生成器"""
@@ -2129,8 +2182,10 @@ class UnifiedLauncher:
             generator_path = os.path.join(self.get_base_dir(), "web", file_name)
             if os.path.exists(generator_path):
                 os.startfile(generator_path)
-                return
-        self._show_error("错误", "未找到配置生成器页面")
+                return {'ok': True}
+        message = "未找到配置生成器页面"
+        self._show_error("错误", message)
+        return {'ok': False, 'message': message}
 
     # ==================== 核心管理功能 ====================
 
