@@ -28,6 +28,7 @@ from playwright.async_api import async_playwright, Playwright, Page, BrowserCont
 from modules.logger import Logger
 from modules.configs import Config
 from modules.login_flow import login_to_zhihuishu
+from modules.course_portal import navigate_to_my_course as navigate_course_portal
 from modules.tasks import handle_test_page
 from modules.test_capture import TestResponseHandler
 from modules.utils import (
@@ -37,9 +38,6 @@ from modules.slider import slider_verify
 from modules import installer
 
 logger = Logger()
-
-MY_COURSE_HOMEPAGE = "https://www.zhihuishu.com/"
-
 
 async def init_page(p: Playwright, config: Config):
     """初始化浏览器页面"""
@@ -86,88 +84,8 @@ async def auto_login(context: BrowserContext, page: Page, config: Config, module
 
 
 async def navigate_to_my_course(page: Page, config: Config):
-    """
-    导航到我的课堂页（智慧树学堂首页）
-
-    沿用 import asyncio.py 的流程：
-      1. 如果不在首页，先跳转到 www.zhihuishu.com
-      2. 直接点击"我的学堂"，固定等待
-      3. 等待 Qiankun 微应用容器出现（证明 JS 分块加载完成）
-    """
-    try:
-        current_url = page.url
-        logger.info(f"当前页面: {current_url[:80]}")
-
-        if "passport" in current_url and "login" in current_url:
-            logger.warn("当前在登录页，需要先登录")
-            return False
-
-        if "onlineweb.zhihuishu.com" in current_url:
-            logger.info("已在 onlineweb 课程页面，无需重新导航")
-            return True
-
-        if "passport" not in current_url and "zhihuishu" in current_url:
-            logger.info("当前在智慧树页面，尝试点击\"我的学堂\"...")
-        else:
-            logger.info("正在导航到智慧树首页...")
-            await page.goto(MY_COURSE_HOMEPAGE, wait_until="commit", timeout=30000)
-            await page.wait_for_timeout(3000)
-
-        logger.info("正在点击\"我的学堂\"...")
-        try:
-            await page.click('text="我的学堂"', timeout=10000)
-            logger.info("已点击\"我的学堂\"")
-        except Exception as e:
-            logger.info(f"点击\"我的学堂\"失败: {e}，尝试其他选择器...")
-            try:
-                await page.click('a:has-text("我的学堂")', timeout=5000)
-                logger.info("已点击\"我的学堂\"")
-            except Exception as e2:
-                logger.warn(f"仍无法点击\"我的学堂\": {e2}")
-                return False
-
-        await page.wait_for_timeout(8000)
-
-        qiankun_selectors = [
-            '[id*="qiankun"]',
-            '[data-name="onlinestuh5"]',
-            '#sharingClassed',
-            '.course-list',
-            '.study-card',
-            '.courseCard',
-            '.el-scrollbar__view',
-        ]
-        found = False
-        for sel in qiankun_selectors:
-            try:
-                await page.wait_for_selector(sel, timeout=5000)
-                logger.info(f"页面已渲染，检测到: {sel}")
-                found = True
-                break
-            except Exception:
-                continue
-
-        if not found:
-            logger.info("未检测到关键元素，再等页面渲染...")
-            await page.wait_for_timeout(8000)
-
-        if "passport" in page.url and "login" in page.url:
-            logger.warn("被重定向到登录页，session 已过期")
-            return False
-
-        logger.info(f"已进入我的课堂页: {page.url[:80]}")
-        return True
-    except Exception as e:
-        logger.error(f"导航到我的课堂页失败: {str(e)[:80]}")
-        try:
-            await page.goto(MY_COURSE_HOMEPAGE, wait_until="commit", timeout=30000)
-            await page.wait_for_timeout(3000)
-            await page.click('text="我的学堂"', timeout=10000)
-            await page.wait_for_timeout(8000)
-            await page.wait_for_timeout(8000)
-            return True
-        except Exception:
-            return False
+    """Compatibility wrapper around the shared, verified portal navigator."""
+    return await navigate_course_portal(page, logger)
 
 
 def _find_test_page(context: BrowserContext, main_page: Page):
@@ -207,23 +125,16 @@ async def _return_to_my_course(page: Page, context: BrowserContext, main_page: P
     """提交后返回我的课堂页（关闭测验标签，保留主页面）"""
     await _close_extra_pages(context, main_page)
     try:
-        if "onlineweb.zhihuishu.com" in main_page.url:
-            logger.info("主页面已在我的课堂，无需重新导航")
-            return
-        current_url = main_page.url
-        if "doHomework" in current_url or "lookHomework" in current_url or "exam" in current_url:
-            await navigate_to_my_course(main_page, config)
-            return
-        if "zhihuishu" in current_url and "passport" not in current_url:
-            logger.info("主页面已在智慧树，无需重新导航")
-            return
-        await navigate_to_my_course(main_page, config)
+        if await navigate_to_my_course(main_page, config):
+            return True
+        logger.warn("未能返回我的学堂，等待后续恢复")
+        return False
     except Exception as e:
         logger.warn(f"返回我的课堂页时出错: {str(e)[:50]}")
         try:
-            await navigate_to_my_course(main_page, config)
+            return await navigate_to_my_course(main_page, config)
         except Exception:
-            pass
+            return False
 
 
 async def practice_loop(page: Page, context: BrowserContext, config: Config):
@@ -236,7 +147,8 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
     4. doHomework 触发 → 自动答题提交
     5. 返回我的课堂页 → 继续等待用户操作
     """
-    await navigate_to_my_course(page, config)
+    if not await navigate_to_my_course(page, config):
+        raise RuntimeError("未能进入我的学堂，刷题模式已停止")
     await page.wait_for_timeout(1500)
 
     main_page = page
@@ -356,11 +268,16 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
             else:
                 logger.warn("答题提交可能未完全成功")
 
-            await _return_to_my_course(main_page, context, main_page, config)
+            returned = await _return_to_my_course(
+                main_page, context, main_page, config
+            )
 
             logger.info(f"\n{'=' * 60}")
-            logger.info("已返回我的课堂页，您可以点击下一个测验")
-            logger.info("系统将持续监听 doHomework API...")
+            if returned:
+                logger.info("已返回我的课堂页，您可以点击下一个测验")
+                logger.info("系统将持续监听 doHomework API...")
+            else:
+                logger.warn("未能返回我的课堂页，请检查网络或登录状态")
             logger.info(f"{'=' * 60}")
 
             idle_report_counter = 0
@@ -380,7 +297,10 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
                         logger.error("重新登录失败，保持当前页面等待下一次重试")
                         await asyncio.sleep(5)
                         continue
-                    await navigate_to_my_course(main_page, config)
+                    if not await navigate_to_my_course(main_page, config):
+                        logger.error("重新登录成功，但未能进入我的学堂")
+                        await asyncio.sleep(5)
+                        continue
                     test_handler.remove_listener()
                     test_handler = TestResponseHandler()
                     test_handler.setup_listener(context, clear_data=True)
