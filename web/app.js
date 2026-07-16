@@ -492,9 +492,12 @@
 
         async function handleCoreAction(core) {
             try {
-                if (core === 'yatori' || core === 'autovisor') { const sr = await saveSettings(false); if (!sr?.ok) return; }
                 const running = core === 'yatori' ? !!state.runtime?.yatori_running : !!state.runtime?.autovisor_running;
                 const action = running ? 'stop' : 'start';
+                if (action === 'start') {
+                    const sr = await saveSettings(false);
+                    if (!sr?.ok) return;
+                }
                 const result = await apiCall('perform_action', action, core);                                            
                 handleWebActionResult(result, '核心操作失败');
             } catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }

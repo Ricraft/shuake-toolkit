@@ -178,6 +178,12 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("function handleWebActionResult", frontend)
         self.assertIn("showToast(result?.message || fallbackMessage, 'error')", frontend)
 
+        core_action = frontend.split("async function handleCoreAction", 1)[1].split(
+            "async function toggleQuestionBank", 1
+        )[0]
+        self.assertIn("if (action === 'start')", core_action)
+        self.assertLess(core_action.index("const action"), core_action.index("saveSettings"))
+
 
 if __name__ == "__main__":
     unittest.main()
