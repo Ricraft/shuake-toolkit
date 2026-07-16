@@ -11,7 +11,12 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
-from modules.course_session import CourseSession
+from modules.course_session import (
+    COURSE_OPEN_TIMEOUT_MS,
+    CourseAuthenticationError,
+    CourseNavigationError,
+    CourseSession,
+)
 from modules.course_types import CourseKind, CourseProfile
 
 sys.path.remove(_AUTOVISOR_ROOT)
@@ -63,13 +68,20 @@ class _Element:
 
 
 class _Page:
-    def __init__(self, titles=None):
+    def __init__(self, titles=None, *, response_status=None, redirect_url=None):
         self.titles = titles or {}
+        self.url = "https://example.com/"
+        self.response_status = response_status
+        self.redirect_url = redirect_url
         self.goto_calls = []
         self.selector_calls = []
 
-    async def goto(self, url, wait_until):
-        self.goto_calls.append((url, wait_until))
+    async def goto(self, url, **options):
+        self.goto_calls.append((url, options))
+        self.url = self.redirect_url or url
+        if self.response_status is None:
+            return None
+        return type("Response", (), {"status": self.response_status})()
 
     async def wait_for_selector(self, selector, timeout):
         self.selector_calls.append((selector, timeout))
@@ -105,7 +117,9 @@ def test_course_session_opens_optimizes_and_resolves_title():
     title = asyncio.run(session.open(page, config, logger))
 
     assert title == "测试见面课"
-    assert page.goto_calls == [(url, "commit")]
+    assert page.goto_calls == [
+        (url, {"wait_until": "commit", "timeout": COURSE_OPEN_TIMEOUT_MS})
+    ]
     assert captured == {
         "page": page,
         "config": config,
@@ -133,3 +147,35 @@ def test_course_session_uses_kind_default_when_title_is_missing():
 
     assert title == "新版课程"
     assert logger.infos[-1] == "当前课程:<<新版课程>>，是新版课程"
+
+
+def test_course_session_rejects_http_error_before_optimization():
+    optimized = []
+
+    async def optimizer(*_args):
+        optimized.append(True)
+
+    page = _Page(response_status=503)
+    session = CourseSession.from_url(
+        "https://studyvideoh5.zhihuishu.com/course", optimizer=optimizer
+    )
+
+    with pytest.raises(CourseNavigationError, match="HTTP 503"):
+        asyncio.run(session.open(page, object(), _Logger()))
+    assert optimized == []
+
+
+def test_course_session_rejects_login_redirect_before_optimization():
+    optimized = []
+
+    async def optimizer(*_args):
+        optimized.append(True)
+
+    page = _Page(redirect_url="https://passport.zhihuishu.com/login")
+    session = CourseSession.from_url(
+        "https://studyvideoh5.zhihuishu.com/course", optimizer=optimizer
+    )
+
+    with pytest.raises(CourseAuthenticationError, match="重定向到登录页"):
+        asyncio.run(session.open(page, object(), _Logger()))
+    assert optimized == []

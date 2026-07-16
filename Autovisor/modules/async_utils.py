@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 
 
 async def cancel_background_tasks(tasks: Iterable[asyncio.Task | None]) -> None:
@@ -15,3 +16,13 @@ async def cancel_background_tasks(tasks: Iterable[asyncio.Task | None]) -> None:
             task.cancel()
     if cancellable:
         await asyncio.gather(*cancellable, return_exceptions=True)
+
+
+@asynccontextmanager
+async def background_task_scope(tasks: list[asyncio.Task] | None = None):
+    """Yield a mutable task registry and always cancel it when leaving."""
+    registry = tasks if tasks is not None else []
+    try:
+        yield registry
+    finally:
+        await cancel_background_tasks(registry)

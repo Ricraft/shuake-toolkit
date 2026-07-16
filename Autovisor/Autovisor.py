@@ -39,7 +39,8 @@ _ensure_simplejson_compat()
 
 from modules.logger import Logger
 from modules.configs import Config
-from modules.course_session import CourseSession
+from modules.course_queue import run_course_queue
+from modules.course_session import CourseAuthenticationError
 from modules.hike_course_flow import run_hike_course
 from modules.login_flow import login_to_zhihuishu
 from modules.meeting_course_flow import run_meeting_course
@@ -50,7 +51,7 @@ from modules.utils import get_video_attr, hide_window, \
     get_browser_window, bring_console_to_front, load_cookies, \
     is_playwright_window
 from modules.slider import slider_verify
-from modules.async_utils import cancel_background_tasks
+from modules.async_utils import background_task_scope
 from modules.tasks import (
     handle_test_page,
     skip_questions,
@@ -434,45 +435,41 @@ async def main():
     print("===== Runtime Log =====")
     async with async_playwright() as p:
         page, context = await init_page(p)
-        # 进行登录
-        if not config.username or not config.password:
-            logger.info("请手动填写账号密码...")
-        logger.info("正在等待登录完成...")
-        # 先启动人机验证协程
-        verify_task = asyncio.create_task(wait_for_verify(page, config, event_loop_verify))
-        if not await auto_login(context, page, modules):
-            await cancel_background_tasks([verify_task])
-            raise RuntimeError("登录未完成，已停止刷课任务")
+        async with background_task_scope(tasks):
+            # 进行登录
+            if not config.username or not config.password:
+                logger.info("请手动填写账号密码...")
+            logger.info("正在等待登录完成...")
+            verify_task = asyncio.create_task(
+                wait_for_verify(page, config, event_loop_verify)
+            )
+            tasks.append(verify_task)
+            if not await auto_login(context, page, modules):
+                raise RuntimeError("登录未完成，已停止刷课任务")
 
-        # 启动协程任务
-        video_optimize_task = asyncio.create_task(video_optimize(page, config))
-        skip_ques_task = asyncio.create_task(skip_questions(page, event_loop_answer))
-        play_video_task = asyncio.create_task(play_video(page, config))
-        tasks.extend([verify_task, video_optimize_task, skip_ques_task, play_video_task])
-        # 隐藏窗口
-        if config.enableHideWindow:
-            window = await hide_window(page)
-            if window:
-                activate_window_task = asyncio.create_task(activate_window(page))
-                tasks.append(activate_window_task)
+            video_optimize_task = asyncio.create_task(video_optimize(page, config))
+            skip_ques_task = asyncio.create_task(skip_questions(page, event_loop_answer))
+            play_video_task = asyncio.create_task(play_video(page, config))
+            tasks.extend([video_optimize_task, skip_ques_task, play_video_task])
+            if config.enableHideWindow:
+                window = await hide_window(page)
+                if window:
+                    tasks.append(asyncio.create_task(activate_window(page)))
 
-        # 任务监视器
-        monitor_task = asyncio.create_task(task_monitor(tasks))
-        # 遍历所有课程,加载网页
-        for course_url in config.course_urls:
-            print("==" * 10)
-            session = CourseSession.from_url(course_url)
-            await session.open(page, config, logger)
-            await working_loop(
+            monitored_tasks = list(tasks)
+            tasks.append(asyncio.create_task(task_monitor(monitored_tasks)))
+            summary = await run_course_queue(
                 page,
-                course_url=course_url,
-                **session.profile.working_loop_options(),
+                config,
+                logger,
+                course_worker=working_loop,
             )
     print("==" * 10)
+    if summary.failed:
+        raise RuntimeError(
+            f"课程队列部分失败: 成功 {summary.completed} 门，失败 {summary.failed} 门"
+        )
     logger.info("所有课程已学习完毕!")
-    # 后台协程均为长期监听任务；课程完成后必须主动取消，否则程序不会退出。
-    await cancel_background_tasks(tasks)
-    await cancel_background_tasks([monitor_task])
 
 
 def run(
@@ -500,13 +497,13 @@ def run(
             return 2
         asyncio.run(main())
     except TargetClosedError as e:
+        exit_code = 1
         logger.write_log(traceback.format_exc())
         if "BrowserType.launch" in repr(e):
             logger.error("浏览器启动失败,请尝试重新启动!")
             logger.info("如果仍然无法启动,请修改配置文件并使用Chrome浏览器")
-            exit_code = 1
         else:
-            logger.error("浏览器被关闭,程序退出.")
+            logger.error("浏览器在课程完成前被关闭,任务已中断.")
     except Exception as e:
         exit_code = 1
         logger.error(repr(e), shift=True)
@@ -518,6 +515,8 @@ def run(
             logger.error(f"依赖文件缺失: {missing_path},请重新安装程序!")
         elif isinstance(e, UnicodeDecodeError):
             logger.error("配置文件编码错误,保存时请选择UTF-8或GBK编码!")
+        elif isinstance(e, CourseAuthenticationError):
+            logger.error("登录状态已失效，请重新登录后再启动任务!")
         else:
             logger.error("系统出错,请检查后重新启动!")
     finally:

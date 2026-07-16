@@ -5,8 +5,20 @@ from __future__ import annotations
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from modules.course_portal import is_login_url
 from modules.course_types import CourseProfile
 from modules.utils import optimize_page
+
+
+COURSE_OPEN_TIMEOUT_MS = 30_000
+
+
+class CourseNavigationError(RuntimeError):
+    """A course-specific navigation failure that may not affect later courses."""
+
+
+class CourseAuthenticationError(CourseNavigationError):
+    """The course navigation lost authentication and the whole queue must stop."""
 
 
 class CourseSession:
@@ -32,7 +44,16 @@ class CourseSession:
 
     async def open(self, page, config, logger) -> str:
         logger.info("正在加载播放页...")
-        await page.goto(self.profile.url, wait_until="commit")
+        response = await page.goto(
+            self.profile.url,
+            wait_until="commit",
+            timeout=COURSE_OPEN_TIMEOUT_MS,
+        )
+        status = getattr(response, "status", None)
+        if isinstance(status, int) and status >= 400:
+            raise CourseNavigationError(f"课程页面返回 HTTP {status}")
+        if is_login_url(page.url):
+            raise CourseAuthenticationError("课程页面重定向到登录页")
         await self.optimizer(
             page,
             config,
@@ -41,6 +62,8 @@ class CourseSession:
             self.profile.is_national_wisdom,
             self.profile.is_meeting_class,
         )
+        if is_login_url(page.url):
+            raise CourseAuthenticationError("页面优化期间登录状态失效")
         logger.info("页面优化完成!")
 
         try:
