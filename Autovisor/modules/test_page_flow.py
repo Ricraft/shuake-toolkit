@@ -381,7 +381,8 @@ async def handle_test_page(
     if manual_submit:
         active_logger.info("[手动提交] 已跳过自动提交，请在页面上手动点击提交按钮")
         active_logger.info("[手动提交] 页面保持打开状态，请检查答案后手动提交")
-        return True
+        active_logger.warn("[手动提交] 尚未确认试卷已经提交")
+        return False
 
     answered = sum(
         1 for question in questions_data if question.get("answer_applied")

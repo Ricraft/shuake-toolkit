@@ -157,12 +157,29 @@ def test_test_session_answers_questions_and_cleans_listener():
 
     async def answer_handler(work_page, questions, **options):
         answer_calls.append((work_page, questions, options))
+        return True
 
     session = NormalTestSession(page, _Logger(), handler, answer_handler)
     outcome = asyncio.run(session.process(_ClickableCourse()))
 
     assert outcome is NormalTestOutcome.ANSWERED
     assert answer_calls == [(page, [{"id": 1}], {"auto_submit": True})]
+    assert handler.removed is True
+
+
+def test_test_session_reports_false_answer_result_as_failure():
+    page = _Page()
+    handler = _Handler([{"id": 1}])
+    logger = _Logger()
+
+    async def answer_handler(*_args, **_kwargs):
+        return False
+
+    session = NormalTestSession(page, logger, handler, answer_handler)
+    outcome = asyncio.run(session.process(_ClickableCourse()))
+
+    assert outcome is NormalTestOutcome.ANSWER_FAILED
+    assert "测验答题或提交未确认成功" in logger.warnings
     assert handler.removed is True
 
 
@@ -314,3 +331,59 @@ def test_answered_test_is_not_repeated_when_completion_state_is_stale():
     assert session_calls == [course]
     assert "测验提交后状态未刷新，本轮不重复作答" in logger.warnings
     assert page.goto_calls == [("second-course", "domcontentloaded")]
+
+
+def test_failed_test_submission_retries_before_advancing():
+    page = _Page()
+    logger = _Logger()
+    course = _ClickableCourse(class_name="chapter-test", title="第一章测验")
+    outcomes = iter(
+        [NormalTestOutcome.ANSWER_FAILED, NormalTestOutcome.COMPLETED]
+    )
+    process_calls = 0
+
+    async def close_popup(*_args):
+        return False
+
+    async def class_provider(*_args, **_kwargs):
+        return [course]
+
+    async def test_scanner(*_args):
+        return []
+
+    async def optimizer(*_args):
+        return None
+
+    class _RetrySession:
+        def __init__(self, *_args):
+            return None
+
+        async def process(self, _selected_course):
+            nonlocal process_calls
+            process_calls += 1
+            return next(outcomes)
+
+    asyncio.run(
+        run_normal_course(
+            page,
+            SimpleNamespace(
+                remove_pause="js",
+                course_urls=["course"],
+                limitMaxTime=0,
+            ),
+            logger,
+            close_popup=close_popup,
+            learning_loop=None,
+            review_loop=None,
+            handler_factory=lambda: _Handler(),
+            answer_handler=None,
+            class_provider=class_provider,
+            test_scanner=test_scanner,
+            optimizer=optimizer,
+            test_session_factory=_RetrySession,
+            clock=lambda: 0,
+        )
+    )
+
+    assert process_calls == 2
+    assert any("准备第 2 次尝试" in warning for warning in logger.warnings)

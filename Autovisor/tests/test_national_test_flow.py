@@ -116,6 +116,7 @@ def test_existing_questions_are_answered_and_resources_are_cleaned():
 
     async def answer_handler(work_page, questions, **options):
         answer_calls.append((work_page, questions, options))
+        return True
 
     session = NationalTestSession(page, page.url, logger, handler, answer_handler)
 
@@ -127,11 +128,33 @@ def test_existing_questions_are_answered_and_resources_are_cleaned():
 
     assert outcome is NationalTestOutcome.ANSWERED
     assert answer_calls == [
-        (page, [{"id": 1}], {"auto_submit": True, "manual_submit": True})
+        (page, [{"id": 1}], {"auto_submit": True})
     ]
     assert handler.removed is True
     assert page.reload_calls == ["domcontentloaded"]
     assert page.goto_calls == []
+
+
+def test_false_answer_result_is_not_reported_as_answered():
+    page = _Page("https://wisdom-mooc.zhihuishu.com/study/index")
+    handler = _Handler([{"id": 1}])
+    logger = _Logger()
+
+    async def answer_handler(*_args, **_kwargs):
+        return False
+
+    session = NationalTestSession(page, page.url, logger, handler, answer_handler)
+
+    async def run_session():
+        session.prepare()
+        return await session.process()
+
+    outcome = asyncio.run(run_session())
+
+    assert outcome is NationalTestOutcome.ANSWER_FAILED
+    assert "测试答题或提交未确认成功" in logger.warnings
+    assert handler.removed is True
+    assert page.reload_calls == ["domcontentloaded"]
 
 
 def test_completed_test_closes_new_page_without_answering():

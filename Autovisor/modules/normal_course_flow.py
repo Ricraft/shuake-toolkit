@@ -20,6 +20,7 @@ class NormalTestOutcome(str, Enum):
     CLICK_FAILED = "click_failed"
     COMPLETED = "completed"
     ANSWERED = "answered"
+    ANSWER_FAILED = "answer_failed"
     NO_QUESTIONS = "no_questions"
 
 
@@ -95,12 +96,15 @@ class NormalTestSession:
                 self.logger.info(
                     f"开始处理测验，共 {len(self.handler.questions_data)} 题"
                 )
-                await self.answer_handler(
+                answered = await self.answer_handler(
                     work_page,
                     self.handler.questions_data,
                     auto_submit=True,
                 )
-                return NormalTestOutcome.ANSWERED
+                if answered:
+                    return NormalTestOutcome.ANSWERED
+                self.logger.warn("测验答题或提交未确认成功")
+                return NormalTestOutcome.ANSWER_FAILED
 
             self.logger.warn("未能获取测验题目数据，尝试手动处理")
             return NormalTestOutcome.NO_QUESTIONS
@@ -282,6 +286,17 @@ async def run_normal_course(
                 test_attempts.pop(current_index, None)
                 answered_tests.add(test_marker)
                 logger.info("继续处理下一个课程...")
+                continue
+
+            if outcome is NormalTestOutcome.ANSWER_FAILED:
+                if attempt >= test_retry_limit:
+                    logger.warn(
+                        f"测验答题或提交失败，已达到 {test_retry_limit} 次重试上限"
+                    )
+                else:
+                    logger.warn(
+                        f"测验答题或提交失败，准备第 {attempt + 1} 次尝试"
+                    )
                 continue
 
             if outcome is NormalTestOutcome.COMPLETED:

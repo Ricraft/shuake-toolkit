@@ -546,6 +546,23 @@ async def _submission_completed(page: Page, submit_button, original_url: str) ->
     return False
 
 
+async def _wait_for_submission_completion(
+    page: Page,
+    submit_button,
+    original_url: str,
+    *,
+    attempts: int = 30,
+    poll_interval_ms: int = 500,
+) -> bool:
+    """Poll bounded page evidence so slow submissions are not retried early."""
+    for attempt in range(max(1, attempts)):
+        if await _submission_completed(page, submit_button, original_url):
+            return True
+        if attempt < attempts - 1:
+            await page.wait_for_timeout(poll_interval_ms)
+    return False
+
+
 async def submit_exam(page: Page, *, logger_instance=None) -> bool:
     """提交作业，并以页面结果而不是单次点击作为成功依据。"""
     active_logger = logger_instance or logger
@@ -582,8 +599,11 @@ async def submit_exam(page: Page, *, logger_instance=None) -> bool:
         if not confirmed:
             active_logger.warn("[WARN] 未找到确认按钮，等待页面自行提交")
 
-        await page.wait_for_timeout(2000)
-        if not await _submission_completed(page, submit_button, original_url):
+        if not await _wait_for_submission_completion(
+            page,
+            submit_button,
+            original_url,
+        ):
             active_logger.warn("[FAIL] 未检测到交卷完成状态")
             return False
         active_logger.info("[OK] 作业提交完成")

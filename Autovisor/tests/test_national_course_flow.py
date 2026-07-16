@@ -11,6 +11,7 @@ _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules.national_course_flow import is_course_list_url, run_national_course
+from modules.national_test_flow import NationalTestOutcome
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -269,3 +270,57 @@ def test_false_video_result_returns_to_list_then_fails_course():
 
     assert page.go_back_calls == 1
     assert is_course_list_url(page.url, _config().course_urls[0])
+
+
+def test_confirmed_test_submission_is_not_repeated_on_stale_scan():
+    card = {
+        "key": "test-1",
+        "card_id": "test-card-1",
+        "title": "章节测试",
+        "section": "第一章",
+        "progress": 0,
+        "type": "test",
+    }
+    scans = 0
+    process_calls = 0
+
+    async def scanner(_page):
+        nonlocal scans
+        scans += 1
+        return [card], _summary(1, 1), False
+
+    async def clicker(*_args):
+        return True
+
+    class _SubmittedSession:
+        def __init__(self, *_args):
+            return None
+
+        def prepare(self):
+            return None
+
+        async def process(self):
+            nonlocal process_calls
+            process_calls += 1
+            return NationalTestOutcome.ANSWERED
+
+        async def cancel(self):
+            return None
+
+    asyncio.run(
+        run_national_course(
+            _Page(_config().course_urls[0]),
+            _config(),
+            _Logger(),
+            close_popup=_close_popup,
+            learning_loop=_noop,
+            handler_factory=lambda: object(),
+            answer_handler=None,
+            scanner=scanner,
+            card_clicker=clicker,
+            test_session_factory=_SubmittedSession,
+        )
+    )
+
+    assert process_calls == 1
+    assert scans == 2

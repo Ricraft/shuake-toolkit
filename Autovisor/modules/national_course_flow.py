@@ -205,7 +205,10 @@ async def run_national_course(
             outcome = await test_session.process()
             navigation.mark_attempted(
                 lesson_key,
-                test_completed=outcome is NationalTestOutcome.COMPLETED,
+                test_completed=outcome in {
+                    NationalTestOutcome.COMPLETED,
+                    NationalTestOutcome.ANSWERED,
+                },
             )
             continue
 

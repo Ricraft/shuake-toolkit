@@ -17,6 +17,7 @@ START_BUTTON_SELECTOR = (
 class NationalTestOutcome(str, Enum):
     COMPLETED = "completed"
     ANSWERED = "answered"
+    ANSWER_FAILED = "answer_failed"
     NO_QUESTIONS = "no_questions"
 
 
@@ -129,13 +130,15 @@ class NationalTestSession:
                     return NationalTestOutcome.COMPLETED
 
             if self.handler.questions_data:
-                await self.answer_handler(
+                answered = await self.answer_handler(
                     work_page,
                     self.handler.questions_data,
                     auto_submit=True,
-                    manual_submit=True,
                 )
-                return NationalTestOutcome.ANSWERED
+                if answered:
+                    return NationalTestOutcome.ANSWERED
+                self.logger.warn("测试答题或提交未确认成功")
+                return NationalTestOutcome.ANSWER_FAILED
 
             self.logger.warn("没有题目数据，跳过答题")
             return NationalTestOutcome.NO_QUESTIONS

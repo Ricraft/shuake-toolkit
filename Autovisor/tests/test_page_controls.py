@@ -170,6 +170,27 @@ def test_submit_exam_accepts_visible_result_state():
     assert result is True
 
 
+def test_submit_exam_waits_for_delayed_result_state():
+    class DelayedResult(_SubmitLocator):
+        def __init__(self):
+            super().__init__(count=1, visible=True)
+            self.checks = 0
+
+        async def count(self):
+            self.checks += 1
+            return 1 if self.checks >= 3 else 0
+
+    page = _SubmitPage()
+    page.result = DelayedResult()
+
+    result = asyncio.run(
+        controls.submit_exam(page, logger_instance=_Logger())
+    )
+
+    assert result is True
+    assert page.result.checks == 3
+
+
 def test_click_option_by_text_embeds_special_text_as_json():
     expected = '含"引号"、反斜杠\\与\n换行'
 
@@ -277,6 +298,48 @@ def test_handle_test_page_stops_when_next_button_click_fails(monkeypatch):
     assert result is False
     assert questions[0]["answer_applied"] is True
     assert "answer_applied" not in questions[1]
+    assert submit_calls == []
+
+
+def test_manual_submit_handoff_is_not_reported_as_confirmed_submission(monkeypatch):
+    submit_calls = []
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def answered(*_args, **_kwargs):
+        return True
+
+    async def submit(*_args, **_kwargs):
+        submit_calls.append(True)
+        return True
+
+    monkeypatch.setattr(task_module, "inject_widget", no_op)
+    monkeypatch.setattr(
+        task_module,
+        "query_question_bank",
+        lambda *_args, **_kwargs: ("A", False),
+    )
+    monkeypatch.setattr(task_module, "answer_question", answered)
+    monkeypatch.setattr(task_module, "submit_exam", submit)
+
+    result = asyncio.run(
+        task_module.handle_test_page(
+            _FlowPage(),
+            [
+                {
+                    "name": "待手动提交",
+                    "type": "单选题",
+                    "type_id": 1,
+                    "options": [("A", "甲"), ("B", "乙")],
+                }
+            ],
+            auto_submit=True,
+            manual_submit=True,
+        )
+    )
+
+    assert result is False
     assert submit_calls == []
 
 
