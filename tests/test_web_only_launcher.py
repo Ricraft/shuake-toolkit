@@ -247,6 +247,22 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("清空题库", page)
         self.assertIn("删除所有本地题目数据", page)
 
+    def test_frontend_connection_lifecycle_retries_without_stale_runtime(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("if (initialized || initInFlight) return;", frontend)
+        self.assertIn("scheduleInitRetry(error?.silent ? 200 : 1000)", frontend)
+        self.assertIn(
+            "DOMContentLoaded', () => { renderConsole(); loadPreferences(); init(); }",
+            frontend,
+        )
+        self.assertIn("if (runtimeRefreshInFlight || document.hidden) return;", frontend)
+        self.assertIn("if (effectiveId < runtimeAppliedSequence) return false;", frontend)
+        self.assertIn("applyRuntimeState(runtime, requestId)", frontend)
+        self.assertIn("document.addEventListener('visibilitychange'", frontend)
+
 
 if __name__ == "__main__":
     unittest.main()

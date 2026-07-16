@@ -5,6 +5,13 @@
         let backendConnected = false;
         let backendWaitStartedAt = Date.now();
         let backendHintShown = false;
+        let backendInitErrorShown = false;
+        let initInFlight = false;
+        let initialized = false;
+        let initRetryTimer = null;
+        let runtimeRefreshInFlight = false;
+        let runtimeRequestSequence = 0;
+        let runtimeAppliedSequence = 0;
         let currentBgType = 'none';
         const PREFERENCES_STORAGE_KEY = 'launcher_preferences_v1';
 
@@ -45,6 +52,20 @@
         function normalizeSettings(raw) { const y = raw?.yatori||{}, a = raw?.autovisor||{}; return { yatori:{ setting:{ basicSetting:{ completionTone:Number(y?.setting?.basicSetting?.completionTone??1), colorLog:Number(y?.setting?.basicSetting?.colorLog??1), logOutFileSw:Number(y?.setting?.basicSetting?.logOutFileSw??1), logLevel:y?.setting?.basicSetting?.logLevel||'INFO', logModel:Number(y?.setting?.basicSetting?.logModel??0), WebModel:Number(y?.setting?.basicSetting?.WebModel??0) }, emailInform:{ sw:Number(y?.setting?.emailInform?.sw??0), SMTPHost:y?.setting?.emailInform?.SMTPHost||'', SMTPPort:Number(y?.setting?.emailInform?.SMTPPort??0), userName:y?.setting?.emailInform?.userName||'', password:y?.setting?.emailInform?.password||'' }, aiSetting:{ aiType:y?.setting?.aiSetting?.aiType||'TONGYI', aiUrl:y?.setting?.aiSetting?.aiUrl||'', model:y?.setting?.aiSetting?.model||'', API_KEY:y?.setting?.aiSetting?.API_KEY||'' }, apiQueSetting:{ url:y?.setting?.apiQueSetting?.url||'http://localhost:8083' } }, users:(Array.isArray(y.users)?y.users:[]).map((u,i)=>normalizeYatoriUser(u,i+1)) }, autovisor:{ multi_mode:!!a.multi_mode, browser_driver:a.browser_driver||'Chrome', browser_path:a.browser_path||'', accounts:(Array.isArray(a.accounts)?a.accounts:[]).map((ac,i)=>normalizeAutovisorAccount(ac,i+1)) } }; }
 
         function showToast(message, type = 'info') { const wrap = document.getElementById('toast-wrap'); const t = document.createElement('div'); t.className = `toast ${type}`; t.textContent = message; wrap.appendChild(t); setTimeout(() => t.remove(), 2800); }
+
+        function setBackendStatus(message) {
+            const status = document.getElementById('sidebar-status');
+            if (status) status.textContent = message;
+        }
+
+        function applyRuntimeState(runtime, requestId = null) {
+            if (!runtime) return false;
+            const effectiveId = requestId ?? ++runtimeRequestSequence;
+            if (effectiveId < runtimeAppliedSequence) return false;
+            runtimeAppliedSequence = effectiveId;
+            renderRuntime(runtime);
+            return true;
+        }
 
         const pageTitles = { dashboard: '中控台', settings: '核心设置', questionbank: '题库设置', preferences: '软件设置', about: '关于' };
 
@@ -469,7 +490,7 @@
             if (msg) { showToast(msg, 'error'); return { ok: false, message: msg }; }
             try {
                 const result = await apiCall('save_settings', { yatori: gatherYatoriSettings(), autovisor: gatherAutovisorSettings(), questionbank: gatherQbSettings() });
-                if (result?.ok && result.state) { renderSettings(result.state.settings); renderRuntime(unwrapState(result)); if (showSuccess) showToast('配置已保存', 'success'); }
+                if (result?.ok && result.state) { renderSettings(result.state.settings); applyRuntimeState(unwrapState(result)); if (showSuccess) showToast('配置已保存', 'success'); }
                 else { showToast(result?.message || '保存失败', 'error'); }
                 return result;
             } catch (error) { if (!error?.silent) showToast(error.message || '保存失败', 'error'); return { ok: false, message: error.message || '保存失败', silent: !!error?.silent }; }
@@ -516,10 +537,10 @@
         function handleWebActionResult(result, fallbackMessage = '操作失败') {
             if (!result?.ok) {
                 showToast(result?.message || fallbackMessage, 'error');
-                if (result?.state) renderRuntime(unwrapState(result));
+                if (result?.state) applyRuntimeState(unwrapState(result));
                 return false;
             }
-            renderRuntime(unwrapState(result));
+            applyRuntimeState(unwrapState(result));
             if (result?.toast) showToast(result.toast, result.toastType || 'success');
             return true;
         }
@@ -1294,36 +1315,87 @@
         }
 
         async function refreshRuntime() {
-            if (!bridge()) return;
-            try { const runtime = await apiCall('get_runtime_state'); renderRuntime(runtime); }
-            catch (error) { if (!error?.silent) { document.getElementById('sidebar-status').textContent = backendConnected ? '后端连接中断' : '正在连接 Python 后端...'; } }
-        }
-
-        async function init() {
+            if (runtimeRefreshInFlight || document.hidden) return;
             if (!bridge()) {
-                if (!backendHintShown && Date.now() - backendWaitStartedAt > 3000) {
-                    backendHintShown = true;
-                    document.getElementById('sidebar-status').textContent = '请通过统一启动器打开此界面';
-                    showToast('此页面需要 Python 后端，直接用浏览器打开只能预览界面。', 'info');
-                }
-                setTimeout(init, 200);
+                backendConnected = false;
+                initialized = false;
+                setBackendStatus('后端连接中断，正在重连...');
+                if (runtimeTimer) { clearInterval(runtimeTimer); runtimeTimer = null; }
+                scheduleInitRetry(300);
                 return;
             }
+            runtimeRefreshInFlight = true;
+            const requestId = ++runtimeRequestSequence;
             try {
-                const payload = await apiCall('get_initial_state');
-                if (payload.settings) renderSettings(payload.settings);
-                if (payload.runtime) renderRuntime(payload.runtime);
-                showToast('HTML UI 已连接 Python 后端', 'success');
+                const runtime = await apiCall('get_runtime_state');
+                applyRuntimeState(runtime, requestId);
             } catch (error) {
-                if (error?.silent) { setTimeout(init, 200); return; }
-                showToast(error.message || '初始化失败', 'error');
+                backendConnected = false;
+                setBackendStatus('后端连接中断，正在重试...');
+            } finally {
+                runtimeRefreshInFlight = false;
             }
+        }
+
+        function scheduleInitRetry(delay = 300) {
+            if (initialized || initRetryTimer) return;
+            initRetryTimer = setTimeout(() => {
+                initRetryTimer = null;
+                init();
+            }, delay);
+        }
+
+        function startRuntimePolling() {
             if (runtimeTimer) clearInterval(runtimeTimer);
             runtimeTimer = setInterval(refreshRuntime, 1500);
         }
 
+        async function init() {
+            if (initialized || initInFlight) return;
+            if (!bridge()) {
+                if (!backendHintShown && Date.now() - backendWaitStartedAt > 3000) {
+                    backendHintShown = true;
+                    setBackendStatus('请通过统一启动器打开此界面');
+                    showToast('此页面需要 Python 后端，直接用浏览器打开只能预览界面。', 'info');
+                }
+                scheduleInitRetry(backendHintShown ? 1000 : 200);
+                return;
+            }
+            initInFlight = true;
+            const requestId = ++runtimeRequestSequence;
+            try {
+                const payload = await apiCall('get_initial_state');
+                if (payload.settings) renderSettings(payload.settings);
+                if (payload.runtime) applyRuntimeState(payload.runtime, requestId);
+                initialized = true;
+                backendConnected = true;
+                backendInitErrorShown = false;
+                showToast('HTML UI 已连接 Python 后端', 'success');
+                startRuntimePolling();
+            } catch (error) {
+                initialized = false;
+                setBackendStatus('后端初始化失败，正在重试...');
+                if (!error?.silent && !backendInitErrorShown) {
+                    backendInitErrorShown = true;
+                    showToast(error.message || '初始化失败，正在重试', 'error');
+                }
+                scheduleInitRetry(error?.silent ? 200 : 1000);
+            } finally {
+                initInFlight = false;
+            }
+        }
+
         window.addEventListener('pywebviewready', init);
-        document.addEventListener('DOMContentLoaded', () => { renderConsole(); loadPreferences(); });
+        document.addEventListener('DOMContentLoaded', () => { renderConsole(); loadPreferences(); init(); });
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                if (initialized) refreshRuntime(); else init();
+            }
+        });
+        window.addEventListener('beforeunload', () => {
+            if (runtimeTimer) clearInterval(runtimeTimer);
+            if (initRetryTimer) clearTimeout(initRetryTimer);
+        });
         // 修复: pywebviewready 可能在 app.js 加载前已派发
         if (window._pvReady) {
             init();
