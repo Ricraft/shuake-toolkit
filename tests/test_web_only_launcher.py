@@ -1,7 +1,9 @@
 import inspect
 import re
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import 统一启动器 as launcher_module
@@ -113,6 +115,68 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertNotIn("stop_all", events)
         self.assertNotIn("close", events)
         self.assertTrue(any("取消未确认" in entry for entry in events))
+
+    def test_web_start_action_returns_the_actual_launch_rejection(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._last_start_error = {}
+        launcher.start_yatori = lambda: launcher._reject_runtime_start(
+            "yatori",
+            "缺少 Yatori 配置",
+        )
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+
+        result = launcher.perform_web_action("start", "yatori")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "缺少 Yatori 配置")
+        self.assertIn("state", result)
+
+    def test_start_yatori_rejects_missing_config_immediately(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.running = {"yatori": False}
+        launcher.starting = {"yatori": False}
+        launcher._last_start_error = {}
+        launcher.log_system = lambda _message: None
+        launcher._show_error = lambda _title, _message: None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launcher.get_base_dir = lambda: temp_dir
+            launcher.find_yatori_path = lambda _base_dir: temp_dir
+
+            accepted = launcher.start_yatori()
+
+        self.assertFalse(accepted)
+        self.assertIn("config.yaml", launcher._last_start_error["yatori"])
+
+    def test_question_bank_start_failure_is_visible_to_web(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.question_bank = SimpleNamespace(running=False)
+        launcher.start_question_bank = lambda: False
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+
+        result = launcher.perform_web_action("start_question_bank")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("启动失败", result["message"])
+
+    def test_question_bank_toggle_stop_is_treated_as_success(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.question_bank = SimpleNamespace(running=True)
+        launcher.toggle_question_bank = lambda: False
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+
+        result = launcher.perform_web_action("toggle_question_bank")
+
+        self.assertTrue(result["ok"])
+
+    def test_frontend_stops_after_save_failure_and_displays_action_errors(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertGreaterEqual(frontend.count("if (!sr?.ok) return;"), 2)
+        self.assertIn("function handleWebActionResult", frontend)
+        self.assertIn("showToast(result?.message || fallbackMessage, 'error')", frontend)
 
 
 if __name__ == "__main__":

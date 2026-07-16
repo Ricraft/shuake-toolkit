@@ -17,7 +17,8 @@ import json
 from datetime import datetime
 
 from src.atomic_io import atomic_dump_json
-from src.config_service import ConfigService, read_ini_config
+from src.autovisor_dependency_manager import AutovisorDependencyManager
+from src.config_service import ConfigService
 from src.course_catalog import (
     CourseCatalogError,
     CourseCatalogService,
@@ -38,11 +39,6 @@ except ImportError:  # pragma: no cover
 # FileDialog 兼容常量（main() 中会重新赋值）
 FD_OPEN = 10   # OPEN_DIALOG
 FD_SAVE = 30   # SAVE_DIALOG
-
-try:
-    import winreg
-except ImportError:  # pragma: no cover
-    winreg = None
 
 try:
     import winsound
@@ -71,12 +67,6 @@ class UnifiedLauncher:
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
     LAUNCHER_VERSION = "v1.1.0"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
-    AUTOVISOR_PYPI_MIRRORS = (
-        ("清华", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"),
-        ("阿里", "https://mirrors.aliyun.com/pypi/simple"),
-        ("华为", "https://mirrors.huaweicloud.com/repository/pypi/simple"),
-        ("官方", "https://pypi.org/simple"),
-    )
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
 
@@ -262,232 +252,70 @@ class UnifiedLauncher:
 
         return None, preferred, False, False
 
+    def _get_autovisor_dependency_manager(self):
+        manager = getattr(self, 'autovisor_dependencies', None)
+        if manager is not None:
+            return manager
+        logger = getattr(self, 'log_system', lambda _message: None)
+        manager = AutovisorDependencyManager(
+            get_autovisor_path=lambda: getattr(
+                self,
+                'autovisor_path',
+                os.path.join(self.get_base_dir(), 'Autovisor'),
+            ),
+            log_system=logger,
+            log_line=getattr(
+                self,
+                'log',
+                lambda _source, line, **_kwargs: logger(line),
+            ),
+            is_progress_log=getattr(self, '_is_progress_log', lambda _line: False),
+            run_logged_command=getattr(
+                self,
+                '_run_logged_command',
+                lambda *_args, **_kwargs: 1,
+            ),
+            schedule=getattr(self, '_after', lambda _delay, callback: callback()),
+            on_ready=getattr(self, 'start_autovisor', lambda: None),
+            show_error=getattr(
+                self,
+                '_show_error',
+                lambda title, message: logger(f"[{title}] {message}"),
+            ),
+        )
+        self.autovisor_dependencies = manager
+        return manager
+
     def _python_module_available(self, python_exe, module_name):
-        try:
-            result = subprocess.run(
-                [python_exe, '-c', f'import {module_name}'],
-                cwd=self.autovisor_path,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=15,
-            )
-            return result.returncode == 0, (result.stderr or '').strip()
-        except Exception as exc:
-            return False, str(exc)
+        return self._get_autovisor_dependency_manager().module_available(python_exe, module_name)
 
     def _check_autovisor_dependencies(self, python_exe):
-        self.log_system(f"依赖检查Python: {python_exe}")
-        # 先用当前解释器快速自检，辅助诊断 Python 路径不匹配问题
-        try:
-            import pygetwindow
-            self.log_system("当前进程已装有 pygetwindow")
-        except ImportError as ie:
-            self.log_system(f"当前进程缺少: {ie.name}（这可能说明启动器用的Python与你安装依赖的Python不是同一个）")
-
-        dependency_map = {
-            'playwright': 'playwright',
-            'pygetwindow': 'PyGetWindow',
-            'requests': 'requests',
-        }
-
-        missing = []
-        for module_name, package_name in dependency_map.items():
-            is_available, error = self._python_module_available(python_exe, module_name)
-            if not is_available:
-                if error:
-                    self.log_system(f"  缺失 {package_name} ({module_name}): {error}")
-                else:
-                    self.log_system(f"  缺失 {package_name} ({module_name})")
-                missing.append((module_name, package_name, error))
-        return missing
+        return self._get_autovisor_dependency_manager().check_dependencies(python_exe)
 
     def _get_autovisor_runtime_install_args(self, missing_package_names=None):
-        package_specs = {
-            'playwright': 'playwright>=1.52,<2',
-            'PyGetWindow': 'PyGetWindow>=0.0.9,<1',
-            'requests': 'requests>=2.32,<3',
-        }
-        if missing_package_names:
-            return [package_specs[name] for name in missing_package_names if name in package_specs]
-        return [package_specs[name] for name in package_specs.keys()]
+        return self._get_autovisor_dependency_manager().runtime_install_args(missing_package_names)
 
     def _normalize_browser_name(self, name):
-        normalized = (name or '').strip().lower()
-        if normalized in {'edge', 'msedge'}:
-            return 'edge'
-        if normalized in {'chrome', 'google-chrome'}:
-            return 'chrome'
-        if normalized in {'chromium', 'playwright-chromium'}:
-            return 'chromium'
-        return normalized or 'chrome'
+        return self._get_autovisor_dependency_manager().normalize_browser_name(name)
 
     def _get_browser_registry_candidates(self, executable_name):
-        if not winreg:
-            return []
-
-        candidates = []
-        key_path = rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{executable_name}"
-        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-            try:
-                with winreg.OpenKey(root, key_path) as key:
-                    value, _ = winreg.QueryValueEx(key, None)
-                    if value:
-                        candidates.append(value)
-            except OSError:
-                continue
-        return candidates
+        return self._get_autovisor_dependency_manager()._browser_registry_candidates(executable_name)
 
     def _find_browser_executable(self, browser_name):
-        browser = self._normalize_browser_name(browser_name)
-        executable_map = {
-            'chrome': 'chrome.exe',
-            'edge': 'msedge.exe',
-        }
-        executable_name = executable_map.get(browser)
-        if not executable_name:
-            return None
-
-        base_dirs = [
-            os.environ.get('PROGRAMFILES'),
-            os.environ.get('PROGRAMFILES(X86)'),
-            os.environ.get('LOCALAPPDATA'),
-        ]
-        browser_dirs = {
-            'chrome': [
-                ('Google', 'Chrome', 'Application'),
-                ('Chrome', 'Application'),
-            ],
-            'edge': [
-                ('Microsoft', 'Edge', 'Application'),
-                ('Edge', 'Application'),
-            ],
-        }
-
-        candidates = []
-        for base_dir in base_dirs:
-            if not base_dir:
-                continue
-            for parts in browser_dirs.get(browser, []):
-                candidates.append(os.path.join(base_dir, *parts, executable_name))
-        candidates.extend(self._get_browser_registry_candidates(executable_name))
-
-        seen = set()
-        for candidate in candidates:
-            normalized_path = os.path.normpath(candidate)
-            if normalized_path in seen:
-                continue
-            seen.add(normalized_path)
-            if os.path.exists(normalized_path):
-                return normalized_path
-        return None
+        return self._get_autovisor_dependency_manager().find_browser_executable(browser_name)
 
     def _has_playwright_chromium(self):
-        custom_root = os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '').strip()
-        if custom_root:
-            cache_roots = [custom_root]
-        else:
-            cache_roots = [
-                os.path.join(os.environ.get('LOCALAPPDATA', ''), 'ms-playwright'),
-                os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'ms-playwright'),
-            ]
-        for root in cache_roots:
-            if not root or not os.path.isdir(root):
-                continue
-            try:
-                if any(name.startswith('chromium-') for name in os.listdir(root)):
-                    return True
-            except OSError:
-                continue
-        return False
+        return self._get_autovisor_dependency_manager().has_playwright_chromium()
 
     def _read_autovisor_config(self, config_path):
+        from src.config_service import read_ini_config
         return read_ini_config(config_path)
 
     def _copy_config_section(self, parser, source, target):
-        if not parser.has_section(source) or parser.has_section(target):
-            return False
-
-        parser.add_section(target)
-        for option, value in parser.items(source, raw=True):
-            parser.set(target, option, value)
-        return True
+        return self._get_autovisor_dependency_manager()._copy_config_section(parser, source, target)
 
     def _prepare_autovisor_config(self, config_path, multi_mode):
-        if not os.path.exists(config_path):
-            return {
-                'changed': False,
-                'needs_playwright_browser': False,
-                'browser_summaries': [],
-            }
-
-        parser = self._read_autovisor_config(config_path)
-        changed = False
-        browser_summaries = []
-
-        if True:
-            aliases = (
-                ('user-account-1', 'user-account'),
-                ('browser-option-1', 'browser-option'),
-                ('script-option-1', 'script-option'),
-                ('course-option-1', 'course-option'),
-                ('course-url-1', 'course-url'),
-            )
-            for source, target in aliases:
-                if self._copy_config_section(parser, source, target):
-                    changed = True
-                    browser_summaries.append(f"已兼容单账号配置段: [{source}] -> [{target}]")
-
-        browser_sections = [
-            section for section in parser.sections()
-            if section == 'browser-option' or section.startswith('browser-option-')
-        ]
-
-        if not browser_sections:
-            parser.add_section('browser-option')
-            parser.set('browser-option', 'driver', 'Chrome')
-            parser.set('browser-option', 'EXE_PATH', '')
-            browser_sections = ['browser-option']
-            changed = True
-            browser_summaries.append("已补充默认浏览器配置段 [browser-option]")
-
-        needs_playwright_browser = False
-        default_driver = 'chrome' if self._find_browser_executable('chrome') else 'edge'
-
-        for section in browser_sections:
-            driver = self._normalize_browser_name(parser.get(section, 'driver', fallback=default_driver))
-            if driver not in {'chrome', 'edge', 'chromium'}:
-                driver = default_driver
-                parser.set(section, 'driver', 'Chrome' if driver == 'chrome' else 'Edge')
-                changed = True
-
-            exe_path = parser.get(section, 'EXE_PATH', fallback='').strip()
-            if exe_path and not os.path.exists(exe_path):
-                parser.set(section, 'EXE_PATH', '')
-                exe_path = ''
-                changed = True
-
-            if not exe_path:
-                detected_path = self._find_browser_executable(driver)
-                if detected_path:
-                    parser.set(section, 'EXE_PATH', detected_path)
-                    exe_path = detected_path
-                    changed = True
-                    browser_summaries.append(f"{section}: 已自动定位 {driver} 路径 -> {detected_path}")
-
-            if not exe_path:
-                needs_playwright_browser = not self._has_playwright_chromium()
-                browser_summaries.append(f"{section}: 未找到 {driver}，将回退到 Playwright Chromium")
-
-        if changed:
-            with open(config_path, 'w', encoding='utf-8') as handle:
-                parser.write(handle)
-
-        return {
-            'changed': changed,
-            'needs_playwright_browser': needs_playwright_browser,
-            'browser_summaries': browser_summaries,
-        }
+        return self._get_autovisor_dependency_manager().prepare_config(config_path, multi_mode)
 
     def _run_logged_command(self, cmd, cwd, source='system', env=None):
         return self._get_process_supervisor().run_logged_command(
@@ -504,97 +332,19 @@ class UnifiedLauncher:
         )
 
     def _install_autovisor_with_mirrors(self, python_exe, install_args):
-        last_error = None
-        total_packages = len(install_args)
-        for i, pkg_spec in enumerate(install_args, 1):
-            self.log_system(f"[{i}/{total_packages}] 正在安装 {pkg_spec} ...")
+        return self._get_autovisor_dependency_manager().install_with_mirrors(python_exe, install_args)
 
-        for mirror_name, mirror_url in self.AUTOVISOR_PYPI_MIRRORS:
-            self.log_system(f"正在尝试通过 {mirror_name} 镜像安装 {total_packages} 个依赖...")
-            env = os.environ.copy()
-            env['PYTHONUNBUFFERED'] = '1'
-            try:
-                process = subprocess.Popen(
-                    [
-                        python_exe, '-m', 'pip', 'install',
-                        '--disable-pip-version-check',
-                        '--prefer-binary',
-                        '--progress-bar', 'on',
-                        '-i', mirror_url,
-                        *install_args,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    cwd=self.autovisor_path,
-                    text=True,
-                    encoding='utf-8', errors='replace',
-                    env=env,
-                )
-                for line in process.stdout:
-                    line = line.strip()
-                    if line:
-                        self.log('system', line, replace_last=self._is_progress_log(line))
-                install_code = process.wait()
-            except Exception as e:
-                install_code = -1
-                self.log_system(f"安装进程异常: {e}")
-            if install_code == 0:
-                self.log_system(f"已通过 {mirror_name} 镜像完成 {total_packages} 个包的安装。")
-                return
-
-            last_error = RuntimeError(f"{mirror_name} 镜像安装失败，返回码: {install_code}")
-            self.log_system(str(last_error))
-
-        raise last_error or RuntimeError("所有 PyPI 镜像均安装失败")
-
-    def _install_autovisor_dependencies_async(self, python_exe, missing_packages, ensure_playwright_browser=False):
-        if getattr(self, 'autovisor_installing', False):
-            self.log_system("Autovisor 依赖安装正在进行中，请稍候。")
-            return
-
-        self.autovisor_installing = True
-        install_targets = list(missing_packages)
-        if ensure_playwright_browser:
-            install_targets.append('playwright-browser')
-        self.log_system(f"Autovisor runtime setup: {', '.join(install_targets)}")
-        self.log_system(f"开始安装 Autovisor 依赖: {', '.join(missing_packages)}")
-        self.log_system("依赖下载与安装进度会显示在系统日志中。")
-
-        def install_worker():
-            success = False
-            try:
-                if missing_packages:
-                    # 只安装真正缺失的包
-                    missing_names = sorted({pkg_name for _, pkg_name, _ in missing_packages})
-                    install_args = self._get_autovisor_runtime_install_args(missing_names)
-                    self.log_system(f"缺 {len(missing_names)} 个包，正在通过镜像安装: {', '.join(missing_names)}")
-                    self._install_autovisor_with_mirrors(python_exe, install_args)
-
-                self.log_system("正在执行 playwright install chromium，浏览器下载进度将输出到系统日志...")
-                playwright_code = 0
-                if ensure_playwright_browser:
-                    playwright_code = self._run_logged_command(
-                    [python_exe, '-m', 'playwright', 'install', 'chromium'],
-                    self.autovisor_path
-                )
-                if playwright_code != 0:
-                    raise RuntimeError(f"playwright install 返回码: {playwright_code}")
-
-                success = True
-                self.log_system("Autovisor 依赖安装完成，准备重新启动。")
-            except Exception as exc:
-                self.log_system(f"Autovisor 依赖安装失败: {exc}")
-                self._after(
-                    0,
-                    lambda: self._show_error(
-                        "依赖安装失败",
-                        f"Autovisor 依赖自动安装失败：\n{exc}\n\n请查看系统日志后重试。"
-                    )
-                )
-            finally:
-                self.autovisor_installing = False
-                if success:
-                    self._after(0, self.start_autovisor)
+    def _install_autovisor_dependencies_async(
+        self,
+        python_exe,
+        missing_packages,
+        ensure_playwright_browser=False,
+    ):
+        return self._get_autovisor_dependency_manager().install_async(
+            python_exe,
+            missing_packages,
+            ensure_playwright_browser=ensure_playwright_browser,
+        )
 
     def _default_yatori_user(self, index=None):
         return ConfigService.default_yatori_user(index)
@@ -721,6 +471,7 @@ class UnifiedLauncher:
             'yatori': False,
             'autovisor': False,
         }
+        self._last_start_error = {}
 
         base_dir = self.get_base_dir()
         self.preferences_path = self.get_preferences_file_path(base_dir)
@@ -731,8 +482,9 @@ class UnifiedLauncher:
         self.autovisor_path = self.find_autovisor_path(base_dir)
 
         self.core_manager = None
-        self.autovisor_installing = False
         self._shutdown_pending = False
+
+        self._get_autovisor_dependency_manager()
 
         self.question_bank = QuestionBankController(
             base_dir,
@@ -804,6 +556,10 @@ class UnifiedLauncher:
     @property
     def autovisor_version_checking(self):
         return self.update_controller.autovisor_checking
+
+    @property
+    def autovisor_installing(self):
+        return self._get_autovisor_dependency_manager().installing
 
     def _get_autovisor_multi_mode(self):
         return bool(getattr(self, 'autovisor_multi_mode', True))
@@ -1372,7 +1128,11 @@ class UnifiedLauncher:
         try:
             if action == 'start':
                 if not self.start_script(script_type):
-                    return {'ok': False, 'message': f'未知核心类型: {script_type}'}
+                    message = getattr(self, '_last_start_error', {}).get(
+                        script_type,
+                        f'未知核心类型: {script_type}',
+                    )
+                    return {'ok': False, 'message': message, 'state': self.get_web_initial_state()}
             elif action == 'stop':
                 if not self.stop_script(script_type):
                     return {'ok': False, 'message': f'未知核心类型: {script_type}'}
@@ -1390,7 +1150,8 @@ class UnifiedLauncher:
                 if not self.show_update_dialog():
                     return {'ok': False, 'message': '无法检查或安装 Yatori 更新'}
             elif action == 'check_autovisor_update':
-                self.check_autovisor_update_async()
+                if not self.check_autovisor_update_async():
+                    return {'ok': False, 'message': 'Autovisor 更新检查未能启动，请稍后重试'}
             elif action == 'install_autovisor_update':
                 if not self.install_autovisor_update_async():
                     return {'ok': False, 'message': '暂无可安装的 Autovisor 更新'}
@@ -1408,9 +1169,13 @@ class UnifiedLauncher:
                         pass
                 threading.Thread(target=do_exit, daemon=True).start()
             elif action == 'toggle_question_bank':
-                self.toggle_question_bank()
+                was_running = bool(self.question_bank.running)
+                result = self.toggle_question_bank()
+                if not was_running and not result:
+                    return {'ok': False, 'message': '题库服务器启动失败，请查看系统日志'}
             elif action == 'start_question_bank':
-                self.start_question_bank()
+                if not self.start_question_bank():
+                    return {'ok': False, 'message': '题库服务器启动失败，请查看系统日志'}
             elif action == 'stop_question_bank':
                 self.stop_question_bank()
             elif action == 'clear_question_bank':
@@ -1468,13 +1233,23 @@ class UnifiedLauncher:
 
     def start_script(self, script_type):
         """启动指定脚本"""
+        if not hasattr(self, '_last_start_error'):
+            self._last_start_error = {}
+        self._last_start_error.pop(script_type, None)
         if script_type == 'yatori':
-            self.start_yatori()
-            return True
+            return bool(self.start_yatori())
         elif script_type == 'autovisor':
-            self.start_autovisor()
-            return True
-        self.log_system(f"未知核心类型: {script_type}")
+            return bool(self.start_autovisor())
+        message = f"未知核心类型: {script_type}"
+        self._last_start_error[script_type] = message
+        self.log_system(message)
+        return False
+
+    def _reject_runtime_start(self, script_type, message):
+        """Record an immediate launch rejection for Web action feedback."""
+        if not hasattr(self, '_last_start_error'):
+            self._last_start_error = {}
+        self._last_start_error[script_type] = message
         return False
 
     def _claim_runtime_start(self, script_type):
@@ -1494,7 +1269,7 @@ class UnifiedLauncher:
         """启动 Yatori"""
         if self.running['yatori'] or self.starting['yatori']:
             self.log_system("Yatori 已经在运行或启动中")
-            return
+            return True
 
         self.yatori_path = self.find_yatori_path(self.get_base_dir())
 
@@ -1503,20 +1278,20 @@ class UnifiedLauncher:
         if not os.path.exists(config_path):
             self.log_system(f"错误: 未找到配置文件 {config_path}")
             self._show_error("启动失败", "未找到 config.yaml 配置文件\n请使用配置生成器创建配置")
-            return
+            return self._reject_runtime_start('yatori', '未找到 Yatori 的 config.yaml，请先保存配置')
 
         cmd, entry_path = self._get_yatori_command()
         if not cmd:
             self.log_system("错误: 未找到 Yatori 可执行文件")
             self._show_error("启动失败", "未找到 Yatori 可执行文件")
-            return
+            return self._reject_runtime_start('yatori', '未找到 Yatori 可执行文件，请检查核心是否安装完整')
 
         # 同步题库 URL 到 Yatori 配置
         self._sync_yatori_question_bank_url()
 
         if not self._claim_runtime_start('yatori'):
             self.log_system("Yatori 已经在运行或启动中")
-            return
+            return True
 
         self.log_system("正在启动 Yatori...")
         self.log_system(f"Yatori 入口: {entry_path}")
@@ -1571,6 +1346,7 @@ class UnifiedLauncher:
         except Exception:
             self._mark_runtime_stopped('yatori')
             raise
+        return True
 
     def _resolve_base_python(self, venv_exe):
         """从 venv 的 python.exe 路径推断 base Python 路径"""
@@ -1655,11 +1431,11 @@ class UnifiedLauncher:
         """启动 Autovisor"""
         if self.autovisor_installing:
             self.log_system("Autovisor 依赖安装中，请等待安装完成后自动启动。")
-            return
+            return True
 
         if self.running['autovisor'] or self.starting['autovisor']:
             self.log_system("Autovisor 已经在运行或启动中")
-            return
+            return True
 
         self.autovisor_path = self.find_autovisor_path(self.get_base_dir())
         multi_mode = self._get_autovisor_multi_mode()
@@ -1668,14 +1444,14 @@ class UnifiedLauncher:
         if not script_path:
             self.log_system(f"错误: 未找到 Autovisor 入口文件，目录: {self.autovisor_path}")
             self._show_error("启动失败", "Autovisor 目录中未找到可用入口文件\n请检查 Autovisor 包是否完整")
-            return
+            return self._reject_runtime_start('autovisor', '未找到 Autovisor 入口文件，请检查核心是否安装完整')
 
         # 检查配置文件
         config_path = os.path.join(self.autovisor_path, 'configs.ini')
         if not os.path.exists(config_path):
             self.log_system(f"错误: 未找到配置文件 {config_path}")
             self._show_error("启动失败", "未找到 configs.ini 配置文件\n请使用配置生成器创建配置")
-            return
+            return self._reject_runtime_start('autovisor', '未找到 Autovisor 的 configs.ini，请先保存配置')
 
         runtime_state = self._prepare_autovisor_config(config_path, multi_mode)
         for summary in runtime_state['browser_summaries']:
@@ -1690,7 +1466,7 @@ class UnifiedLauncher:
             if not python_exe:
                 self.log_system("错误: 未找到 Python 解释器")
                 self._show_error("启动失败", "未找到 Python 解释器\n请确保已安装 Python 并添加到环境变量")
-                return
+                return self._reject_runtime_start('autovisor', '未找到可用的 Python 解释器')
 
             missing_dependencies = self._check_autovisor_dependencies(python_exe)
             if missing_dependencies or runtime_state['needs_playwright_browser']:
@@ -1701,16 +1477,22 @@ class UnifiedLauncher:
                         self.log_system(f"依赖检查失败 [{module_name}/{package_name}]: {error}")
                 if runtime_state['needs_playwright_browser']:
                     self.log_system("未检测到可用 Chrome/Edge，将自动安装 Playwright Chromium 作为浏览器回退。")
-                self._install_autovisor_dependencies_async(
+                accepted = self._install_autovisor_dependencies_async(
                     python_exe,
-                    sorted({item[1] for item in missing_dependencies}),
+                    missing_dependencies,
                     ensure_playwright_browser=runtime_state['needs_playwright_browser']
                 )
-                return
+                if accepted:
+                    return True
+                # A concurrent click may have claimed installation between the
+                # initial check and this call; the request is still in progress.
+                if self.autovisor_installing:
+                    return True
+                return self._reject_runtime_start('autovisor', 'Autovisor 依赖安装任务未能启动')
 
         if not self._claim_runtime_start('autovisor'):
             self.log_system("Autovisor 已经在运行或启动中")
-            return
+            return True
 
         self.log_system("正在启动 Autovisor...")
         self.log_system(f"Autovisor 目录: {self.autovisor_path}")
@@ -1815,6 +1597,7 @@ class UnifiedLauncher:
         except Exception:
             self._mark_runtime_stopped('autovisor')
             raise
+        return True
 
     def stop_script(self, script_type):
         """停止指定脚本"""

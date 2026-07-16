@@ -492,26 +492,37 @@
 
         async function handleCoreAction(core) {
             try {
-                if (core === 'yatori' || core === 'autovisor') { const sr = await saveSettings(false); if (sr?.silent) return; }
+                if (core === 'yatori' || core === 'autovisor') { const sr = await saveSettings(false); if (!sr?.ok) return; }
                 const running = core === 'yatori' ? !!state.runtime?.yatori_running : !!state.runtime?.autovisor_running;
                 const action = running ? 'stop' : 'start';
                 const result = await apiCall('perform_action', action, core);                                            
-                if (result?.ok) { renderRuntime(unwrapState(result)); }
+                handleWebActionResult(result, '核心操作失败');
             } catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }
         }
 
         async function toggleQuestionBank() {
-            try { const result = await apiCall('perform_action', 'toggle_question_bank'); if (result?.ok) { renderRuntime(unwrapState(result)); } }
+            try { const result = await apiCall('perform_action', 'toggle_question_bank'); handleWebActionResult(result, '题库操作失败'); }
             catch (error) { showToast(error.message || '题库操作失败', 'error'); }
         }
 
         async function saveAndPerform(action) {
-            try { const sr = await saveSettings(false); if (sr?.silent) return; const result = await apiCall('perform_action', action); if (result?.ok) { renderRuntime(unwrapState(result)); } }
+            try { const sr = await saveSettings(false); if (!sr?.ok) return; const result = await apiCall('perform_action', action); handleWebActionResult(result, '操作失败'); }
             catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }
         }
 
+        function handleWebActionResult(result, fallbackMessage = '操作失败') {
+            if (!result?.ok) {
+                showToast(result?.message || fallbackMessage, 'error');
+                if (result?.state) renderRuntime(unwrapState(result));
+                return false;
+            }
+            renderRuntime(unwrapState(result));
+            if (result?.toast) showToast(result.toast, result.toastType || 'success');
+            return true;
+        }
+
         async function performAction(action, ...args) {
-            try { const result = await apiCall('perform_action', action, ...args); if (result?.ok) { renderRuntime(unwrapState(result)); if (result?.toast) showToast(result.toast, result.toastType || 'success'); } }
+            try { const result = await apiCall('perform_action', action, ...args); handleWebActionResult(result); }
             catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }
         }
 
