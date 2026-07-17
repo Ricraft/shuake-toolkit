@@ -16,7 +16,11 @@ import shutil
 import json
 from datetime import datetime
 
-from src.atomic_io import atomic_dump_json
+from src.atomic_io import (
+    atomic_dump_json,
+    capture_file_state,
+    restore_file_state,
+)
 from src.autovisor_dependency_manager import AutovisorDependencyManager
 from src.config_service import ConfigService
 from src.course_catalog import (
@@ -970,18 +974,50 @@ class UnifiedLauncher:
             merged_user['coursesCustom'] = merged_cc
             merged_users.append(merged_user)
         merged['users'] = merged_users or [self._default_yatori_user(1)]
-        self._save_yatori_config_data(merged)
-
-        self._set_autovisor_multi_mode(autovisor_data.get('multi_mode'))
-        self._save_autovisor_config_data(autovisor_data)
+        config_paths = [
+            self._get_yatori_config_path(),
+            self._get_autovisor_config_path(),
+        ]
         if isinstance(qb_data, dict):
-            qb_result = self.save_qb_settings_from_web(qb_data)
-            if not qb_result.get('ok'):
-                return {
-                    'ok': False,
-                    'message': qb_result.get('message', '题库设置保存失败'),
-                    'state': self.get_web_initial_state(),
-                }
+            config_paths.append(self.question_bank.config_path)
+        try:
+            file_snapshot = capture_file_state(config_paths)
+        except OSError as exc:
+            return {
+                'ok': False,
+                'message': f'无法读取现有配置，已取消保存: {exc}',
+                'state': self.get_web_initial_state(),
+            }
+
+        previous_multi_mode = self._get_autovisor_multi_mode()
+        try:
+            self._save_yatori_config_data(merged)
+            self._save_autovisor_config_data(autovisor_data)
+            if isinstance(qb_data, dict):
+                qb_result = self.save_qb_settings_from_web(qb_data)
+                if not qb_result.get('ok'):
+                    raise RuntimeError(
+                        qb_result.get('message', '题库设置保存失败')
+                    )
+            self._set_autovisor_multi_mode(autovisor_data.get('multi_mode'))
+        except Exception as exc:
+            self._set_autovisor_multi_mode(previous_multi_mode)
+            restore_error = None
+            try:
+                restore_file_state(file_snapshot)
+            except OSError as rollback_exc:
+                restore_error = str(rollback_exc)
+            message = str(exc) or '配置保存失败'
+            if restore_error:
+                message = f'{message}；旧配置恢复失败: {restore_error}'
+            else:
+                message = f'{message}；未保留任何部分改动'
+            self.log_system(f"启动器配置保存失败: {message}")
+            return {
+                'ok': False,
+                'message': message,
+                'state': self.get_web_initial_state(),
+            }
         self.log_system("启动器配置已保存")
         return {'ok': True, 'state': self.get_web_initial_state()}
 

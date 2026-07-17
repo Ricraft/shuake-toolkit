@@ -19,7 +19,7 @@ from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 
-from src.atomic_io import atomic_dump_json
+from src.atomic_io import atomic_dump_json, capture_file_state, restore_file_state
 
 try:
     from src.题库服务器 import (
@@ -196,6 +196,10 @@ class QuestionBankController:
             return {"ok": False, "message": "题库端口必须在 1024 到 65535 之间"}
 
         previous = self.get_settings()
+        try:
+            file_snapshot = capture_file_state([self.config_path])
+        except OSError as exc:
+            return {"ok": False, "message": f"题库旧设置无法读取: {exc}"}
         was_running = self.running
         self.auto_start = bool(payload.get("auto_start", True))
         self.ai_enabled = bool(payload.get("ai_enabled", False))
@@ -210,19 +214,33 @@ class QuestionBankController:
             self._restore_settings(previous)
             return {"ok": False, "message": "题库设置写入失败"}
 
-        self.apply_ai_config()
-        if self.available:
-            self.configure_auto_save_setting(enabled=self.auto_save)
-        if was_running and port != previous["port"]:
-            self.log(
-                f"[QB] 端口由 {previous['port']} 改为 {port}，正在重启题库服务器"
+        restart_attempted = False
+        try:
+            self.apply_ai_config()
+            if self.available:
+                self.configure_auto_save_setting(enabled=self.auto_save)
+            if was_running and port != previous["port"]:
+                self.log(
+                    f"[QB] 端口由 {previous['port']} 改为 {port}，正在重启题库服务器"
+                )
+                restart_attempted = True
+                self.stop()
+                if not self.start(silent=True):
+                    return self._rollback_settings_update(
+                        previous,
+                        file_snapshot,
+                        was_running=was_running,
+                        restart_server=True,
+                        failure_message=f"题库服务器未能在新端口 {port} 启动",
+                    )
+        except Exception as exc:
+            return self._rollback_settings_update(
+                previous,
+                file_snapshot,
+                was_running=was_running,
+                restart_server=restart_attempted,
+                failure_message=f"题库设置应用失败: {exc}",
             )
-            self.stop()
-            if not self.start(silent=True):
-                return {
-                    "ok": False,
-                    "message": f"题库服务器未能在新端口 {port} 启动",
-                }
         return {"ok": True, "message": "题库设置已保存"}
 
     def _restore_settings(self, settings: dict) -> None:
@@ -234,6 +252,41 @@ class QuestionBankController:
         self.ai_api_key = settings["ai_api_key"]
         self.auto_save = settings["auto_save"]
         self.port = settings["port"]
+
+    def _rollback_settings_update(
+        self,
+        previous: dict,
+        file_snapshot,
+        *,
+        was_running: bool,
+        restart_server: bool,
+        failure_message: str,
+    ) -> dict:
+        self._restore_settings(previous)
+        details = []
+        try:
+            restore_file_state(file_snapshot)
+        except OSError as exc:
+            details.append(f"旧设置文件恢复失败: {exc}")
+
+        try:
+            self.apply_ai_config()
+            if self.available:
+                self.configure_auto_save_setting(enabled=self.auto_save)
+        except Exception as exc:
+            details.append(f"旧运行配置恢复失败: {exc}")
+
+        if restart_server and was_running:
+            try:
+                if self.running or self.server:
+                    self.stop()
+                if not self.start(silent=True):
+                    details.append(f"旧端口 {previous['port']} 的服务恢复失败")
+            except Exception as exc:
+                details.append(f"旧端口 {previous['port']} 的服务恢复失败: {exc}")
+
+        suffix = f"；{'；'.join(details)}" if details else "，已恢复旧设置"
+        return {"ok": False, "message": f"{failure_message}{suffix}"}
 
     def auto_start_if_enabled(self) -> bool:
         if not self.available:

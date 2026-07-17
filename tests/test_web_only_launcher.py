@@ -202,6 +202,107 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertEqual(result["message"], "Yatori 配置缺失")
         self.assertIn("state", result)
 
+    def test_save_all_rolls_back_yatori_when_autovisor_write_fails(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.autovisor_multi_mode = False
+        launcher.log_system = lambda _message: None
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+        launcher._normalize_autovisor_speed = lambda value, _default: str(value)
+        launcher._validate_autovisor_accounts = lambda _accounts: None
+        launcher._default_yatori_user = lambda _index: {}
+        launcher._default_autovisor_account = lambda _index: {}
+        launcher._load_yatori_config_data = lambda: {
+            "setting": {},
+            "users": [{"username": "old", "coursesCustom": {}}],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            yatori_path = root / "config.yaml"
+            autovisor_path = root / "configs.ini"
+            yatori_path.write_text("old-yatori", encoding="utf-8")
+            autovisor_path.write_text("old-autovisor", encoding="utf-8")
+            launcher._get_yatori_config_path = lambda: str(yatori_path)
+            launcher._get_autovisor_config_path = lambda: str(autovisor_path)
+            launcher._save_yatori_config_data = lambda _data: yatori_path.write_text(
+                "new-yatori", encoding="utf-8"
+            )
+
+            def fail_autovisor_write(_data):
+                autovisor_path.write_text("partial-autovisor", encoding="utf-8")
+                raise OSError("disk full")
+
+            launcher._save_autovisor_config_data = fail_autovisor_write
+            result = launcher.save_settings_from_web(
+                {
+                    "yatori": {"setting": {}, "users": [{"username": "new"}]},
+                    "autovisor": {
+                        "multi_mode": True,
+                        "accounts": [{"username": "user", "limit_speed": "1.0"}],
+                    },
+                }
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertIn("未保留任何部分改动", result["message"])
+            self.assertEqual(yatori_path.read_text(encoding="utf-8"), "old-yatori")
+            self.assertEqual(autovisor_path.read_text(encoding="utf-8"), "old-autovisor")
+            self.assertFalse(launcher.autovisor_multi_mode)
+
+    def test_save_all_rolls_back_every_file_when_question_bank_fails(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.autovisor_multi_mode = False
+        launcher.log_system = lambda _message: None
+        launcher.get_web_initial_state = lambda: {"runtime": {}}
+        launcher._normalize_autovisor_speed = lambda value, _default: str(value)
+        launcher._validate_autovisor_accounts = lambda _accounts: None
+        launcher._default_yatori_user = lambda _index: {}
+        launcher._default_autovisor_account = lambda _index: {}
+        launcher._load_yatori_config_data = lambda: {
+            "setting": {},
+            "users": [{"username": "old", "coursesCustom": {}}],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            yatori_path = root / "config.yaml"
+            autovisor_path = root / "configs.ini"
+            qb_path = root / "qb_config.json"
+            yatori_path.write_text("old-yatori", encoding="utf-8")
+            autovisor_path.write_text("old-autovisor", encoding="utf-8")
+            qb_path.write_text("old-qb", encoding="utf-8")
+            launcher.question_bank = SimpleNamespace(config_path=qb_path)
+            launcher._get_yatori_config_path = lambda: str(yatori_path)
+            launcher._get_autovisor_config_path = lambda: str(autovisor_path)
+            launcher._save_yatori_config_data = lambda _data: yatori_path.write_text(
+                "new-yatori", encoding="utf-8"
+            )
+            launcher._save_autovisor_config_data = lambda _data: autovisor_path.write_text(
+                "new-autovisor", encoding="utf-8"
+            )
+
+            def fail_qb_write(_data):
+                qb_path.write_text("partial-qb", encoding="utf-8")
+                return {"ok": False, "message": "题库写入失败"}
+
+            launcher.save_qb_settings_from_web = fail_qb_write
+            result = launcher.save_settings_from_web(
+                {
+                    "yatori": {"setting": {}, "users": [{"username": "new"}]},
+                    "autovisor": {
+                        "multi_mode": True,
+                        "accounts": [{"username": "user", "limit_speed": "1.0"}],
+                    },
+                    "questionbank": {"port": 8084},
+                }
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(yatori_path.read_text(encoding="utf-8"), "old-yatori")
+            self.assertEqual(autovisor_path.read_text(encoding="utf-8"), "old-autovisor")
+            self.assertEqual(qb_path.read_text(encoding="utf-8"), "old-qb")
+            self.assertFalse(launcher.autovisor_multi_mode)
+
     def test_cancelled_question_bank_import_is_not_reported_as_failure(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.question_bank = SimpleNamespace(available=True)

@@ -8,7 +8,12 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from src.atomic_io import atomic_dump_json, atomic_write_text
+from src.atomic_io import (
+    atomic_dump_json,
+    atomic_write_text,
+    capture_file_state,
+    restore_file_state,
+)
 from src.core_manager import CoreManager
 from src.dependencies import (
     CORE_DEPENDENCIES,
@@ -29,6 +34,21 @@ class InfrastructureTests(unittest.TestCase):
             atomic_dump_json(json_path, {"enabled": True})
             self.assertEqual(text_path.read_text(encoding="utf-8"), "完整")
             self.assertEqual(json.loads(json_path.read_text(encoding="utf-8")), {"enabled": True})
+
+    def test_file_snapshot_restores_content_and_original_absence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            existing = root / "existing.ini"
+            originally_missing = root / "new.json"
+            existing.write_bytes(b"old-content")
+            snapshot = capture_file_state([existing, originally_missing])
+
+            existing.write_bytes(b"partial-new-content")
+            originally_missing.write_bytes(b"new-content")
+            restore_file_state(snapshot)
+
+            self.assertEqual(existing.read_bytes(), b"old-content")
+            self.assertFalse(originally_missing.exists())
 
     def test_dependency_discovery_returns_requirement_names(self):
         def fake_import(name):

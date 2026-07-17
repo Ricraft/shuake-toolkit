@@ -35,13 +35,17 @@ class QuestionBankControllerTests(unittest.TestCase):
 
     def make_controller(self, base_dir, **kwargs):
         logs = kwargs.pop("logs", [])
+        port_checker = kwargs.pop("port_checker", lambda _port: True)
+        configure_auto_save_setting = kwargs.pop(
+            "configure_auto_save_setting", lambda **_kwargs: None
+        )
         controller = QuestionBankController(
             base_dir,
             log=logs.append,
             server_factory=_FakeServer,
             configure_models=lambda **_kwargs: None,
-            configure_auto_save_setting=lambda **_kwargs: None,
-            port_checker=lambda _port: True,
+            configure_auto_save_setting=configure_auto_save_setting,
+            port_checker=port_checker,
             sleep=lambda _seconds: None,
             available=True,
             **kwargs,
@@ -129,6 +133,54 @@ class QuestionBankControllerTests(unittest.TestCase):
             self.assertEqual(controller.get_query_url(), "http://127.0.0.1:8092/query")
             self.assertEqual(controller.get_stats(), {"total": 3})
             self.assertEqual(events.count("sync"), 2)
+
+    def test_failed_port_restart_restores_old_file_state_and_server(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller, _logs = self.make_controller(
+                temp_dir,
+                port_checker=lambda port: port == 8083,
+            )
+            original = controller.get_settings()
+            self.assertTrue(controller.start())
+
+            result = controller.update_settings({"port": 8092})
+
+            self.assertFalse(result["ok"])
+            self.assertIn("已恢复旧设置", result["message"])
+            self.assertEqual(controller.get_settings(), original)
+            self.assertEqual(controller.port, 8083)
+            self.assertTrue(controller.running)
+            self.assertEqual(controller.server.port, 8083)
+            self.assertFalse(controller.config_path.exists())
+            self.assertEqual(len(_FakeServer.instances), 3)
+            self.assertTrue(_FakeServer.instances[0].stopped)
+            self.assertTrue(_FakeServer.instances[1].stopped)
+            self.assertTrue(_FakeServer.instances[2].started)
+
+    def test_failed_runtime_setting_callback_rolls_back_memory_and_file(self):
+        calls = []
+
+        def flaky_auto_save(**_kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                raise RuntimeError("callback failed")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller, _logs = self.make_controller(
+                temp_dir,
+                configure_auto_save_setting=flaky_auto_save,
+            )
+            original = controller.get_settings()
+
+            result = controller.update_settings(
+                {"port": 8083, "auto_save": False, "ai_enabled": False}
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertIn("已恢复旧设置", result["message"])
+            self.assertEqual(controller.get_settings(), original)
+            self.assertFalse(controller.config_path.exists())
+            self.assertEqual(len(calls), 2)
 
     def test_unreachable_started_server_is_cleaned_up(self):
         with tempfile.TemporaryDirectory() as temp_dir:
