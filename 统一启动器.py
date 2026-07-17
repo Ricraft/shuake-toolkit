@@ -1083,7 +1083,7 @@ class UnifiedLauncher:
                 self.log_system(f"[AI测试] 连通性测试失败: {message}")
 
             return {
-                'ok': True,
+                'ok': success,
                 'success': success,
                 'message': message,
                 'details': details
@@ -1147,7 +1147,7 @@ class UnifiedLauncher:
                 self.log_system(f"[AI模型] 获取模型列表失败: {message}")
 
             return {
-                'ok': True,
+                'ok': success,
                 'success': success,
                 'message': message,
                 'models': models
@@ -1220,8 +1220,8 @@ class UnifiedLauncher:
                 def do_exit():
                     try:
                         self.on_closing(confirmed=True)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self.log_system(f"退出应用失败: {exc}")
                 threading.Thread(target=do_exit, daemon=True).start()
             elif action == 'toggle_question_bank':
                 was_running = bool(self.question_bank.running)

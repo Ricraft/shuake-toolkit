@@ -385,6 +385,48 @@ class WebOnlyLauncherTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{element_id}"', page)
 
+    def test_ai_helpers_do_not_report_transport_failures_as_ok(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.log_system = lambda _message: None
+
+        with patch(
+            "scripts.ai_connectivity_test.AIConnectivityTester.test_connectivity",
+            return_value=(False, "认证失败", {}),
+        ), patch(
+            "scripts.ai_connectivity_test.AIConnectivityTester.fetch_model_list",
+            return_value=(False, "模型接口不可用", []),
+        ):
+            connectivity = launcher.test_ai_connectivity_from_web(
+                {
+                    "provider": "OTHER",
+                    "api_url": "https://example.invalid/v1",
+                    "api_key": "secret",
+                    "model": "model",
+                }
+            )
+            models = launcher.fetch_model_list_from_web(
+                {
+                    "provider": "OTHER",
+                    "api_url": "https://example.invalid/v1",
+                    "api_key": "secret",
+                }
+            )
+
+        self.assertFalse(connectivity["ok"])
+        self.assertFalse(connectivity["success"])
+        self.assertFalse(models["ok"])
+        self.assertFalse(models["success"])
+
+    def test_empty_model_warning_is_only_used_for_successful_empty_response(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "result?.success && Array.isArray(result.models) && result.models.length === 0",
+            frontend,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

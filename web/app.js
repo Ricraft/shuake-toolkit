@@ -677,7 +677,7 @@
                       });
                       
                       showToast(`成功获取 ${result.models.length} 个模型`, 'success');
-                  } else if (result?.models && result.models.length === 0) {
+                  } else if (result?.success && Array.isArray(result.models) && result.models.length === 0) {
                       showToast('未获取到模型列表，请手动输入', 'warning');
                   } else {
                       showToast(result?.message || '获取模型列表失败', 'error');
