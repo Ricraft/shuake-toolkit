@@ -427,6 +427,56 @@ class WebOnlyLauncherTests(unittest.TestCase):
             frontend,
         )
 
+    def test_preference_write_failure_restores_backend_value(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_preferences = {"autoStart": False, "theme": "dark"}
+        launcher._save_web_preferences = lambda: False
+        side_effects = []
+        launcher._handle_preference_side_effects = side_effects.append
+
+        result = launcher.save_web_preference({"autoStart": True})
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["preferences"]["autoStart"])
+        self.assertEqual(launcher.web_preferences["autoStart"], False)
+        self.assertEqual(side_effects, [])
+
+    def test_preference_side_effect_failure_rolls_back_file_and_state(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_preferences = {"autoStart": False}
+        saved = []
+        restored_startup_values = []
+
+        def save_preferences():
+            saved.append(dict(launcher.web_preferences))
+            return True
+
+        launcher._save_web_preferences = save_preferences
+        launcher._handle_preference_side_effects = lambda _payload: [
+            "开机自动启动未能应用"
+        ]
+        launcher._set_windows_auto_start = lambda value: restored_startup_values.append(
+            value
+        ) or True
+
+        result = launcher.save_web_preference({"autoStart": True})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(saved, [{"autoStart": True}, {"autoStart": False}])
+        self.assertEqual(restored_startup_values, [False])
+        self.assertFalse(launcher.web_preferences["autoStart"])
+
+    def test_frontend_preference_failure_restores_checkbox_and_reports_error(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("if (!result?.ok) throw new Error", frontend)
+        self.assertIn("state.preferences[key] = previous", frontend)
+        self.assertIn("input.checked = !!previous", frontend)
+        self.assertIn("showToast(error?.message||'偏好设置保存失败', 'error')", frontend)
+        self.assertIn("偏好仅临时保存在当前页面", frontend)
+
 
 if __name__ == "__main__":
     unittest.main()

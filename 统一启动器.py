@@ -18,6 +18,7 @@ from datetime import datetime
 
 from src.atomic_io import (
     atomic_dump_json,
+    atomic_write_text,
     capture_file_state,
     restore_file_state,
 )
@@ -675,8 +676,10 @@ class UnifiedLauncher:
     def _save_web_preferences(self):
         try:
             atomic_dump_json(self.preferences_path, self.web_preferences)
+            return True
         except Exception as exc:
             self.log_system(f"保存启动器偏好失败: {exc}")
+            return False
 
     def _preference_enabled(self, key, default=False):
         return bool(self.web_preferences.get(key, default))
@@ -689,7 +692,7 @@ class UnifiedLauncher:
     def _set_windows_auto_start(self, enabled):
         if os.name != 'nt':
             self.log_system("当前系统不支持自动创建开机启动项。")
-            return
+            return False
 
         startup_dir = os.path.join(
             os.environ.get('APPDATA', ''),
@@ -697,20 +700,25 @@ class UnifiedLauncher:
         )
         if not startup_dir.strip("\\") or not os.path.isdir(startup_dir):
             self.log_system("未找到 Windows 启动目录，开机自动启动未生效。")
-            return
+            return False
 
         shortcut_path = os.path.join(startup_dir, "统一刷课启动器.bat")
         if enabled:
             work_dir = os.path.dirname(os.path.abspath(__file__))
-            with open(shortcut_path, 'w', encoding='utf-8') as handle:
-                handle.write("@echo off\n")
-                handle.write(f"cd /d \"{work_dir}\"\n")
-                handle.write(f"start \"\" {self._startup_command()}\n")
+            shortcut = "".join(
+                (
+                    "@echo off\n",
+                    f"cd /d \"{work_dir}\"\n",
+                    f"start \"\" {self._startup_command()}\n",
+                )
+            )
+            atomic_write_text(shortcut_path, shortcut)
             self.log_system("已启用开机自动启动")
         else:
             if os.path.exists(shortcut_path):
                 os.remove(shortcut_path)
             self.log_system("已关闭开机自动启动")
+        return True
 
     def _clean_old_runtime_logs(self, base_dir=None, days=7):
         base_dir = base_dir or self.get_base_dir()
@@ -838,15 +846,19 @@ class UnifiedLauncher:
             return {"ok": False, "message": f"取消失败: {exc}"}
 
     def _handle_preference_side_effects(self, payload):
+        failures = []
         if 'autoStart' in payload:
             try:
-                self._set_windows_auto_start(bool(payload['autoStart']))
+                if not self._set_windows_auto_start(bool(payload['autoStart'])):
+                    failures.append('开机自动启动未能应用')
             except Exception as exc:
                 self.log_system(f"更新开机自动启动失败: {exc}")
+                failures.append(f'开机自动启动应用失败: {exc}')
         if 'alwaysOnTop' in payload:
             self._apply_window_preferences()
         if payload.get('autoCleanLogs'):
             self._clean_old_runtime_logs()
+        return failures
 
     def get_web_preferences(self):
         return dict(self.web_preferences)
@@ -855,9 +867,32 @@ class UnifiedLauncher:
         if not isinstance(payload, dict):
             return {'ok': False, 'message': '偏好设置格式错误', 'preferences': self.get_web_preferences()}
 
+        previous = dict(self.web_preferences)
         self.web_preferences.update(payload)
-        self._save_web_preferences()
-        self._handle_preference_side_effects(payload)
+        if not self._save_web_preferences():
+            self.web_preferences = previous
+            return {
+                'ok': False,
+                'message': '偏好设置写入失败，已恢复原值',
+                'preferences': self.get_web_preferences(),
+            }
+
+        failures = self._handle_preference_side_effects(payload)
+        if failures:
+            self.web_preferences = previous
+            rollback_saved = self._save_web_preferences()
+            if 'autoStart' in payload:
+                try:
+                    self._set_windows_auto_start(bool(previous.get('autoStart')))
+                except Exception as exc:
+                    failures.append(f'开机启动项恢复失败: {exc}')
+            if not rollback_saved:
+                failures.append('偏好文件恢复失败')
+            return {
+                'ok': False,
+                'message': '；'.join(failures),
+                'preferences': self.get_web_preferences(),
+            }
         return {'ok': True, 'preferences': self.get_web_preferences()}
 
     def get_web_runtime_state(self):
