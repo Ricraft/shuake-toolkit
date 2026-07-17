@@ -21,6 +21,7 @@ from src.atomic_io import (
     capture_file_state,
     restore_file_state,
 )
+from src.ai_service import AIConnectivityService
 from src.autovisor_dependency_manager import AutovisorDependencyManager
 from src.config_service import ConfigService
 from src.course_catalog import (
@@ -1052,126 +1053,18 @@ class UnifiedLauncher:
                 file_path = selection[0]
         return {'ok': bool(file_path), 'path': file_path or ''}
 
+    def _get_ai_service(self):
+        service = getattr(self, '_ai_service', None)
+        if service is None:
+            service = AIConnectivityService(log=self.log_system)
+            self._ai_service = service
+        return service
+
     def test_ai_connectivity_from_web(self, config):
-        """从Web界面测试AI连通性"""
-        try:
-            # 导入AI连通性测试模块
-            try:
-                from scripts.ai_connectivity_test import AIConnectivityTester
-            except ImportError:
-                self.log_system("[AI测试] 导入ai_connectivity_test模块失败")
-                return {
-                    'ok': False,
-                    'success': False,
-                    'message': 'AI连通性测试模块加载失败'
-                }
-
-            provider = config.get('provider', 'SILICON')
-            api_url = config.get('api_url', '')
-            api_key = config.get('api_key', '')
-            model = config.get('model', '')
-
-            if not api_key or not api_key.strip():
-                return {
-                    'ok': False,
-                    'success': False,
-                    'message': 'API Key 不能为空'
-                }
-
-            self.log_system(f"[AI测试] 正在测试 {AIConnectivityTester.PLATFORM_NAMES.get(provider, provider)} 连通性...")
-
-            success, message, details = AIConnectivityTester.test_connectivity(
-                provider=provider,
-                api_url=api_url,
-                api_key=api_key,
-                model=model,
-                timeout=30
-            )
-
-            if success:
-                self.log_system(f"[AI测试] 连通性测试成功: {message}")
-            else:
-                self.log_system(f"[AI测试] 连通性测试失败: {message}")
-
-            return {
-                'ok': success,
-                'success': success,
-                'message': message,
-                'details': details
-            }
-
-        except Exception as e:
-            self.log_system(f"[AI测试] 测试过程发生错误: {e}")
-            return {
-                'ok': False,
-                'success': False,
-                'message': f'测试过程发生错误: {str(e)}'
-            }
+        return self._get_ai_service().test_connectivity(config)
 
     def fetch_model_list_from_web(self, config):
-        """从Web界面获取AI模型列表"""
-        try:
-            # 导入AI连通性测试模块
-            try:
-                from scripts.ai_connectivity_test import AIConnectivityTester
-            except ImportError:
-                self.log_system("[AI模型] 导入ai_connectivity_test模块失败")
-                return {
-                    'ok': False,
-                    'success': False,
-                    'message': 'AI模块加载失败',
-                    'models': []
-                }
-
-            provider = config.get('provider', 'SILICON')
-            api_url = config.get('api_url', '')
-            api_key = config.get('api_key', '')
-
-            if not api_key or not api_key.strip():
-                return {
-                    'ok': False,
-                    'success': False,
-                    'message': 'API Key 不能为空',
-                    'models': []
-                }
-
-            if not api_url:
-                return {
-                    'ok': False,
-                    'success': False,
-                    'message': 'API 地址不能为空',
-                    'models': []
-                }
-
-            self.log_system(f"[AI模型] 正在获取 {AIConnectivityTester.PLATFORM_NAMES.get(provider, provider)} 的模型列表...")
-
-            success, message, models = AIConnectivityTester.fetch_model_list(
-                provider=provider,
-                api_url=api_url,
-                api_key=api_key,
-                timeout=30
-            )
-
-            if success:
-                self.log_system(f"[AI模型] 成功获取 {len(models)} 个模型")
-            else:
-                self.log_system(f"[AI模型] 获取模型列表失败: {message}")
-
-            return {
-                'ok': success,
-                'success': success,
-                'message': message,
-                'models': models
-            }
-
-        except Exception as e:
-            self.log_system(f"[AI模型] 获取模型列表时发生错误: {e}")
-            return {
-                'ok': False,
-                'success': False,
-                'message': f'获取模型列表时发生错误: {str(e)}',
-                'models': []
-            }
+        return self._get_ai_service().fetch_model_list(config)
 
     def toggle_web_runtime(self, script_type):
         if not self.toggle_script(script_type):
