@@ -13,7 +13,6 @@ import locale
 import glob
 import re
 import shutil
-import json
 from datetime import datetime
 
 from src.atomic_io import (
@@ -24,12 +23,8 @@ from src.atomic_io import (
 from src.ai_service import AIConnectivityService
 from src.autovisor_dependency_manager import AutovisorDependencyManager
 from src.config_service import ConfigService
-from src.course_catalog import (
-    CourseCatalogError,
-    CourseCatalogService,
-    normalize_account_index,
-    parse_zhs_course_data,
-)
+from src.course_api_service import CourseAPIService
+from src.course_catalog import CourseCatalogService
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
@@ -1572,204 +1567,18 @@ class UnifiedLauncher:
             self._course_catalog_service = service
         return service
 
+    def _get_course_api_service(self):
+        service = getattr(self, '_course_api_service', None)
+        if service is None:
+            service = CourseAPIService(self)
+            self._course_api_service = service
+        return service
+
     def get_autovisor_courses_from_web(self, account_index=0):
-        """从Web获取Autovisor课程列表 - 运行 fetch_zhs_courses.py"""
-        import subprocess
-        import os
-        import json
-
-        try:
-            account_index = normalize_account_index(account_index)
-        except CourseCatalogError as e:
-            return {'ok': False, 'message': str(e)}
-        accounts = self._load_autovisor_config_data().get('accounts') or []
-        if account_index >= len(accounts):
-            return {'ok': False, 'message': f'智慧树账号索引 {account_index} 不存在'}
-        account = accounts[account_index]
-        account_number = self._as_int(account.get('account_id'), account_index + 1)
-        catalog_account_index = max(account_number - 1, 0)
-        self.log_system(f"[课程获取] 正在获取账号配置 {account_number} 的课程...")
-        target_username = str(account.get('username', '')).strip()
-        if not target_username:
-            return {
-                'ok': False,
-                'message': f'智慧树账号配置 {account_number} 未配置用户名',
-            }
-        catalog = self._get_course_catalog_service()
-        cached = catalog.get_cached('zhs', catalog_account_index, target_username)
-        if cached is not None:
-            self.log_system("[课程获取] 账号身份匹配，使用30分钟内缓存")
-            return cached
-
-        script_path = os.path.join(
-            self.get_base_dir(),
-            "scripts",
-            "fetch_zhs_courses.py",
-        )
-        if not os.path.exists(script_path):
-            return {'ok': False, 'message': f'未找到课程获取脚本: {script_path}'}
-        python_exe = self.get_python_executable()
-        if not python_exe:
-            return {'ok': False, 'message': '未找到 Python 解释器'}
-
-        # 检查并安装playwright依赖
-        is_playwright_available, error = self._python_module_available(python_exe, 'playwright')
-        if not is_playwright_available:
-            self.log_system(f"[课程获取] 检测到缺少playwright依赖，正在安装...")
-            try:
-                env = os.environ.copy()
-                env['PLAYWRIGHT_DOWNLOAD_HOST'] = 'https://npmmirror.com/mirrors/playwright'
-                env['PYTHONUNBUFFERED'] = '1'
-                
-                # 安装playwright包
-                install_code = self._run_logged_command(
-                    [python_exe, '-m', 'pip', 'install', '--disable-pip-version-check', 
-                     '--no-color', '--prefer-binary', '-i', 'https://pypi.tuna.tsinghua.edu.cn/simple',
-                     'playwright>=1.52,<2'],
-                    self.get_base_dir(),
-                    env=env
-                )
-                if install_code != 0:
-                    return {'ok': False, 'message': f'安装playwright失败，返回码: {install_code}'}
-                
-                # 安装浏览器
-                self.log_system("[课程获取] 正在安装Playwright Chromium浏览器...")
-                install_code = self._run_logged_command(
-                    [python_exe, '-m', 'playwright', 'install', 'chromium'],
-                    self.get_base_dir(),
-                    env=env
-                )
-                if install_code != 0:
-                    return {'ok': False, 'message': f'安装Chromium浏览器失败，返回码: {install_code}'}
-                
-                self.log_system("[课程获取] Playwright环境准备完成")
-            except Exception as e:
-                return {'ok': False, 'message': f'准备Playwright环境失败: {e}'}
-
-        course_file = os.path.join(
-            self.get_base_dir(),
-            "data",
-            "zhs_course.json",
-        )
-        previous_course_mtime = (
-            os.stat(course_file).st_mtime_ns
-            if os.path.exists(course_file)
-            else None
-        )
-        try:
-            creationflags, startupinfo = self._get_subprocess_window_kwargs()
-            env = os.environ.copy()
-            env['PLAYWRIGHT_DOWNLOAD_HOST'] = 'https://npmmirror.com/mirrors/playwright'
-            process = subprocess.Popen(
-                [python_exe, script_path, str(account_number)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                cwd=self.get_base_dir(),
-                text=False,
-                creationflags=creationflags,
-                startupinfo=startupinfo,
-                env=env,
-            )
-            encodings = self._build_encoding_candidates('utf-8', 'gbk')
-            buffer = b''
-            all_output = []
-            while True:
-                chunk = process.stdout.read(1)
-                if not chunk:
-                    break
-                buffer += chunk
-                if chunk == b'\n':
-                    line = self._decode_output_line(buffer, encodings)
-                    cleaned = self._clean_log_text(line)
-                    if cleaned:
-                        self.log_system(f"[课程获取] {cleaned}")
-                        all_output.append(cleaned)
-                    buffer = b''
-            process.wait()
-            return_code = process.returncode
-            if return_code != 0:
-                error_lines = all_output[-10:] if all_output else []
-                error_detail = '\n'.join(error_lines) if error_lines else '无输出'
-                return {
-                    'ok': False, 
-                    'message': f'脚本异常退出(返回码:{return_code})\nPython: {python_exe}\n最近输出:\n{error_detail}'
-                }
-        except Exception as e:
-            return {'ok': False, 'message': f'运行脚本失败: {e}'}
-
-        if not os.path.exists(course_file):
-            return {'ok': False, 'message': '未找到课程数据文件'}
-        if (
-            previous_course_mtime is not None
-            and os.stat(course_file).st_mtime_ns == previous_course_mtime
-        ):
-            return {
-                'ok': False,
-                'message': '课程获取脚本未刷新数据文件，请检查登录或验证状态',
-            }
-
-        try:
-            with open(course_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            return {'ok': False, 'message': f'读取课程数据失败: {e}'}
-
-        try:
-            courses, selected_identity = parse_zhs_course_data(
-                data,
-                target_username,
-            )
-        except CourseCatalogError as e:
-            return {'ok': False, 'message': str(e)}
-        if target_username and not courses and target_username not in data:
-            self.log_system(
-                f"[课程获取] 未找到账号 {target_username} 的数据，该账号可能未登录过"
-            )
-        elif selected_identity:
-            self.log_system(f"[课程获取] 使用账号 {selected_identity} 的课程数据")
-        result = {'ok': True, 'courses': courses}
-        try:
-            catalog.put_cached(
-                'zhs',
-                catalog_account_index,
-                selected_identity,
-                result,
-            )
-        except Exception as e:
-            self.log_system(f"[课程获取] 缓存写入失败: {e}")
-        return result
+        return self._get_course_api_service().get_autovisor_courses(account_index)
 
     def get_xuexitong_courses_from_web(self, account_index=0):
-        """获取学习通课程列表，使用身份隔离缓存与 HTTPS API。"""
-        try:
-            account_index = normalize_account_index(account_index)
-        except CourseCatalogError as e:
-            return {'ok': False, 'message': str(e)}
-        yatori_config = self._load_yatori_config_data()
-        users = yatori_config.get('users', [])
-        if account_index >= len(users):
-            return {
-                'ok': False,
-                'message': f'账号索引 {account_index} 超出范围 (共 {len(users)} 个账号)',
-            }
-        user = users[account_index]
-        account_type = str(user.get('accountType', '')).upper()
-        if account_type != 'XUEXITONG':
-            return {
-                'ok': False,
-                'message': f'账号类型 {account_type} 不是学习通，无法获取课程',
-            }
-        username = str(user.get('account', '')).strip()
-        password = str(user.get('password', '')).strip()
-        self.log_system(f"[学习通课程] 正在获取账号 {account_index} 的课程...")
-        try:
-            return self._get_course_catalog_service().get_xuexitong_courses(
-                account_index,
-                username,
-                password,
-            )
-        except Exception as e:
-            return {'ok': False, 'message': f'获取学习通课程失败: {e}'}
+        return self._get_course_api_service().get_xuexitong_courses(account_index)
 
     def start_practice_mode_from_web(self):
         """启动刷题模式 - 运行 Practice_Mode.py，日志接入 Autovisor 面板"""
