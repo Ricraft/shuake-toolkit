@@ -12,7 +12,6 @@ import sys
 import locale
 import glob
 import re
-import shutil
 from datetime import datetime
 
 from src.atomic_io import (
@@ -29,6 +28,7 @@ from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
 from src.preferences_service import PreferencesService
+from src.python_runtime import find_python_executable
 from src.question_bank_controller import QuestionBankController
 from src.runtime_activity import summarize_autovisor_activity
 from src.update_controller import UpdateController
@@ -1227,84 +1227,8 @@ class UnifiedLauncher:
             raise
         return True
 
-    def _resolve_base_python(self, venv_exe):
-        """从 venv 的 python.exe 路径推断 base Python 路径"""
-        try:
-            # venv 结构: .venv/Scripts/python.exe → base 在 .venv 的父目录或 pyvenv.cfg 的 home
-            scripts_dir = os.path.dirname(venv_exe)
-            venv_dir = os.path.dirname(scripts_dir)  # .venv 目录
-            parent_dir = os.path.dirname(venv_dir)     # .venv 的父目录
-
-            # 方法1: 读取 pyvenv.cfg 的 home 字段
-            cfg_path = os.path.join(venv_dir, 'pyvenv.cfg')
-            if os.path.exists(cfg_path):
-                with open(cfg_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.startswith('home'):
-                            home = line.split('=', 1)[1].strip()
-                            base = os.path.join(home, 'python.exe')
-                            if os.path.exists(base):
-                                return base
-                            base_scripts = os.path.join(home, 'Scripts', 'python.exe')
-                            if os.path.exists(base_scripts):
-                                return base_scripts
-
-            # 方法2: 直接去父目录找 python.exe
-            for candidate_dir in (parent_dir, venv_dir):
-                candidate = os.path.join(candidate_dir, 'python.exe')
-                if os.path.exists(candidate) and candidate != venv_exe:
-                    return candidate
-        except Exception:
-            pass
-        return None
-
     def get_python_executable(self):
-        """获取 Python 解释器路径"""
-        if not getattr(sys, 'frozen', False):
-            return sys.executable
-        
-        # 打包环境下，尝试找到系统 Python
-        python_cmd = shutil.which('python') or shutil.which('python3')
-        if python_cmd:
-            return python_cmd
-
-        # Windows Python Launcher can find registered interpreters that are not
-        # present on PATH.
-        py_launcher = shutil.which('py')
-        if py_launcher:
-            for version in ('3.13', '3.12', '3.11', '3.10', '3.9'):
-                try:
-                    result = subprocess.run(
-                        [py_launcher, f'-{version}', '-c', 'import sys; print(sys.executable)'],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    candidate = result.stdout.strip()
-                    if result.returncode == 0 and os.path.isfile(candidate):
-                        return candidate
-                except (OSError, subprocess.SubprocessError):
-                    continue
-        
-        # 如果找不到，尝试常见路径
-        user_name = os.getenv('USERNAME', '')
-        common_paths = [
-            r'C:\Python39\python.exe',
-            r'C:\Python310\python.exe',
-            r'C:\Python311\python.exe',
-            r'C:\Python312\python.exe',
-            r'C:\Python313\python.exe',
-            os.path.join(r'C:\Users', user_name, r'AppData\Local\Programs\Python\Python39\python.exe'),
-            os.path.join(r'C:\Users', user_name, r'AppData\Local\Programs\Python\Python310\python.exe'),
-            os.path.join(r'C:\Users', user_name, r'AppData\Local\Programs\Python\Python311\python.exe'),
-            os.path.join(r'C:\Users', user_name, r'AppData\Local\Programs\Python\Python312\python.exe'),
-            os.path.join(r'C:\Users', user_name, r'AppData\Local\Programs\Python\Python313\python.exe'),
-        ]
-        for path in common_paths:
-            if os.path.exists(path):
-                return path
-        
-        return None
+        return find_python_executable()
 
     def start_autovisor(self):
         """启动 Autovisor"""
