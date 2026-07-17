@@ -17,7 +17,6 @@ import json
 from datetime import datetime
 
 from src.atomic_io import (
-    atomic_dump_json,
     atomic_write_text,
     capture_file_state,
     restore_file_state,
@@ -33,6 +32,7 @@ from src.course_catalog import (
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
+from src.preferences_service import PreferencesService
 from src.question_bank_controller import QuestionBankController
 from src.runtime_activity import summarize_autovisor_activity
 from src.update_controller import UpdateController
@@ -481,7 +481,13 @@ class UnifiedLauncher:
 
         base_dir = self.get_base_dir()
         self.preferences_path = self.get_preferences_file_path(base_dir)
-        self.web_preferences = self._load_web_preferences()
+        self._preferences_service = PreferencesService(
+            self.preferences_path,
+            log=self.log_system,
+            apply_side_effects=self._handle_preference_side_effects,
+            rollback_side_effects=self._rollback_preference_side_effects,
+        )
+        self.web_preferences = self._preferences_service.values
         if self.web_preferences.get('autoCleanLogs'):
             self._clean_old_runtime_logs(base_dir)
         self.yatori_path = self.find_yatori_path(base_dir)
@@ -647,42 +653,27 @@ class UnifiedLauncher:
         if len(history) > 400:
             del history[:-400]
 
+    def _get_preferences_service(self):
+        service = getattr(self, '_preferences_service', None)
+        if service is None:
+            service = PreferencesService(
+                self.preferences_path,
+                log=self.log_system,
+                apply_side_effects=self._handle_preference_side_effects,
+                rollback_side_effects=self._rollback_preference_side_effects,
+            )
+            self._preferences_service = service
+            self.web_preferences = service.values
+        return service
+
     def _load_web_preferences(self):
-        defaults = {
-            'theme': 'dark',
-            'autoStart': False,
-            'autoShutdown': False,
-            'autoRun': False,
-            'minimizeToTray': False,
-            'startMinimized': False,
-            'alwaysOnTop': False,
-            'notifyOnComplete': True,
-            'notifyOnError': True,
-            'soundEnabled': True,
-            'rememberGeometry': False,
-            'autoCleanLogs': False,
-            'qb_external_url': '',
-        }
-        try:
-            if os.path.exists(self.preferences_path):
-                with open(self.preferences_path, 'r', encoding='utf-8') as handle:
-                    stored = json.load(handle)
-                if isinstance(stored, dict):
-                    defaults.update(stored)
-        except Exception as exc:
-            self.log_system(f"加载启动器偏好失败: {exc}")
-        return defaults
+        return self._get_preferences_service().get()
 
     def _save_web_preferences(self):
-        try:
-            atomic_dump_json(self.preferences_path, self.web_preferences)
-            return True
-        except Exception as exc:
-            self.log_system(f"保存启动器偏好失败: {exc}")
-            return False
+        return self._get_preferences_service().save()
 
     def _preference_enabled(self, key, default=False):
-        return bool(self.web_preferences.get(key, default))
+        return self._get_preferences_service().enabled(key, default)
 
     def _startup_command(self):
         if getattr(sys, 'frozen', False):
@@ -860,40 +851,25 @@ class UnifiedLauncher:
             self._clean_old_runtime_logs()
         return failures
 
+    def _rollback_preference_side_effects(self, previous, payload):
+        failures = []
+        if 'autoStart' in payload:
+            try:
+                if not self._set_windows_auto_start(
+                    bool(previous.get('autoStart'))
+                ):
+                    failures.append('开机启动项恢复失败')
+            except Exception as exc:
+                failures.append(f'开机启动项恢复失败: {exc}')
+        return failures
+
     def get_web_preferences(self):
-        return dict(self.web_preferences)
+        return self._get_preferences_service().get()
 
     def save_web_preference(self, payload):
-        if not isinstance(payload, dict):
-            return {'ok': False, 'message': '偏好设置格式错误', 'preferences': self.get_web_preferences()}
-
-        previous = dict(self.web_preferences)
-        self.web_preferences.update(payload)
-        if not self._save_web_preferences():
-            self.web_preferences = previous
-            return {
-                'ok': False,
-                'message': '偏好设置写入失败，已恢复原值',
-                'preferences': self.get_web_preferences(),
-            }
-
-        failures = self._handle_preference_side_effects(payload)
-        if failures:
-            self.web_preferences = previous
-            rollback_saved = self._save_web_preferences()
-            if 'autoStart' in payload:
-                try:
-                    self._set_windows_auto_start(bool(previous.get('autoStart')))
-                except Exception as exc:
-                    failures.append(f'开机启动项恢复失败: {exc}')
-            if not rollback_saved:
-                failures.append('偏好文件恢复失败')
-            return {
-                'ok': False,
-                'message': '；'.join(failures),
-                'preferences': self.get_web_preferences(),
-            }
-        return {'ok': True, 'preferences': self.get_web_preferences()}
+        result = self._get_preferences_service().update(payload)
+        self.web_preferences = self._preferences_service.values
+        return result
 
     def get_web_runtime_state(self):
         yatori_version = self._get_yatori_display_version()

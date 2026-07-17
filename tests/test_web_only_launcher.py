@@ -427,43 +427,24 @@ class WebOnlyLauncherTests(unittest.TestCase):
             frontend,
         )
 
-    def test_preference_write_failure_restores_backend_value(self):
+    def test_preference_web_api_delegates_to_preferences_service(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
-        launcher.web_preferences = {"autoStart": False, "theme": "dark"}
-        launcher._save_web_preferences = lambda: False
-        side_effects = []
-        launcher._handle_preference_side_effects = side_effects.append
+        calls = []
+
+        class FakePreferences:
+            values = {"autoStart": False}
+
+            def update(self, payload):
+                calls.append(payload)
+                return {"ok": False, "preferences": dict(self.values)}
+
+        launcher._preferences_service = FakePreferences()
+        launcher.web_preferences = launcher._preferences_service.values
 
         result = launcher.save_web_preference({"autoStart": True})
 
         self.assertFalse(result["ok"])
-        self.assertFalse(result["preferences"]["autoStart"])
-        self.assertEqual(launcher.web_preferences["autoStart"], False)
-        self.assertEqual(side_effects, [])
-
-    def test_preference_side_effect_failure_rolls_back_file_and_state(self):
-        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
-        launcher.web_preferences = {"autoStart": False}
-        saved = []
-        restored_startup_values = []
-
-        def save_preferences():
-            saved.append(dict(launcher.web_preferences))
-            return True
-
-        launcher._save_web_preferences = save_preferences
-        launcher._handle_preference_side_effects = lambda _payload: [
-            "开机自动启动未能应用"
-        ]
-        launcher._set_windows_auto_start = lambda value: restored_startup_values.append(
-            value
-        ) or True
-
-        result = launcher.save_web_preference({"autoStart": True})
-
-        self.assertFalse(result["ok"])
-        self.assertEqual(saved, [{"autoStart": True}, {"autoStart": False}])
-        self.assertEqual(restored_startup_values, [False])
+        self.assertEqual(calls, [{"autoStart": True}])
         self.assertFalse(launcher.web_preferences["autoStart"])
 
     def test_frontend_preference_failure_restores_checkbox_and_reports_error(self):
