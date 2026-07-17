@@ -889,6 +889,67 @@
             margin-top: auto;
         }
 
+        .runtime-activity {
+            padding: 0.75rem;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            background: rgba(59, 130, 246, 0.06);
+        }
+
+        .runtime-activity[data-phase="completed"] {
+            background: rgba(16, 185, 129, 0.07);
+            border-color: rgba(16, 185, 129, 0.2);
+        }
+
+        .runtime-activity[data-phase="failed"] {
+            background: rgba(239, 68, 68, 0.07);
+            border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .runtime-activity[data-phase="completed"] .runtime-progress-bar {
+            background: var(--success);
+        }
+
+        .runtime-activity[data-phase="failed"] .runtime-progress-bar {
+            background: var(--danger);
+        }
+
+        .runtime-activity-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .runtime-activity-detail {
+            margin-top: 0.35rem;
+            overflow: hidden;
+            color: var(--text-muted);
+            font-size: 0.6875rem;
+            line-height: 1.45;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .runtime-progress-track {
+            height: 5px;
+            margin-top: 0.6rem;
+            overflow: hidden;
+            border-radius: 999px;
+            background: var(--bg-input);
+        }
+
+        .runtime-progress-bar {
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--accent-tertiary), var(--accent-primary));
+            transition: width 0.3s ease;
+        }
+
         .core-actions {
             display: flex;
             gap: 0.5rem;

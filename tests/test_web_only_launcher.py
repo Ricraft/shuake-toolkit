@@ -263,6 +263,27 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("applyRuntimeState(runtime, requestId)", frontend)
         self.assertIn("document.addEventListener('visibilitychange'", frontend)
 
+    def test_autovisor_activity_has_backend_and_dashboard_contract(self):
+        project_root = Path(launcher_module.__file__).resolve().parent
+        frontend = (project_root / "web" / "app.js").read_text(encoding="utf-8")
+        page = (project_root / "web" / "现代启动器_UI_预览.html").read_text(
+            encoding="utf-8"
+        )
+        launcher_source = Path(launcher_module.__file__).read_text(encoding="utf-8")
+
+        self.assertIn("'autovisor_activity': autovisor_activity", launcher_source)
+        self.assertIn("function renderAutovisorActivity(activity)", frontend)
+        self.assertIn("renderAutovisorActivity(n.autovisor_activity)", frontend)
+        for element_id in (
+            "autovisor-activity",
+            "autovisor-activity-label",
+            "autovisor-activity-detail",
+            "autovisor-activity-percent",
+            "autovisor-progress-track",
+            "autovisor-progress-bar",
+        ):
+            self.assertIn(f'id="{element_id}"', page)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -170,6 +170,17 @@
                             </div>
                         </div>
 
+                        <div id="autovisor-activity" class="runtime-activity" hidden>
+                            <div class="runtime-activity-header">
+                                <span id="autovisor-activity-label">等待运行信息</span>
+                                <span id="autovisor-activity-percent"></span>
+                            </div>
+                            <div id="autovisor-activity-detail" class="runtime-activity-detail"></div>
+                            <div id="autovisor-progress-track" class="runtime-progress-track" hidden>
+                                <div id="autovisor-progress-bar" class="runtime-progress-bar"></div>
+                            </div>
+                        </div>
+
                         <div class="core-actions">
                             <button id="autovisor-action-btn" class="btn btn-primary flex-1" onclick="handleCoreAction('autovisor')">
                                 <i class="fas fa-power-off"></i> 启动核心

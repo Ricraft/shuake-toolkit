@@ -29,6 +29,7 @@ from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
 from src.question_bank_controller import QuestionBankController
+from src.runtime_activity import summarize_autovisor_activity
 from src.update_controller import UpdateController
 
 try:
@@ -859,6 +860,11 @@ class UnifiedLauncher:
         yatori_version = self._get_yatori_display_version()
         autovisor_version = self._get_autovisor_display_version()
         logs = {name: list(lines) for name, lines in self.log_history.items()}
+        autovisor_activity = summarize_autovisor_activity(
+            logs.get('autovisor'),
+            running=bool(self.running.get('autovisor')),
+            starting=bool(self.starting.get('autovisor')),
+        )
         core_paths = "\n".join(
             [
                 f"Yatori: {self.yatori_path}",
@@ -891,6 +897,7 @@ class UnifiedLauncher:
             'qb_port': self.question_bank.port,
             'qb_stats': self.question_bank.get_stats(),
             'logs': logs,
+            'autovisor_activity': autovisor_activity,
             'shutdown_pending': self._shutdown_pending,
             'autovisor_multi_mode': self._get_autovisor_multi_mode(),
         }
@@ -1507,6 +1514,7 @@ class UnifiedLauncher:
             return True
 
         self.log_system("正在启动 Autovisor...")
+        self.log('autovisor', "正在启动任务...")
         self.log_system(f"Autovisor 目录: {self.autovisor_path}")
         self.log_system(f"Autovisor 入口: {script_name}")
         if is_executable:
