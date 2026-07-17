@@ -37,6 +37,7 @@ from src.preferences_service import PreferencesService
 from src.question_bank_controller import QuestionBankController
 from src.runtime_activity import summarize_autovisor_activity
 from src.update_controller import UpdateController
+from src.web_action_service import WebActionService
 
 try:
     import webview
@@ -1071,91 +1072,15 @@ class UnifiedLauncher:
             return {'ok': False, 'message': f'无法切换核心: {script_type}', 'state': self.get_web_initial_state()}
         return {'ok': True, 'state': self.get_web_initial_state()}
 
-    def _with_web_action_state(self, result):
-        """Attach a fresh runtime snapshot to a structured action result."""
-        if isinstance(result, dict):
-            response = dict(result)
-        else:
-            response = {'ok': bool(result)}
-        response.setdefault('ok', False)
-        response['state'] = self.get_web_initial_state()
-        return response
+    def _get_web_action_service(self):
+        service = getattr(self, '_web_action_service', None)
+        if service is None:
+            service = WebActionService(self)
+            self._web_action_service = service
+        return service
 
     def perform_web_action(self, action, script_type=None):
-        try:
-            if action == 'start':
-                if not self.start_script(script_type):
-                    message = getattr(self, '_last_start_error', {}).get(
-                        script_type,
-                        f'未知核心类型: {script_type}',
-                    )
-                    return {'ok': False, 'message': message, 'state': self.get_web_initial_state()}
-            elif action == 'stop':
-                if not self.stop_script(script_type):
-                    return {'ok': False, 'message': f'未知核心类型: {script_type}'}
-            elif action == 'start_all':
-                return self._with_web_action_state(self.start_all())
-            elif action == 'stop_all':
-                return self._with_web_action_state(self.stop_all())
-            elif action == 'open_config_dir':
-                return self._with_web_action_state(self.open_config_dir(script_type))
-            elif action == 'open_config_generator':
-                return self._with_web_action_state(self.open_config_generator())
-            elif action == 'show_settings_dir':
-                return self._with_web_action_state(
-                    self.open_config_dir(script_type or 'yatori')
-                )
-            elif action == 'show_update_dialog':
-                if not self.show_update_dialog():
-                    return {'ok': False, 'message': '无法检查或安装 Yatori 更新'}
-            elif action == 'check_autovisor_update':
-                if not self.check_autovisor_update_async():
-                    return {'ok': False, 'message': 'Autovisor 更新检查未能启动，请稍后重试'}
-            elif action == 'install_autovisor_update':
-                if not self.install_autovisor_update_async():
-                    return {'ok': False, 'message': '暂无可安装的 Autovisor 更新'}
-            elif action == 'clear_logs':
-                self.clear_all_logs()
-            elif action == 'exit':
-                self.on_closing()
-            elif action == 'exit_app':
-                # 使用线程异步执行退出，避免阻塞JS调用
-                import threading
-                def do_exit():
-                    try:
-                        self.on_closing(confirmed=True)
-                    except Exception as exc:
-                        self.log_system(f"退出应用失败: {exc}")
-                threading.Thread(target=do_exit, daemon=True).start()
-            elif action == 'toggle_question_bank':
-                was_running = bool(self.question_bank.running)
-                result = self.toggle_question_bank()
-                if not was_running and not result:
-                    return {'ok': False, 'message': '题库服务器启动失败，请查看系统日志'}
-            elif action == 'start_question_bank':
-                if not self.start_question_bank():
-                    return {'ok': False, 'message': '题库服务器启动失败，请查看系统日志'}
-            elif action == 'stop_question_bank':
-                self.stop_question_bank()
-            elif action == 'clear_question_bank':
-                return self._with_web_action_state(self._clear_question_bank())
-            elif action == 'export_question_bank':
-                return self._with_web_action_state(self._export_question_bank())
-            elif action == 'import_question_bank':
-                return self._with_web_action_state(self._import_question_bank())
-            elif action == 'deduplicate_question_bank':
-                ok, msg = self._deduplicate_question_bank()
-                result = {'ok': ok, 'message': msg}
-                if ok:
-                    result.update({'toast': msg, 'toastType': 'success'})
-                return self._with_web_action_state(result)
-            else:
-                return {'ok': False, 'message': f'未知操作: {action}'}
-        except Exception as exc:
-            self._show_error("操作失败", str(exc))
-            return {'ok': False, 'message': str(exc)}
-
-        return {'ok': True, 'state': self.get_web_initial_state()}
+        return self._get_web_action_service().perform(action, script_type)
 
     # ========== WebView-only runtime methods ==========
 
