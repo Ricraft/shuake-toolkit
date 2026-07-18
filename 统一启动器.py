@@ -31,6 +31,7 @@ from src.preferences_service import PreferencesService
 from src.python_runtime import find_python_executable
 from src.question_bank_controller import QuestionBankController
 from src.runtime_activity import summarize_autovisor_activity
+from src.runtime_process_service import RuntimeProcessService
 from src.update_controller import UpdateController
 from src.web_action_service import WebActionService
 
@@ -198,6 +199,13 @@ class UnifiedLauncher:
             )
             self._process_supervisor = supervisor
         return supervisor
+
+    def _get_runtime_process_service(self):
+        service = getattr(self, '_runtime_process_service', None)
+        if service is None:
+            service = RuntimeProcessService(self)
+            self._runtime_process_service = service
+        return service
 
     def _build_encoding_candidates(self, *preferred):
         return self._get_process_supervisor().build_encoding_candidates(*preferred)
@@ -1173,61 +1181,67 @@ class UnifiedLauncher:
 
         self.log_system("正在启动 Yatori...")
         self.log_system(f"Yatori 入口: {entry_path}")
-
-        def run_yatori():
-            try:
-                if self.stop_requested.get('yatori'):
-                    self.log_system("Yatori 启动已取消")
-                    self._mark_runtime_stopped('yatori')
-                    return
-                # Windows 下创建新进程组，方便后续终止子进程
-                creationflags, startupinfo = self._get_subprocess_window_kwargs()
-
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    cwd=self.yatori_path,
-                    text=False,
-                    creationflags=creationflags,
-                    startupinfo=startupinfo
-                )
-
-                self._mark_runtime_running('yatori', process)
-                if self.stop_requested.get('yatori'):
-                    self._terminate_process_tree(process, "Yatori")
-
-                yatori_encodings = self._build_encoding_candidates(
-                    'utf-8-sig', 'utf-8', 'gb18030', 'gbk', 'cp936'
-                )
-                self._stream_process_output(process, 'yatori', yatori_encodings)
-
-                # 进程结束
-                return_code = process.wait()
-                was_requested = self.stop_requested.get('yatori', False)
-                self._mark_runtime_stopped('yatori', process)
-                if return_code:
-                    self.log_system(f"Yatori 已退出，返回码: {return_code}")
-                else:
-                    self.log_system("Yatori 已停止")
-                self._handle_runtime_exit('yatori', return_code, was_requested)
-
-            except Exception as e:
-                self.log_system(f"Yatori 启动失败: {str(e)}")
-                self._mark_runtime_stopped('yatori')
-                self._notify_runtime_event("Yatori 启动失败", str(e), error=True)
-
-        # 在后台线程运行
-        thread = threading.Thread(target=run_yatori, daemon=True)
-        try:
-            thread.start()
-        except Exception:
-            self._mark_runtime_stopped('yatori')
-            raise
-        return True
+        return self._get_runtime_process_service().start(
+            core='yatori',
+            label='Yatori',
+            command=cmd,
+            cwd=self.yatori_path,
+            encodings=self._build_encoding_candidates(
+                'utf-8-sig', 'utf-8', 'gb18030', 'gbk', 'cp936'
+            ),
+        )
 
     def get_python_executable(self):
         return find_python_executable()
+
+    def _prepare_autovisor_question_bank(self):
+        """Start and briefly probe the local question-bank service."""
+        import socket
+        import time
+
+        if not self.question_bank.running:
+            self.log_system("[Autovisor] 正在启动题库服务器...")
+            self.start_question_bank(silent=True)
+            for _ in range(30):
+                if self.stop_requested.get('autovisor'):
+                    return
+                time.sleep(0.1)
+        else:
+            self.log_system("[Autovisor] 题库服务器已在运行")
+
+        port = self.question_bank.port
+        result = None
+        for attempt in range(3):
+            if self.stop_requested.get('autovisor'):
+                return
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2)
+                result = sock.connect_ex(('127.0.0.1', port))
+            if result == 0:
+                self.log_system(
+                    f"[Autovisor] 题库服务器验证成功 (尝试 {attempt + 1})"
+                )
+                return
+            self.log_system(
+                f"[Autovisor] 端口验证失败 (尝试 {attempt + 1}/3)，等待2秒..."
+            )
+            for _ in range(20):
+                if self.stop_requested.get('autovisor'):
+                    return
+                time.sleep(0.1)
+        self.log_system(
+            f"[Autovisor] 警告: 题库服务器验证失败，错误码 {result}，继续启动..."
+        )
+
+    def _build_autovisor_runtime_env(self):
+        env = os.environ.copy()
+        qb_url = self.get_question_bank_url()
+        if qb_url:
+            env["QB_URL"] = qb_url
+            self.log_system(f"[Autovisor] 设置题库URL: {qb_url}")
+        else:
+            self.log_system("[Autovisor] 警告: 题库服务器未启动，使用默认URL")
+        return env
 
     def start_autovisor(self):
         """启动 Autovisor"""
@@ -1309,98 +1323,18 @@ class UnifiedLauncher:
         elif not exact_match:
             expected_name = 'Autovisor_Multi.py' if multi_mode else 'Autovisor.py'
             self.log_system(f"警告: 未找到请求入口 {expected_name}，已回落到 {script_name}")
-
-        def run_autovisor():
-            try:
-                # 确保题库服务器已启动
-                import time
-                if not self.question_bank.running:
-                    self.log_system("[Autovisor] 正在启动题库服务器...")
-                    self.start_question_bank(silent=True)
-                    time.sleep(3)  # 等待服务器完全启动
-                else:
-                    self.log_system("[Autovisor] 题库服务器已在运行")
-                
-                # 确保服务器可用
-                import socket
-                port = self.question_bank.port
-                for attempt in range(3):
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(2)
-                    result = sock.connect_ex(('127.0.0.1', port))
-                    sock.close()
-                    if result == 0:
-                        self.log_system(f"[Autovisor] 题库服务器验证成功 (尝试 {attempt+1})")
-                        break
-                    self.log_system(f"[Autovisor] 端口验证失败 (尝试 {attempt+1}/3)，等待2秒...")
-                    time.sleep(2)
-                else:
-                    self.log_system(f"[Autovisor] 警告: 题库服务器验证失败，错误码 {result}，继续启动...")
-
-                if self.stop_requested.get('autovisor'):
-                    self.log_system("Autovisor 启动已取消")
-                    self._mark_runtime_stopped('autovisor')
-                    return
-                
-                if is_executable:
-                    cmd = [script_path]
-                else:
-                    # 使用 Python 运行（使用检测到的 Python 路径）
-                    cmd = [python_exe, script_path]
-
-                # Windows 下创建新进程组，方便后续终止子进程
-                creationflags, startupinfo = self._get_subprocess_window_kwargs()
-
-                env = os.environ.copy()
-                qb_url = self.get_question_bank_url()
-                if qb_url:
-                    env["QB_URL"] = qb_url
-                    self.log_system(f"[Autovisor] 设置题库URL: {qb_url}")
-                else:
-                    self.log_system("[Autovisor] 警告: 题库服务器未启动，使用默认URL")
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    cwd=self.autovisor_path,
-                    env=env,
-                    text=False,
-                    creationflags=creationflags,
-                    startupinfo=startupinfo
-                )
-
-                self._mark_runtime_running('autovisor', process)
-                if self.stop_requested.get('autovisor'):
-                    self._terminate_process_tree(process, "Autovisor")
-
-                autovisor_encodings = self._build_encoding_candidates(
-                    locale.getpreferredencoding(False), 'utf-8', 'gb18030', 'gbk'
-                )
-                self._stream_process_output(process, 'autovisor', autovisor_encodings)
-
-                # 进程结束
-                return_code = process.wait()
-                was_requested = self.stop_requested.get('autovisor', False)
-                self._mark_runtime_stopped('autovisor', process)
-                if return_code:
-                    self.log_system(f"Autovisor 已退出，返回码: {return_code}")
-                else:
-                    self.log_system("Autovisor 已停止")
-                self._handle_runtime_exit('autovisor', return_code, was_requested)
-
-            except Exception as e:
-                self.log_system(f"Autovisor 启动失败: {str(e)}")
-                self._mark_runtime_stopped('autovisor')
-                self._notify_runtime_event("Autovisor 启动失败", str(e), error=True)
-
-        # 在后台线程运行
-        thread = threading.Thread(target=run_autovisor, daemon=True)
-        try:
-            thread.start()
-        except Exception:
-            self._mark_runtime_stopped('autovisor')
-            raise
-        return True
+        command = [script_path] if is_executable else [python_exe, script_path]
+        return self._get_runtime_process_service().start(
+            core='autovisor',
+            label='Autovisor',
+            command=command,
+            cwd=self.autovisor_path,
+            encodings=self._build_encoding_candidates(
+                locale.getpreferredencoding(False), 'utf-8', 'gb18030', 'gbk'
+            ),
+            before_launch=self._prepare_autovisor_question_bank,
+            env_factory=self._build_autovisor_runtime_env,
+        )
 
     def stop_script(self, script_type):
         """停止指定脚本"""
