@@ -475,11 +475,13 @@ class UnifiedLauncher:
         self.starting = {
             'yatori': False,
             'autovisor': False,
+            'practice': False,
         }
         self._runtime_lock = threading.RLock()
         self.stop_requested = {
             'yatori': False,
             'autovisor': False,
+            'practice': False,
         }
         self._last_start_error = {}
 
@@ -1387,12 +1389,16 @@ class UnifiedLauncher:
 
     def stop_practice_mode(self):
         """Stop the optional practice process and its browser children."""
+        if self.starting.get('practice') and not self.processes.get('practice'):
+            self.stop_requested['practice'] = True
+            self.log_system("正在取消刷题模式启动...")
+            return
         process = self.processes.get('practice')
         if process and process.poll() is None:
             self.log_system("正在停止刷题模式...")
+            self.stop_requested['practice'] = True
             self._terminate_process_tree(process, "刷题模式")
-        self.processes['practice'] = None
-        self.running['practice'] = False
+        self._mark_runtime_stopped('practice', process)
 
 
     # ============================================================
@@ -1442,8 +1448,8 @@ class UnifiedLauncher:
         existing = self.processes.get('practice')
         if existing and existing.poll() is None:
             return {'ok': False, 'message': '刷题模式已经在运行中'}
-        self.processes['practice'] = None
-        self.running['practice'] = False
+        if existing:
+            self._mark_runtime_stopped('practice', existing)
 
         script_path = os.path.join(self.autovisor_path, "Practice_Mode.py")
         if not os.path.exists(script_path):
@@ -1454,13 +1460,16 @@ class UnifiedLauncher:
         if not python_exe:
             return {'ok': False, 'message': '未找到 Python 解释器'}
 
-        if not self.question_bank.running:
-            self.log_system("[刷题模式] 正在启动题库服务器...")
-            self.start_question_bank(silent=True)
+        if not self._claim_runtime_start('practice'):
+            return {'ok': False, 'message': '刷题模式已经在运行或启动中'}
 
-        self.log_system("[刷题模式] 正在启动刷题模式...")
-
+        process = None
         try:
+            if not self.question_bank.running:
+                self.log_system("[刷题模式] 正在启动题库服务器...")
+                self.start_question_bank(silent=True)
+
+            self.log_system("[刷题模式] 正在启动刷题模式...")
             creationflags, startupinfo = self._get_subprocess_window_kwargs()
             env = os.environ.copy()
             env['PYTHONUNBUFFERED'] = '1'
@@ -1477,29 +1486,30 @@ class UnifiedLauncher:
                 env=env,
             )
 
-            self.processes['practice'] = process
-            self.running['practice'] = True
+            self._mark_runtime_running('practice', process)
 
             practice_encodings = self._build_encoding_candidates(
                 locale.getpreferredencoding(False), 'utf-8', 'gb18030', 'gbk'
             )
-
-            def stream_and_wait():
-                try:
-                    self._stream_process_output(process, 'autovisor', practice_encodings)
-                    process.wait()
-                finally:
-                    if self.processes.get('practice') is process:
-                        self.processes['practice'] = None
-                    self.running['practice'] = False
-                    self.log_system("[刷题模式] 已退出")
-
-            thread = threading.Thread(target=stream_and_wait, daemon=True)
-            thread.start()
+            self._get_runtime_process_service().monitor(
+                core='practice',
+                label='刷题模式',
+                process=process,
+                encodings=practice_encodings,
+                output_source='autovisor',
+                exit_message='[刷题模式] 已退出',
+            )
 
             self.log_system("[刷题模式] 刷题模式已启动，请在打开的浏览器中操作")
             return {'ok': True, 'message': '刷题模式已启动，系统将自动登录并导航到课程页，请手动点击测验'}
         except Exception as e:
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        self._terminate_process_tree(process, "刷题模式")
+                except Exception as cleanup_error:
+                    self.log_system(f"[刷题模式] 异常清理失败: {cleanup_error}")
+            self._mark_runtime_stopped('practice', process)
             self.log_system(f"[刷题模式] 启动失败: {e}")
             return {'ok': False, 'message': f'启动刷题模式失败: {e}'}
 

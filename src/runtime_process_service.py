@@ -98,6 +98,50 @@ class RuntimeProcessService:
             raise
         return True
 
+    def monitor(
+        self,
+        *,
+        core: str,
+        label: str,
+        process,
+        encodings: Iterable[str],
+        output_source: str | None = None,
+        exit_message: str | None = None,
+    ) -> bool:
+        """Monitor a synchronously-created process in a daemon thread."""
+        encodings = tuple(encodings)
+
+        def worker() -> None:
+            try:
+                self.launcher._stream_process_output(
+                    process,
+                    output_source or core,
+                    encodings,
+                )
+                process.wait()
+                self.launcher._mark_runtime_stopped(core, process)
+                self.launcher.log_system(
+                    exit_message or f"{label} 已退出"
+                )
+            except Exception as exc:
+                self._cleanup_failed_process(process, label)
+                self.launcher._mark_runtime_stopped(core, process)
+                self.launcher.log_system(f"{label} 运行失败: {exc}")
+                self.launcher._notify_runtime_event(
+                    f"{label} 运行失败",
+                    str(exc),
+                    error=True,
+                )
+
+        try:
+            thread = self.thread_factory(target=worker, daemon=True)
+            thread.start()
+        except Exception:
+            self._cleanup_failed_process(process, label)
+            self.launcher._mark_runtime_stopped(core, process)
+            raise
+        return True
+
     def _cancelled(self, core: str, label: str) -> bool:
         if not self.launcher.stop_requested.get(core):
             return False

@@ -215,6 +215,47 @@ class RuntimeProcessServiceTests(unittest.TestCase):
 
         self.assertEqual(launcher.stopped, [("core", None)])
 
+    def test_monitor_uses_requested_output_channel_and_clears_state(self):
+        launcher = FakeLauncher()
+        process = FakeProcess(return_code=3)
+
+        result = self.make_service(
+            launcher,
+            lambda *_args, **_kwargs: None,
+        ).monitor(
+            core="practice",
+            label="刷题模式",
+            process=process,
+            encodings=["utf-8"],
+            output_source="autovisor",
+            exit_message="[刷题模式] 已退出",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(launcher.streamed[1], "autovisor")
+        self.assertEqual(launcher.stopped, [("practice", process)])
+        self.assertIn("[刷题模式] 已退出", launcher.logs)
+
+    def test_monitor_thread_failure_terminates_process_and_clears_state(self):
+        launcher = FakeLauncher()
+        process = FakeProcess()
+        service = self.make_service(
+            launcher,
+            lambda *_args, **_kwargs: None,
+            thread_factory=BrokenThread,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "thread unavailable"):
+            service.monitor(
+                core="practice",
+                label="刷题模式",
+                process=process,
+                encodings=["utf-8"],
+            )
+
+        self.assertEqual(launcher.terminated, [(process, "刷题模式")])
+        self.assertEqual(launcher.stopped, [("practice", process)])
+
 
 if __name__ == "__main__":
     unittest.main()

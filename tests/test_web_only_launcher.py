@@ -148,6 +148,94 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertIn("config.yaml", launcher._last_start_error["yatori"])
 
+    def test_practice_mode_uses_shared_monitor_and_tracks_runtime_state(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.processes = {"yatori": None, "autovisor": None, "practice": None}
+        launcher.running = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.starting = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.stop_requested = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.question_bank = SimpleNamespace(running=True)
+        launcher.log_system = lambda _message: None
+        launcher.get_python_executable = lambda: "python.exe"
+        launcher._get_subprocess_window_kwargs = lambda: (0, None)
+        launcher._build_encoding_candidates = lambda *_values: ("utf-8",)
+        monitor_calls = []
+        launcher._get_runtime_process_service = lambda: SimpleNamespace(
+            monitor=lambda **kwargs: monitor_calls.append(kwargs) or True
+        )
+        process = SimpleNamespace(poll=lambda: None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launcher.autovisor_path = temp_dir
+            Path(temp_dir, "Practice_Mode.py").write_text(
+                "# fixture",
+                encoding="utf-8",
+            )
+            with patch.object(launcher_module.subprocess, "Popen", return_value=process):
+                result = launcher.start_practice_mode_from_web()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(launcher.running["practice"])
+        self.assertIs(launcher.processes["practice"], process)
+        self.assertEqual(monitor_calls[0]["core"], "practice")
+        self.assertEqual(monitor_calls[0]["output_source"], "autovisor")
+
+    def test_practice_mode_process_failure_releases_atomic_start_claim(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.processes = {"yatori": None, "autovisor": None, "practice": None}
+        launcher.running = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.starting = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.stop_requested = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.question_bank = SimpleNamespace(running=True)
+        launcher.log_system = lambda _message: None
+        launcher.get_python_executable = lambda: "python.exe"
+        launcher._get_subprocess_window_kwargs = lambda: (0, None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launcher.autovisor_path = temp_dir
+            Path(temp_dir, "Practice_Mode.py").write_text(
+                "# fixture",
+                encoding="utf-8",
+            )
+            with patch.object(
+                launcher_module.subprocess,
+                "Popen",
+                side_effect=OSError("cannot spawn"),
+            ):
+                result = launcher.start_practice_mode_from_web()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("cannot spawn", result["message"])
+        self.assertFalse(launcher.starting["practice"])
+        self.assertFalse(launcher.running["practice"])
+        self.assertIsNone(launcher.processes["practice"])
+
+    def test_practice_mode_question_bank_failure_releases_start_claim(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.processes = {"yatori": None, "autovisor": None, "practice": None}
+        launcher.running = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.starting = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.stop_requested = {"yatori": False, "autovisor": False, "practice": False}
+        launcher.question_bank = SimpleNamespace(running=False)
+        launcher.log_system = lambda _message: None
+        launcher.get_python_executable = lambda: "python.exe"
+        launcher.start_question_bank = lambda **_kwargs: (_ for _ in ()).throw(
+            OSError("question bank failed")
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launcher.autovisor_path = temp_dir
+            Path(temp_dir, "Practice_Mode.py").write_text(
+                "# fixture",
+                encoding="utf-8",
+            )
+            result = launcher.start_practice_mode_from_web()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("question bank failed", result["message"])
+        self.assertFalse(launcher.starting["practice"])
+        self.assertFalse(launcher.running["practice"])
+
     def test_question_bank_start_failure_is_visible_to_web(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.question_bank = SimpleNamespace(running=False)
