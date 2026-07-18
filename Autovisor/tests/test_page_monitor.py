@@ -106,6 +106,31 @@ def test_smart_click_text_uses_exact_locator_fallback():
     assert target.clicked is True
 
 
+def test_smart_click_text_keeps_fallback_error_detail():
+    class Page:
+        async def evaluate(self, _script):
+            return False
+
+        def get_by_text(self, _text, *, exact):
+            assert exact is True
+            raise RuntimeError("locator contract changed")
+
+    log = _Logger()
+    result = asyncio.run(
+        page_monitor.smart_click_text(
+            Page(),
+            "目标",
+            logger_instance=log,
+        )
+    )
+
+    assert result is False
+    assert any(
+        level == "debug" and "locator contract changed" in message
+        for level, message in log.messages
+    )
+
+
 def test_trigger_restart_sets_event_and_closes_context_once():
     class Context:
         def __init__(self):
@@ -137,6 +162,65 @@ def test_trigger_restart_sets_event_and_closes_context_once():
 
     assert event.is_set()
     assert context.close_calls == 1
+
+
+def test_trigger_restart_reports_context_close_failure():
+    class Context:
+        async def close(self):
+            raise RuntimeError("close failed")
+
+    log = _Logger()
+    asyncio.run(
+        page_monitor.trigger_restart(
+            SimpleNamespace(context=Context()),
+            "worker",
+            logger_instance=log,
+        )
+    )
+
+    assert any(
+        level == "warn" and "关闭旧浏览器上下文失败" in message
+        for level, message in log.messages
+    )
+
+
+def test_status_stream_limits_unknown_probe_errors_and_stops_on_close(monkeypatch):
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(page_monitor.asyncio, "sleep", no_sleep)
+
+    class Page:
+        def __init__(self):
+            self.calls = 0
+
+        async def wait_for_load_state(self, _state):
+            return None
+
+        async def evaluate(self, _script):
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError("probe changed")
+            raise TargetClosedError("page closed")
+
+    log = _Logger()
+    asyncio.run(
+        page_monitor.status_ocr_stream(
+            Page(),
+            "worker",
+            interval_sec=0,
+            logger_instance=log,
+        )
+    )
+
+    warnings = [
+        message
+        for level, message in log.messages
+        if level == "warn" and "页面状态探测失败" in message
+    ]
+    assert len(warnings) == 1
+    assert "RuntimeError: probe changed" in warnings[0]
+    assert any("status stream offline" in message for _, message in log.messages)
 
 
 def test_wait_for_verify_restores_hidden_window_and_stops_on_close(monkeypatch):
@@ -188,3 +272,41 @@ def test_wait_for_verify_restores_hidden_window_and_stops_on_close(monkeypatch):
     ]
     assert "hide" in calls
     assert any("安全验证模块已下线" in message for _, message in log.messages)
+
+
+def test_wait_for_verify_limits_unknown_monitor_errors(monkeypatch):
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(page_monitor.asyncio, "sleep", no_sleep)
+
+    class Page:
+        def __init__(self):
+            self.calls = 0
+
+        async def wait_for_load_state(self, _state):
+            return None
+
+        async def wait_for_selector(self, *_args, **_kwargs):
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError("verification selector changed")
+            raise TargetClosedError("page closed")
+
+    log = _Logger()
+    asyncio.run(
+        page_monitor.wait_for_verify(
+            Page(),
+            SimpleNamespace(enableHideWindow=False),
+            asyncio.Event(),
+            logger_instance=log,
+        )
+    )
+
+    warnings = [
+        message
+        for level, message in log.messages
+        if level == "warn" and "安全验证监控异常" in message
+    ]
+    assert len(warnings) == 1
+    assert "verification selector changed" in warnings[0]

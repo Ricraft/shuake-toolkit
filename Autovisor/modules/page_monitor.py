@@ -7,8 +7,9 @@ import asyncio
 import json
 
 from playwright._impl._errors import TargetClosedError
-from playwright.async_api import Page
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from modules.diagnostics import RateLimitedDiagnostics
 from modules.logger import Logger
 from modules.utils import display_window, hide_window
 
@@ -71,8 +72,8 @@ async def smart_click_text(
             return True
     except TargetClosedError:
         return False
-    except Exception:
-        pass
+    except Exception as exc:
+        active_logger.debug("精确文本回退失败: %s" % str(exc)[:80])
 
     active_logger.warn("[FAIL] 点击失败: %s" % expected)
     return False
@@ -138,8 +139,10 @@ async def trigger_restart(
     restart_event: asyncio.Event | None = None,
     *,
     logger_instance=None,
+    diagnostics=None,
 ) -> None:
     active_logger = logger_instance or logger
+    active_diagnostics = diagnostics or RateLimitedDiagnostics(active_logger)
     if restart_event is not None and restart_event.is_set():
         return
     if restart_event is not None:
@@ -150,8 +153,14 @@ async def trigger_restart(
     )
     try:
         await page.context.close()
-    except Exception:
-        pass
+    except TargetClosedError:
+        return
+    except Exception as exc:
+        active_diagnostics.warn(
+            "restart-context-close",
+            f"[{worker_name}] 关闭旧浏览器上下文失败",
+            exc,
+        )
 
 
 async def status_ocr_stream(
@@ -161,8 +170,10 @@ async def status_ocr_stream(
     restart_event: asyncio.Event | None = None,
     *,
     logger_instance=None,
+    diagnostics=None,
 ) -> None:
     active_logger = logger_instance or logger
+    active_diagnostics = diagnostics or RateLimitedDiagnostics(active_logger)
     await page.wait_for_load_state("domcontentloaded")
     while True:
         try:
@@ -195,8 +206,14 @@ async def status_ocr_stream(
         except TargetClosedError:
             active_logger.write_log(f"{worker_name} status stream offline.\n")
             return
-        except Exception:
+        except PlaywrightTimeoutError:
             continue
+        except Exception as exc:
+            active_diagnostics.warn(
+                "status-probe",
+                f"[{worker_name}/OCR] 页面状态探测失败",
+                exc,
+            )
 
 
 async def wait_for_verify(
@@ -205,8 +222,10 @@ async def wait_for_verify(
     event_loop,
     *,
     logger_instance=None,
+    diagnostics=None,
 ) -> None:
     active_logger = logger_instance or logger
+    active_diagnostics = diagnostics or RateLimitedDiagnostics(active_logger)
     await page.wait_for_load_state("domcontentloaded")
     while True:
         try:
@@ -232,5 +251,11 @@ async def wait_for_verify(
         except TargetClosedError:
             active_logger.write_log("浏览器已关闭,安全验证模块已下线.\n")
             return
-        except Exception:
+        except PlaywrightTimeoutError:
             continue
+        except Exception as exc:
+            active_diagnostics.warn(
+                "security-verification-monitor",
+                "安全验证监控异常",
+                exc,
+            )
