@@ -259,6 +259,37 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertFalse(launcher.running["practice"])
         self.assertIsNone(launcher.practice_account_id)
 
+    def test_practice_mode_rejects_unsuccessful_question_bank_start(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.processes = {"practice": None}
+        launcher.running = {"practice": False}
+        launcher.starting = {"practice": False}
+        launcher.stop_requested = {"practice": False}
+        launcher.question_bank = SimpleNamespace(running=False)
+        launcher.log_system = lambda _message: None
+        launcher.get_python_executable = lambda: "python.exe"
+        launcher._load_autovisor_config_data = lambda: {
+            "accounts": [{"account_id": 1}]
+        }
+        launcher._as_int = lambda value, default=0: int(value or default)
+        launcher.start_question_bank = lambda **_kwargs: False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launcher.autovisor_path = temp_dir
+            Path(temp_dir, "Practice_Mode.py").write_text(
+                "# fixture",
+                encoding="utf-8",
+            )
+            with patch.object(launcher_module.subprocess, "Popen") as popen:
+                result = launcher.start_practice_mode_from_web()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("题库服务器启动失败", result["message"])
+        popen.assert_not_called()
+        self.assertFalse(launcher.starting["practice"])
+        self.assertFalse(launcher.running["practice"])
+        self.assertIsNone(launcher.practice_account_id)
+
     def test_practice_mode_rejects_stale_account_index_before_claiming_start(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.processes = {"practice": None}

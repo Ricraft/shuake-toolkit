@@ -28,6 +28,7 @@ from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
 from src.preferences_service import PreferencesService
+from src.practice_mode_service import PracticeModeService
 from src.python_runtime import find_python_executable
 from src.question_bank_controller import QuestionBankController
 from src.runtime_activity import summarize_autovisor_activity
@@ -205,6 +206,13 @@ class UnifiedLauncher:
         if service is None:
             service = RuntimeProcessService(self)
             self._runtime_process_service = service
+        return service
+
+    def _get_practice_mode_service(self):
+        service = getattr(self, '_practice_mode_service', None)
+        if service is None:
+            service = PracticeModeService(self)
+            self._practice_mode_service = service
         return service
 
     def _build_encoding_candidates(self, *preferred):
@@ -1393,27 +1401,10 @@ class UnifiedLauncher:
             self.log_system("Autovisor 已关闭刷课。")
 
     def stop_practice_mode(self):
-        """Stop the optional practice process and its browser children."""
-        if self.starting.get('practice') and not self.processes.get('practice'):
-            self.stop_requested['practice'] = True
-            self.log_system("正在取消刷题模式启动...")
-            return
-        process = self.processes.get('practice')
-        if process and process.poll() is None:
-            self.log_system("正在停止刷题模式...")
-            self.stop_requested['practice'] = True
-            self._terminate_process_tree(process, "刷题模式")
-        self._mark_runtime_stopped('practice', process)
+        return self._get_practice_mode_service().stop()
 
     def stop_practice_mode_from_web(self):
-        """Stop practice mode from its account-card action."""
-        if not (
-            self.running.get('practice')
-            or self.starting.get('practice')
-        ):
-            return {'ok': False, 'message': '刷题模式当前未运行'}
-        self.stop_practice_mode()
-        return {'ok': True, 'message': '已请求停止刷题模式'}
+        return self._get_practice_mode_service().stop_from_web()
 
 
     # ============================================================
@@ -1459,94 +1450,7 @@ class UnifiedLauncher:
         return self._get_course_api_service().get_xuexitong_courses(account_index)
 
     def start_practice_mode_from_web(self, account_index=0):
-        """启动刷题模式 - 运行 Practice_Mode.py，日志接入 Autovisor 面板"""
-        existing = self.processes.get('practice')
-        if existing and existing.poll() is None:
-            return {'ok': False, 'message': '刷题模式已经在运行中'}
-        if existing:
-            self._mark_runtime_stopped('practice', existing)
-
-        script_path = os.path.join(self.autovisor_path, "Practice_Mode.py")
-        if not os.path.exists(script_path):
-            self.log_system(f"[刷题模式] 未找到 {script_path}")
-            return {'ok': False, 'message': f'未找到刷题模式入口: Autovisor/Practice_Mode.py'}
-
-        python_exe = self.get_python_executable()
-        if not python_exe:
-            return {'ok': False, 'message': '未找到 Python 解释器'}
-
-        try:
-            account_index = int(account_index)
-        except (TypeError, ValueError):
-            return {'ok': False, 'message': '刷题模式账号序号无效'}
-        accounts = self._load_autovisor_config_data().get('accounts', [])
-        if account_index < 0 or account_index >= len(accounts):
-            return {'ok': False, 'message': '刷题模式账号不存在，请刷新配置后重试'}
-        account_id = self._as_int(
-            accounts[account_index].get('account_id'),
-            account_index + 1,
-        )
-        if account_id < 1:
-            return {'ok': False, 'message': '刷题模式账号编号无效'}
-
-        if not self._claim_runtime_start('practice'):
-            return {'ok': False, 'message': '刷题模式已经在运行或启动中'}
-        self.practice_account_id = account_id
-
-        process = None
-        try:
-            if not self.question_bank.running:
-                self.log_system("[刷题模式] 正在启动题库服务器...")
-                self.start_question_bank(silent=True)
-
-            if self.stop_requested.get('practice'):
-                self.log_system("[刷题模式] 启动已取消")
-                self._mark_runtime_stopped('practice')
-                return {'ok': False, 'message': '刷题模式启动已取消'}
-
-            self.log_system("[刷题模式] 正在启动刷题模式...")
-            creationflags, startupinfo = self._get_subprocess_window_kwargs()
-            env = os.environ.copy()
-            env['PYTHONUNBUFFERED'] = '1'
-            env['PYTHONIOENCODING'] = 'utf-8'
-
-            process = subprocess.Popen(
-                [python_exe, script_path, '--account-id', str(account_id)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                cwd=self.autovisor_path,
-                text=False,
-                creationflags=creationflags,
-                startupinfo=startupinfo,
-                env=env,
-            )
-
-            self._mark_runtime_running('practice', process)
-
-            practice_encodings = self._build_encoding_candidates(
-                locale.getpreferredencoding(False), 'utf-8', 'gb18030', 'gbk'
-            )
-            self._get_runtime_process_service().monitor(
-                core='practice',
-                label='刷题模式',
-                process=process,
-                encodings=practice_encodings,
-                output_source='autovisor',
-                exit_message='[刷题模式] 已退出',
-            )
-
-            self.log_system("[刷题模式] 刷题模式已启动，请在打开的浏览器中操作")
-            return {'ok': True, 'message': '刷题模式已启动，系统将自动登录并导航到课程页，请手动点击测验'}
-        except Exception as e:
-            if process is not None:
-                try:
-                    if process.poll() is None:
-                        self._terminate_process_tree(process, "刷题模式")
-                except Exception as cleanup_error:
-                    self.log_system(f"[刷题模式] 异常清理失败: {cleanup_error}")
-            self._mark_runtime_stopped('practice', process)
-            self.log_system(f"[刷题模式] 启动失败: {e}")
-            return {'ok': False, 'message': f'启动刷题模式失败: {e}'}
+        return self._get_practice_mode_service().start(account_index)
 
     def auto_start_question_bank(self):
         return self.question_bank.auto_start_if_enabled()
