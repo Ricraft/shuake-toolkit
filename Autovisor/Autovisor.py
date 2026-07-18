@@ -39,6 +39,7 @@ def _ensure_simplejson_compat():
 _ensure_simplejson_compat()
 
 from modules.logger import Logger
+from modules.diagnostics import RateLimitedDiagnostics
 from modules.configs import Config
 from modules.course_queue import run_course_queue
 from modules.course_portal import is_login_url
@@ -113,7 +114,7 @@ async def auto_login(context: BrowserContext, page: Page, modules=None):
     )
 
 
-async def close_popup(page: Page, logger_instance=None):
+async def close_popup(page: Page, logger_instance=None, diagnostics=None):
     """关闭课程弹窗（学前必读等），支持 iframe 内弹窗"""
     await page.wait_for_timeout(500)
     
@@ -151,6 +152,8 @@ async def close_popup(page: Page, logger_instance=None):
                                 logger_instance.info(f"已关闭弹窗 ({context_name}, 选择器: {selector})")
                             await page.wait_for_timeout(500)
                             return True
+                    except TargetClosedError:
+                        raise
                     except Exception:
                         try:
                             await close_btn.click(timeout=2000, force=True)
@@ -159,9 +162,29 @@ async def close_popup(page: Page, logger_instance=None):
                                 logger_instance.info(f"已关闭弹窗 (强制点击, {context_name}, {selector})")
                             await page.wait_for_timeout(500)
                             return True
-                        except Exception:
+                        except TargetClosedError:
+                            raise
+                        except TimeoutError:
                             continue
-            except Exception:
+                        except Exception as error:
+                            if diagnostics:
+                                diagnostics.warn(
+                                    "popup-force-click",
+                                    "关闭课程弹窗失败",
+                                    error,
+                                )
+                            continue
+            except TargetClosedError:
+                raise
+            except TimeoutError:
+                continue
+            except Exception as error:
+                if diagnostics:
+                    diagnostics.warn(
+                        "popup-selector",
+                        "扫描课程弹窗失败",
+                        error,
+                    )
                 continue
         
         try:
@@ -175,8 +198,17 @@ async def close_popup(page: Page, logger_instance=None):
                         logger_instance.info(f"已关闭弹窗 ({context_name}, dialog-read 容器内)")
                     await page.wait_for_timeout(500)
                     return True
-        except Exception:
+        except TargetClosedError:
+            raise
+        except TimeoutError:
             pass
+        except Exception as error:
+            if diagnostics:
+                diagnostics.warn(
+                    "popup-dialog-read",
+                    "关闭课程说明弹窗失败",
+                    error,
+                )
     
     return False
 
@@ -196,7 +228,9 @@ async def learning_loop(
     max_recovery_attempts=3,
     health_check_interval=30,
     position_check_interval=10,
+    diagnostic_clock=time.monotonic,
 ) -> bool:
+    diagnostics = RateLimitedDiagnostics(logger, clock=diagnostic_clock)
     # 见面课完成阈值：80%（签到进度达到80%即完成签到）
     completion_threshold = 0.8 if is_meeting_class else (0.98 if is_national_wisdom else 1.0)
     
@@ -209,8 +243,14 @@ async def learning_loop(
                 paused = await page.evaluate('document.querySelector("video")?.paused ?? true')
                 if not paused:
                     break
-            except Exception:
-                pass
+            except TargetClosedError:
+                raise
+            except Exception as error:
+                diagnostics.warn(
+                    "initial-video-state",
+                    "等待视频开始播放时读取状态失败",
+                    error,
+                )
             await page.wait_for_timeout(500)
     
     await page.wait_for_timeout(1000)
@@ -266,8 +306,14 @@ async def learning_loop(
                         stuck_since = clock()
                     if isinstance(position, (int, float)):
                         last_video_position = position
-                except Exception:
-                    pass
+                except TargetClosedError:
+                    raise
+                except Exception as error:
+                    diagnostics.warn(
+                        "video-position",
+                        "读取视频播放位置失败",
+                        error,
+                    )
             
             # P0-1: 每30次循环检查一次视频加载状态
             if loop_counter % health_check_interval == 0:
@@ -365,7 +411,7 @@ async def learning_loop(
             show_course_progress(desc="完成进度:", cur_time=cur_time, is_meeting_class=is_meeting_class)
             
             # 检测并关闭弹窗
-            await close_popup(page, logger)
+            await close_popup(page, logger, diagnostics=diagnostics)
             
             # 检测视频是否暂停，如果暂停则继续播放
             try:
@@ -386,8 +432,14 @@ async def learning_loop(
                         logger.info("视频已继续播放")
                     else:
                         logger.warn(f"继续播放失败: {play_result.get('error', 'unknown')}")
-            except Exception as e:
-                pass
+            except TargetClosedError:
+                raise
+            except Exception as error:
+                diagnostics.warn(
+                    "resume-video",
+                    "检测或恢复视频播放状态失败",
+                    error,
+                )
             
             await sleep_func(0.5)
         except TimeoutError as e:

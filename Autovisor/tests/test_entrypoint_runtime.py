@@ -144,6 +144,45 @@ def _patch_learning_runtime(monkeypatch, progress_values):
     monkeypatch.setattr(runtime, "logger", _Logger())
 
 
+def test_close_popup_logs_unknown_selector_failure_at_bounded_rate():
+    class BrokenPage:
+        frames = []
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        def locator(self, _selector):
+            raise RuntimeError("selector engine unavailable")
+
+    logger = _Logger()
+    diagnostics = runtime.RateLimitedDiagnostics(logger, clock=lambda: 1)
+
+    result = runtime.asyncio.run(
+        runtime.close_popup(BrokenPage(), logger, diagnostics=diagnostics)
+    )
+
+    assert result is False
+    selector_warnings = [
+        item for item in logger.warnings if "扫描课程弹窗失败" in item
+    ]
+    assert len(selector_warnings) == 1
+    assert "RuntimeError: selector engine unavailable" in selector_warnings[0]
+
+
+def test_close_popup_propagates_closed_page():
+    class ClosedPage:
+        frames = []
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        def locator(self, _selector):
+            raise TargetClosedError("page closed")
+
+    with pytest.raises(TargetClosedError, match="page closed"):
+        runtime.asyncio.run(runtime.close_popup(ClosedPage(), _Logger()))
+
+
 def test_learning_loop_returns_false_when_time_limit_stops_video(monkeypatch):
     _patch_learning_runtime(monkeypatch, ["0%"])
     runtime.config.limitMaxTime = 1
@@ -221,6 +260,58 @@ def test_learning_loop_uses_video_position_to_avoid_false_stall(monkeypatch):
 
     assert result is True
     assert page.reloads == 0
+
+
+def test_learning_loop_logs_unknown_position_failure_once(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%", "0%", "100%"])
+
+    class BrokenPositionPage(_LearningPage):
+        async def evaluate(self, script):
+            if "currentTime ?? null" in script:
+                raise RuntimeError("selector changed")
+            return await super().evaluate(script)
+
+    result = runtime.asyncio.run(
+        runtime.learning_loop(
+            BrokenPositionPage(),
+            0,
+            clock=lambda: 1,
+            diagnostic_clock=lambda: 10,
+            minimum_watch_seconds=0,
+            stuck_timeout=999,
+            health_check_interval=999,
+            position_check_interval=1,
+        )
+    )
+
+    assert result is True
+    warnings = [
+        item for item in runtime.logger.warnings if "读取视频播放位置失败" in item
+    ]
+    assert len(warnings) == 1
+    assert "RuntimeError: selector changed" in warnings[0]
+
+
+def test_learning_loop_propagates_closed_page_from_position_probe(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%"])
+
+    class ClosedPage(_LearningPage):
+        async def evaluate(self, script):
+            if "currentTime ?? null" in script:
+                raise TargetClosedError("page closed")
+            return await super().evaluate(script)
+
+    with pytest.raises(TargetClosedError, match="page closed"):
+        runtime.asyncio.run(
+            runtime.learning_loop(
+                ClosedPage(),
+                0,
+                clock=lambda: 1,
+                minimum_watch_seconds=0,
+                health_check_interval=999,
+                position_check_interval=1,
+            )
+        )
 
 
 def test_learning_loop_raises_when_login_expires(monkeypatch):
