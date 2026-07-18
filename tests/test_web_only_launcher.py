@@ -157,6 +157,10 @@ class WebOnlyLauncherTests(unittest.TestCase):
         launcher.question_bank = SimpleNamespace(running=True)
         launcher.log_system = lambda _message: None
         launcher.get_python_executable = lambda: "python.exe"
+        launcher._load_autovisor_config_data = lambda: {
+            "accounts": [{"account_id": 7}]
+        }
+        launcher._as_int = lambda value, default=0: int(value or default)
         launcher._get_subprocess_window_kwargs = lambda: (0, None)
         launcher._build_encoding_candidates = lambda *_values: ("utf-8",)
         monitor_calls = []
@@ -171,14 +175,22 @@ class WebOnlyLauncherTests(unittest.TestCase):
                 "# fixture",
                 encoding="utf-8",
             )
-            with patch.object(launcher_module.subprocess, "Popen", return_value=process):
-                result = launcher.start_practice_mode_from_web()
+            with patch.object(
+                launcher_module.subprocess,
+                "Popen",
+                return_value=process,
+            ) as popen:
+                result = launcher.start_practice_mode_from_web(0)
 
         self.assertTrue(result["ok"])
         self.assertTrue(launcher.running["practice"])
         self.assertIs(launcher.processes["practice"], process)
         self.assertEqual(monitor_calls[0]["core"], "practice")
         self.assertEqual(monitor_calls[0]["output_source"], "autovisor")
+        self.assertEqual(
+            popen.call_args.args[0][-2:],
+            ["--account-id", "7"],
+        )
 
     def test_practice_mode_process_failure_releases_atomic_start_claim(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
@@ -189,6 +201,10 @@ class WebOnlyLauncherTests(unittest.TestCase):
         launcher.question_bank = SimpleNamespace(running=True)
         launcher.log_system = lambda _message: None
         launcher.get_python_executable = lambda: "python.exe"
+        launcher._load_autovisor_config_data = lambda: {
+            "accounts": [{"account_id": 1}]
+        }
+        launcher._as_int = lambda value, default=0: int(value or default)
         launcher._get_subprocess_window_kwargs = lambda: (0, None)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -219,6 +235,10 @@ class WebOnlyLauncherTests(unittest.TestCase):
         launcher.question_bank = SimpleNamespace(running=False)
         launcher.log_system = lambda _message: None
         launcher.get_python_executable = lambda: "python.exe"
+        launcher._load_autovisor_config_data = lambda: {
+            "accounts": [{"account_id": 1}]
+        }
+        launcher._as_int = lambda value, default=0: int(value or default)
         launcher.start_question_bank = lambda **_kwargs: (_ for _ in ()).throw(
             OSError("question bank failed")
         )
@@ -235,6 +255,52 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("question bank failed", result["message"])
         self.assertFalse(launcher.starting["practice"])
         self.assertFalse(launcher.running["practice"])
+
+    def test_practice_mode_rejects_stale_account_index_before_claiming_start(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.processes = {"practice": None}
+        launcher.running = {"practice": False}
+        launcher.starting = {"practice": False}
+        launcher.stop_requested = {"practice": False}
+        launcher.autovisor_path = str(Path(launcher_module.__file__).parent / "Autovisor")
+        launcher.log_system = lambda _message: None
+        launcher.get_python_executable = lambda: "python.exe"
+        launcher._load_autovisor_config_data = lambda: {
+            "accounts": [{"account_id": 3}]
+        }
+
+        result = launcher.start_practice_mode_from_web(9)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("账号不存在", result["message"])
+        self.assertFalse(launcher.starting["practice"])
+
+    def test_practice_mode_bridge_forwards_selected_account(self):
+        calls = []
+        bridge = WebLauncherAPI(
+            SimpleNamespace(
+                start_practice_mode_from_web=lambda index: calls.append(index)
+                or {"ok": True}
+            )
+        )
+
+        result = bridge.start_practice_mode(4)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(calls, [4])
+
+    def test_practice_mode_frontend_passes_account_index(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        function_source = frontend.split("async function startPracticeMode", 1)[1].split(
+            "function extractCourseKey", 1
+        )[0]
+
+        self.assertIn(
+            "apiCall('start_practice_mode', accountIndex)",
+            function_source,
+        )
 
     def test_question_bank_start_failure_is_visible_to_web(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)

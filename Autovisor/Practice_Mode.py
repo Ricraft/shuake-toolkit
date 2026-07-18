@@ -19,6 +19,7 @@
 import sys
 import os
 import asyncio
+import argparse
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,12 +32,24 @@ from modules.practice_mode import main
 from modules.logger import Logger
 
 
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="智慧树刷题模式")
+    parser.add_argument(
+        "--account-id",
+        type=int,
+        default=None,
+        help="运行 configs.ini 中指定编号的账号",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    args = parse_args()
     print("=" * 60)
     print("智慧树刷题模式 v1.0")
     print("=" * 60)
     try:
-        asyncio.run(main())
+        asyncio.run(main(account_id=args.account_id))
     except KeyboardInterrupt:
         print("\n用户中断，刷题模式已退出")
     except Exception as e:

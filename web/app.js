@@ -225,7 +225,7 @@
                 btn = document.getElementById(`practice-btn-${accountIndex}`);
                 if (!btn) { practiceModeRunning = false; return; }
                 btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> 启动中...';
-                const result = await apiCall('start_practice_mode');
+                const result = await apiCall('start_practice_mode', accountIndex);
                 btn = document.getElementById(`practice-btn-${accountIndex}`);
                 if (!btn) { practiceModeRunning = false; return; }
                 if (result?.ok) {

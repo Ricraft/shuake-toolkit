@@ -1443,7 +1443,7 @@ class UnifiedLauncher:
     def get_xuexitong_courses_from_web(self, account_index=0):
         return self._get_course_api_service().get_xuexitong_courses(account_index)
 
-    def start_practice_mode_from_web(self):
+    def start_practice_mode_from_web(self, account_index=0):
         """启动刷题模式 - 运行 Practice_Mode.py，日志接入 Autovisor 面板"""
         existing = self.processes.get('practice')
         if existing and existing.poll() is None:
@@ -1459,6 +1459,20 @@ class UnifiedLauncher:
         python_exe = self.get_python_executable()
         if not python_exe:
             return {'ok': False, 'message': '未找到 Python 解释器'}
+
+        try:
+            account_index = int(account_index)
+        except (TypeError, ValueError):
+            return {'ok': False, 'message': '刷题模式账号序号无效'}
+        accounts = self._load_autovisor_config_data().get('accounts', [])
+        if account_index < 0 or account_index >= len(accounts):
+            return {'ok': False, 'message': '刷题模式账号不存在，请刷新配置后重试'}
+        account_id = self._as_int(
+            accounts[account_index].get('account_id'),
+            account_index + 1,
+        )
+        if account_id < 1:
+            return {'ok': False, 'message': '刷题模式账号编号无效'}
 
         if not self._claim_runtime_start('practice'):
             return {'ok': False, 'message': '刷题模式已经在运行或启动中'}
@@ -1476,7 +1490,7 @@ class UnifiedLauncher:
             env['PYTHONIOENCODING'] = 'utf-8'
 
             process = subprocess.Popen(
-                [python_exe, script_path],
+                [python_exe, script_path, '--account-id', str(account_id)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=self.autovisor_path,

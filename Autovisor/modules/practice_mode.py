@@ -57,7 +57,7 @@ async def init_page(p: Playwright, config: Config):
         viewport={"width": 1400, "height": 900},
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     )
-    cookies = load_cookies("res/cookies.json")
+    cookies = load_cookies(config.cookies_file)
     if cookies:
         await context.add_cookies(cookies)
         logger.info("已加载 Cookies，可免密登录")
@@ -78,7 +78,7 @@ async def auto_login(context: BrowserContext, page: Page, config: Config, module
         config,
         logger,
         modules=modules,
-        cookie_path="res/cookies.json",
+        cookie_path=config.cookies_file,
         slider_handler=slider_verify,
     )
 
@@ -311,14 +311,15 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
         await asyncio.sleep(1)
 
 
-async def main():
+async def main(account_id=None, config_path="configs.ini"):
     """刷题模式主入口"""
     print("=" * 60)
     print("智慧树刷题模式 — 自动登录后进入我的课堂，等待用户操作")
     print("用户点击测验后系统自动答题并提交，然后返回我的课堂页")
     print("=" * 60)
 
-    config = Config("configs.ini")
+    logger.configure(account_id, force=True, clear=True)
+    config = Config(config_path, account_id=account_id)
 
     modules = []
     if config.enableAutoCaptcha:

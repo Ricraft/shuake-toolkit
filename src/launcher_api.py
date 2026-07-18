@@ -66,5 +66,5 @@ class WebLauncherAPI:
     def export_logs(self, tab, text):
         return self._launcher.export_logs_to_file(tab, text)
 
-    def start_practice_mode(self):
-        return self._launcher.start_practice_mode_from_web()
+    def start_practice_mode(self, account_index=0):
+        return self._launcher.start_practice_mode_from_web(account_index)
