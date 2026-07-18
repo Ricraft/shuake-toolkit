@@ -19,10 +19,16 @@ from src.core_manager import CoreManager
 from src.dependencies import (
     CORE_DEPENDENCIES,
     OPTIONAL_DEPENDENCIES,
+    WEB_DASHBOARD_DEPENDENCIES,
     Dependency,
     find_missing_dependencies,
 )
 from src.launcher_api import WebLauncherAPI
+from scripts.install_dependencies import (
+    install_dependencies,
+    install_playwright_browser,
+    selected_dependencies,
+)
 
 
 class InfrastructureTests(unittest.TestCase):
@@ -72,6 +78,91 @@ class InfrastructureTests(unittest.TestCase):
             for dependency in CORE_DEPENDENCIES + OPTIONAL_DEPENDENCIES
         }
         self.assertEqual(declared, expected)
+
+    def test_dashboard_requirement_file_matches_dependency_policy(self):
+        project_root = Path(__file__).resolve().parents[1]
+        declared = {
+            line.strip()
+            for line in (project_root / "Autovisor" / "requirements-web.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        expected = {
+            dependency.requirement for dependency in WEB_DASHBOARD_DEPENDENCIES
+        }
+        self.assertEqual(declared, expected)
+
+    def test_dependency_installer_is_web_only_and_dashboard_is_opt_in(self):
+        project_root = Path(__file__).resolve().parents[1]
+        source = (project_root / "scripts" / "install_dependencies.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("tkinter", source)
+        self.assertEqual(selected_dependencies(), CORE_DEPENDENCIES)
+        self.assertEqual(
+            selected_dependencies(with_dashboard=True),
+            CORE_DEPENDENCIES + WEB_DASHBOARD_DEPENDENCIES,
+        )
+
+    def test_dependency_installer_uses_selected_python_and_index(self):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return type("Result", (), {"returncode": 0})()
+
+        failures = install_dependencies(
+            ["example>=1,<2"],
+            python_executable="custom-python",
+            index_url="https://packages.example/simple",
+            environment={"SAFE": "1"},
+            run=fake_run,
+            output=lambda _message: None,
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            calls[0][0],
+            [
+                "custom-python",
+                "-m",
+                "pip",
+                "install",
+                "example>=1,<2",
+                "--index-url",
+                "https://packages.example/simple",
+                "--no-cache-dir",
+            ],
+        )
+        self.assertEqual(calls[0][1]["env"], {"SAFE": "1"})
+        self.assertFalse(calls[0][1]["check"])
+
+    def test_playwright_installer_scopes_download_mirror_to_child(self):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return type("Result", (), {"returncode": 0})()
+
+        with patch.dict(os.environ, {}, clear=True):
+            installed = install_playwright_browser(
+                python_executable="custom-python",
+                download_host="https://browser.example",
+                run=fake_run,
+                output=lambda _message: None,
+            )
+
+        self.assertTrue(installed)
+        self.assertEqual(
+            calls[0][0],
+            ["custom-python", "-m", "playwright", "install", "chromium"],
+        )
+        self.assertEqual(
+            calls[0][1]["env"]["PLAYWRIGHT_DOWNLOAD_HOST"],
+            "https://browser.example",
+        )
+        self.assertNotIn("PLAYWRIGHT_DOWNLOAD_HOST", os.environ)
 
     def test_launcher_api_is_a_thin_delegate(self):
         class FakeLauncher:

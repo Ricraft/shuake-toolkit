@@ -32,6 +32,14 @@ CORE_DEPENDENCIES = (
 
 OPTIONAL_DEPENDENCIES = ()
 
+# Autovisor 的独立 FastAPI 面板依赖。统一启动器本身不需要这些包，
+# 因此不把它们混入默认运行依赖或启动时的自动安装流程。
+WEB_DASHBOARD_DEPENDENCIES = (
+    Dependency("fastapi", "fastapi>=0.115,<1"),
+    Dependency("uvicorn", "uvicorn>=0.30,<1"),
+    Dependency("pydantic", "pydantic>=2,<3"),
+)
+
 
 def find_missing_dependencies(
     dependencies: Iterable[Dependency],
