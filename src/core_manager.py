@@ -5,6 +5,8 @@
 
 import os
 import json
+import hashlib
+import hmac
 import urllib.request
 import urllib.error
 import zipfile
@@ -88,6 +90,9 @@ class CoreManager:
         self.ssl_context = ssl.create_default_context()
         self.allow_github_proxies = os.environ.get(
             "LAUNCHER_ALLOW_GITHUB_PROXIES", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.allow_unverified_core_updates = os.environ.get(
+            "LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES", ""
         ).strip().lower() in {"1", "true", "yes", "on"}
     
     def _log(self, message):
@@ -319,6 +324,7 @@ class CoreManager:
 
         download_url = None
         asset_name = None
+        selected_asset = None
 
         # 优先匹配真正的 Windows x64/amd64 zip 资源
         for asset in assets:
@@ -331,6 +337,7 @@ class CoreManager:
             ):
                 download_url = asset.get('browser_download_url')
                 asset_name = name
+                selected_asset = asset
                 break
 
         # 如果没找到，再退而求其次：取第一个 zip
@@ -340,6 +347,7 @@ class CoreManager:
                 if name.lower().endswith('.zip'):
                     download_url = asset.get('browser_download_url')
                     asset_name = name
+                    selected_asset = asset
                     break
 
         if not download_url:
@@ -353,6 +361,10 @@ class CoreManager:
             'version': version,
             'download_url': download_url,
             'asset_name': asset_name,
+            'digest': selected_asset.get('digest') if selected_asset else None,
+            'asset_size': selected_asset.get('size') if selected_asset else None,
+            'asset_id': selected_asset.get('id') if selected_asset else None,
+            'verification_source': 'github-release-asset-digest',
             'published_at': data.get('published_at'),
             'body': data.get('body', '')
         }
@@ -385,6 +397,9 @@ class CoreManager:
                                 'version': version,
                                 'download_url': download_url,
                                 'asset_name': '通过探测获取',
+                                'digest': None,
+                                'asset_size': None,
+                                'verification_source': 'unavailable',
                                 'published_at': None,
                                 'body': '通过备用方式获取'
                             }
@@ -498,6 +513,9 @@ class CoreManager:
                     return {
                         'version': version,
                         'download_url': zipball_url,
+                        'digest': None,
+                        'asset_size': None,
+                        'verification_source': 'unavailable',
                         'published_at': data.get('published_at'),
                         'source': 'zipball_url'
                     }
@@ -537,6 +555,9 @@ class CoreManager:
                         return {
                             'version': version,
                             'download_url': download_url,
+                            'digest': None,
+                            'asset_size': None,
+                            'verification_source': 'unavailable',
                             'published_at': None,
                             'source': 'tag-archive'
                         }
@@ -680,6 +701,85 @@ class CoreManager:
 
         self._log(f"所有下载渠道均失败。最后错误: {last_error}")
         return False
+
+    @staticmethod
+    def _normalize_sha256_digest(value):
+        """Normalize GitHub's ``sha256:<hex>`` asset digest."""
+        if not isinstance(value, str):
+            return None
+        algorithm, separator, digest = value.strip().partition(":")
+        if separator != ":" or algorithm.lower() != "sha256":
+            return None
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            return None
+        return digest.lower()
+
+    def _verify_release_archive(self, archive_path, release_info):
+        """Verify a downloaded core before extraction or replacement.
+
+        GitHub exposes a SHA-256 digest for uploaded release assets. Source
+        archives and HTML fallback discovery do not expose an equivalent
+        publisher-bound digest, so automatic installation is refused by
+        default. A developer can explicitly opt in with
+        ``LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES=1``.
+        """
+        raw_digest = release_info.get("digest")
+        expected_digest = self._normalize_sha256_digest(raw_digest)
+        if expected_digest is None:
+            reason = "缺少 SHA-256 摘要" if not raw_digest else "SHA-256 摘要格式无效"
+            if self.allow_unverified_core_updates:
+                self._log(
+                    f"[安全警告] 更新资源{reason}，已按显式环境变量允许未校验安装"
+                )
+                return True
+            self._log(
+                f"[安全拦截] 更新资源{reason}，拒绝自动安装；"
+                "可等待发布方提供 GitHub 资源摘要或手动核验安装"
+            )
+            return False
+
+        expected_size = release_info.get("asset_size")
+        try:
+            expected_size = int(expected_size) if expected_size is not None else None
+        except (TypeError, ValueError):
+            self._log("[安全拦截] GitHub 资源大小元数据无效，拒绝自动安装")
+            return False
+        if expected_size is not None and expected_size >= 0:
+            actual_size = os.path.getsize(archive_path)
+            if actual_size != expected_size:
+                self._log(
+                    "[安全拦截] 更新资源大小不匹配: "
+                    f"期望 {expected_size} 字节，实际 {actual_size} 字节"
+                )
+                return False
+
+        digest = hashlib.sha256()
+        with open(archive_path, "rb") as archive:
+            for chunk in iter(lambda: archive.read(1024 * 1024), b""):
+                digest.update(chunk)
+        actual_digest = digest.hexdigest()
+        if not hmac.compare_digest(actual_digest, expected_digest):
+            self._log(
+                "[安全拦截] 更新资源 SHA-256 校验失败，下载内容可能损坏或被替换"
+            )
+            return False
+
+        self._log(f"更新资源 SHA-256 校验通过: {actual_digest}")
+        return True
+
+    def _can_download_release(self, release_info):
+        """Reject unverified automatic updates before spending bandwidth."""
+        raw_digest = release_info.get("digest")
+        if self._normalize_sha256_digest(raw_digest) is not None:
+            return True
+        if self.allow_unverified_core_updates:
+            return True
+        reason = "缺少 SHA-256 摘要" if not raw_digest else "SHA-256 摘要格式无效"
+        self._log(
+            f"[安全拦截] 更新资源{reason}，未开始下载；"
+            "可等待发布方提供 GitHub 资源摘要或手动核验安装"
+        )
+        return False
     
     def install_yatori(self, release_info, progress_callback=None):
         """安装/更新 Yatori"""
@@ -693,6 +793,8 @@ class CoreManager:
         
         try:
             self._log(f"正在安装 Yatori {version}...")
+            if not self._can_download_release(release_info):
+                return False
             
             # 0. 先备份现有配置（如果存在）
             config_file = os.path.join(self.yatori_path, "config.yaml")
@@ -702,6 +804,8 @@ class CoreManager:
             
             # 1. 下载
             if not self.download_file(download_url, temp_zip, progress_callback):
+                return False
+            if not self._verify_release_archive(temp_zip, release_info):
                 return False
             
             # 2. 解压
@@ -803,6 +907,8 @@ class CoreManager:
 
         try:
             self._log(f"正在安装 Autovisor {version}...")
+            if not self._can_download_release(release_info):
+                return False
 
             os.makedirs(preserve_dir, exist_ok=True)
             for relative_path in self.AUTOVISOR_PRESERVE_FILES:
@@ -818,6 +924,8 @@ class CoreManager:
             self._log("已备份 Autovisor 用户配置和运行数据")
 
             if not self.download_file(download_url, temp_zip, progress_callback):
+                return False
+            if not self._verify_release_archive(temp_zip, release_info):
                 return False
 
             self._log("正在解压 Autovisor...")

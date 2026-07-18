@@ -13,6 +13,7 @@
 │  ├─ autovisor_dependency_manager.py # Autovisor 依赖、浏览器与运行配置准备
 │  ├─ question_bank_controller.py # 题库设置与本地服务生命周期
 │  ├─ update_controller.py    # 核心检查、安装与并发状态机
+│  ├─ practice_mode_service.py # Web 刷题模式的账号与进程生命周期
 │  ├─ atomic_io.py            # 配置文件原子写入
 │  ├─ core_manager.py         # Yatori/Autovisor 下载和更新
 │  └─ 题库服务器.py            # 本地题库 HTTP 服务
@@ -48,6 +49,16 @@ Autovisor 的验证码二进制依赖可由以下入口准备：
 ```powershell
 py Autovisor\download_runtime_deps.py
 ```
+
+## 核心更新安全
+
+自动更新只接受 GitHub Release API 提供了有效 `sha256` 摘要的资源；下载后还会
+核对 API 声明的文件大小和 SHA-256，校验成功前不会解压或替换现有核心。通过
+GitHub 页面探测得到的回退链接、源码 `zipball` 或摘要格式异常的资源仍可用于
+显示版本信息，但默认禁止自动安装。
+
+开发调试时可以显式设置 `LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES=1` 跳过摘要
+要求；这会降低更新安全性，不建议在日常使用环境启用。
 
 ## 运行入口
 

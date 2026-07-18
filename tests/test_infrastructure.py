@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import ssl
@@ -225,6 +226,96 @@ class InfrastructureTests(unittest.TestCase):
             self.assertIsNone(result)
             self.assertEqual(urlopen.call_count, 1)
             self.assertFalse(any("v1.2.8" in message for message in logs))
+
+    def test_yatori_release_preserves_github_asset_digest_metadata(self):
+        payload = b"publisher asset"
+        digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            result = manager._parse_yatori_release(
+                {
+                    "tag_name": "v2.6.3",
+                    "published_at": "2026-07-18T00:00:00Z",
+                    "assets": [
+                        {
+                            "id": 17,
+                            "name": "yatori-windows-amd64.zip",
+                            "browser_download_url": "https://example.test/yatori.zip",
+                            "size": len(payload),
+                            "digest": digest,
+                        }
+                    ],
+                }
+            )
+
+        self.assertEqual(result["digest"], digest)
+        self.assertEqual(result["asset_size"], len(payload))
+        self.assertEqual(result["asset_id"], 17)
+        self.assertEqual(
+            result["verification_source"],
+            "github-release-asset-digest",
+        )
+
+    def test_release_archive_requires_matching_sha256_and_size(self):
+        payload = b"verified core archive"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = Path(temp_dir) / "core.zip"
+            archive.write_bytes(payload)
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            release = {
+                "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+                "asset_size": len(payload),
+            }
+
+            self.assertTrue(manager._verify_release_archive(archive, release))
+            self.assertTrue(any("SHA-256 校验通过" in item for item in logs))
+
+            release["digest"] = "sha256:" + "0" * 64
+            self.assertFalse(manager._verify_release_archive(archive, release))
+            self.assertTrue(any("SHA-256 校验失败" in item for item in logs))
+
+            release["digest"] = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+            release["asset_size"] = len(payload) + 1
+            self.assertFalse(manager._verify_release_archive(archive, release))
+            self.assertTrue(any("资源大小不匹配" in item for item in logs))
+
+    def test_unverified_core_archive_is_blocked_unless_explicitly_overridden(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = Path(temp_dir) / "core.zip"
+            archive.write_bytes(b"unverified")
+            manager = CoreManager(temp_dir)
+
+            self.assertFalse(manager._verify_release_archive(archive, {}))
+
+            manager.allow_unverified_core_updates = True
+            self.assertTrue(manager._verify_release_archive(archive, {}))
+
+    def test_unverified_yatori_download_never_replaces_existing_core(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            marker = Path(manager.yatori_path) / "existing-core.txt"
+            marker.write_text("keep", encoding="utf-8")
+            download_calls = []
+
+            def fake_download(_url, target_path, _progress=None):
+                download_calls.append(target_path)
+                with zipfile.ZipFile(target_path, "w") as archive:
+                    archive.writestr("new-core.txt", "new")
+                return True
+
+            manager.download_file = fake_download
+            installed = manager.install_yatori(
+                {
+                    "version": "v9.9.9",
+                    "download_url": "https://example.test/yatori.zip",
+                }
+            )
+
+            self.assertFalse(installed)
+            self.assertEqual(download_calls, [])
+            self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+            self.assertFalse((Path(manager.yatori_path) / "new-core.txt").exists())
 
     def test_yatori_scraper_uses_expanded_assets_before_release_page(self):
         class Response:
