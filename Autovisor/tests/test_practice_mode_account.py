@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from playwright._impl._errors import TargetClosedError
+
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -194,7 +196,7 @@ def test_practice_loop_removes_listener_when_main_page_closes(monkeypatch):
             return None
 
         async def title(self):
-            raise RuntimeError("page closed")
+            raise TargetClosedError("page closed")
 
     class Handler:
         def setup_listener(self, context, clear_data=False):
@@ -222,36 +224,8 @@ def test_practice_loop_removes_listener_when_main_page_closes(monkeypatch):
     assert events[-1] == ("remove",)
 
 
-def test_recovery_warning_is_rate_limited():
-    warnings = []
-    active_logger = SimpleNamespace(warn=warnings.append)
-    practice_mode._DIAGNOSTIC_LAST_AT.clear()
-
-    assert practice_mode._warn_limited(
-        "recovery",
-        "first",
-        now=10,
-        active_logger=active_logger,
-    )
-    assert not practice_mode._warn_limited(
-        "recovery",
-        "duplicate",
-        now=20,
-        active_logger=active_logger,
-    )
-    assert practice_mode._warn_limited(
-        "recovery",
-        "after interval",
-        now=40,
-        active_logger=active_logger,
-    )
-
-    assert warnings == ["first", "after interval"]
-
-
 def test_practice_loop_reports_session_recovery_error_once(monkeypatch):
     warnings = []
-    practice_mode._DIAGNOSTIC_LAST_AT.clear()
 
     class Page:
         def __init__(self):
@@ -263,7 +237,7 @@ def test_practice_loop_reports_session_recovery_error_once(monkeypatch):
         async def title(self):
             self.title_calls += 1
             if self.title_calls > 1:
-                raise RuntimeError("page closed")
+                raise TargetClosedError("page closed")
             return "course"
 
         @property
@@ -307,7 +281,6 @@ def test_practice_loop_reports_session_recovery_error_once(monkeypatch):
 
 def test_return_to_course_reports_second_navigation_failure(monkeypatch):
     warnings = []
-    practice_mode._DIAGNOSTIC_LAST_AT.clear()
 
     async def close_pages(*_args, **_kwargs):
         return None
@@ -339,3 +312,196 @@ def test_return_to_course_reports_second_navigation_failure(monkeypatch):
     assert result is False
     assert any("first navigation failed" in message for message in warnings)
     assert any("retry failed" in message for message in warnings)
+
+
+def test_find_test_page_reports_unknown_url_failure_and_keeps_scanning():
+    warnings = []
+    main_page = object()
+
+    class BrokenPage:
+        @property
+        def url(self):
+            raise OSError("url unavailable")
+
+    valid_page = SimpleNamespace(url="https://example.zhihuishu.com/exam/1")
+    diagnostics = practice_mode.RateLimitedDiagnostics(
+        SimpleNamespace(warn=warnings.append)
+    )
+
+    result = practice_mode._find_test_page(
+        SimpleNamespace(pages=[main_page, BrokenPage(), valid_page]),
+        main_page,
+        diagnostics,
+    )
+
+    assert result is valid_page
+    assert len(warnings) == 1
+    assert "url unavailable" in warnings[0]
+
+
+def test_close_extra_pages_reports_unknown_failure_but_ignores_closed_page():
+    warnings = []
+    main_page = object()
+
+    class ExtraPage:
+        def __init__(self, error):
+            self.error = error
+
+        async def close(self):
+            raise self.error
+
+    diagnostics = practice_mode.RateLimitedDiagnostics(
+        SimpleNamespace(warn=warnings.append)
+    )
+    context = SimpleNamespace(
+        pages=[
+            main_page,
+            ExtraPage(TargetClosedError("already closed")),
+            ExtraPage(OSError("close failed")),
+        ]
+    )
+
+    asyncio.run(
+        practice_mode._close_extra_pages(context, main_page, diagnostics)
+    )
+
+    assert len(warnings) == 1
+    assert "close failed" in warnings[0]
+
+
+def test_practice_loop_does_not_misreport_unknown_health_error_as_closed(
+    monkeypatch,
+):
+    events = []
+    warnings = []
+
+    class Page:
+        def __init__(self):
+            self.title_calls = 0
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        async def title(self):
+            self.title_calls += 1
+            if self.title_calls == 1:
+                raise OSError("health probe failed")
+            raise TargetClosedError("page closed")
+
+    class Handler:
+        def setup_listener(self, *_args, **_kwargs):
+            events.append("setup")
+
+        def remove_listener(self):
+            events.append("remove")
+
+    async def navigated(*_args, **_kwargs):
+        return True
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(practice_mode, "navigate_to_my_course", navigated)
+    monkeypatch.setattr(practice_mode, "TestResponseHandler", Handler)
+    monkeypatch.setattr(practice_mode.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(practice_mode.logger, "warn", warnings.append)
+
+    asyncio.run(
+        practice_mode.practice_loop(
+            Page(),
+            SimpleNamespace(pages=[]),
+            SimpleNamespace(),
+        )
+    )
+
+    assert events == ["setup", "remove"]
+    assert len([item for item in warnings if "health probe failed" in item]) == 1
+
+
+def test_practice_loop_reports_listener_failure_then_cleans_up(monkeypatch):
+    events = []
+    warnings = []
+
+    class Page:
+        def __init__(self):
+            self.title_calls = 0
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        async def title(self):
+            self.title_calls += 1
+            if self.title_calls > 1:
+                raise TargetClosedError("page closed")
+            return "course"
+
+    class Handler:
+        questions_data = None
+
+        def setup_listener(self, *_args, **_kwargs):
+            events.append("setup")
+
+        async def wait_for_questions(self, timeout=10):
+            raise OSError("listener failed")
+
+        def remove_listener(self):
+            events.append("remove")
+
+    async def navigated(*_args, **_kwargs):
+        return True
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(practice_mode, "navigate_to_my_course", navigated)
+    monkeypatch.setattr(practice_mode, "TestResponseHandler", Handler)
+    monkeypatch.setattr(practice_mode.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(practice_mode.logger, "warn", warnings.append)
+
+    asyncio.run(
+        practice_mode.practice_loop(
+            Page(),
+            SimpleNamespace(pages=[]),
+            SimpleNamespace(),
+        )
+    )
+
+    assert events == ["setup", "remove"]
+    assert len([item for item in warnings if "listener failed" in item]) == 1
+
+
+def test_practice_loop_cleans_up_when_listener_setup_raises(monkeypatch):
+    events = []
+
+    class Page:
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+    class Handler:
+        def setup_listener(self, *_args, **_kwargs):
+            events.append("setup")
+            raise OSError("setup failed")
+
+        def remove_listener(self):
+            events.append("remove")
+
+    async def navigated(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(practice_mode, "navigate_to_my_course", navigated)
+    monkeypatch.setattr(practice_mode, "TestResponseHandler", Handler)
+
+    try:
+        asyncio.run(
+            practice_mode.practice_loop(
+                Page(),
+                SimpleNamespace(pages=[]),
+                SimpleNamespace(),
+            )
+        )
+    except OSError as exc:
+        assert str(exc) == "setup failed"
+    else:
+        raise AssertionError("监听器 setup 异常应继续向上传播")
+
+    assert events == ["setup", "remove"]

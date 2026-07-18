@@ -13,7 +13,6 @@
 import sys
 import os
 import asyncio
-import time
 import traceback
 
 if sys.stdout and sys.stdout.encoding and "gbk" in sys.stdout.encoding.lower():
@@ -23,9 +22,17 @@ if sys.stderr and sys.stderr.encoding and "gbk" in sys.stderr.encoding.lower():
     import io
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-from playwright.async_api import async_playwright, Playwright, Page, BrowserContext
+from playwright._impl._errors import TargetClosedError
+from playwright.async_api import (
+    async_playwright,
+    Playwright,
+    Page,
+    BrowserContext,
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 from modules.logger import Logger
+from modules.diagnostics import RateLimitedDiagnostics
 from modules.configs import Config
 from modules.login_flow import login_to_zhihuishu
 from modules.course_portal import navigate_to_my_course as navigate_course_portal
@@ -38,25 +45,6 @@ from modules.slider import slider_verify
 from modules import installer
 
 logger = Logger()
-_DIAGNOSTIC_LAST_AT = {}
-
-
-def _warn_limited(
-    key: str,
-    message: str,
-    *,
-    interval: float = 30,
-    now: float | None = None,
-    active_logger=None,
-) -> bool:
-    """Emit repetitive recovery diagnostics at a bounded rate."""
-    current = time.monotonic() if now is None else now
-    last = _DIAGNOSTIC_LAST_AT.get(key)
-    if last is not None and current - last < interval:
-        return False
-    _DIAGNOSTIC_LAST_AT[key] = current
-    (active_logger or logger).warn(message)
-    return True
 
 async def init_page(p: Playwright, config: Config):
     """初始化浏览器页面"""
@@ -107,8 +95,13 @@ async def navigate_to_my_course(page: Page, config: Config):
     return await navigate_course_portal(page, logger)
 
 
-def _find_test_page(context: BrowserContext, main_page: Page):
+def _find_test_page(
+    context: BrowserContext,
+    main_page: Page,
+    diagnostics: RateLimitedDiagnostics | None = None,
+):
     """查找测验所在的页面（优先 exam/doHomework，排除主页面）"""
+    active_diagnostics = diagnostics or RateLimitedDiagnostics(logger)
     candidates = []
     for p in context.pages:
         if p == main_page:
@@ -116,52 +109,107 @@ def _find_test_page(context: BrowserContext, main_page: Page):
         try:
             url = p.url
             if "exam" in url or "doHomework" in url or "lookHomework" in url:
-                candidates.append((0, p))
+                candidates.append((0, p, url))
             elif "zhihuishu" in url:
-                candidates.append((1, p))
-        except Exception:
+                candidates.append((1, p, url))
+        except TargetClosedError:
             continue
+        except Exception as exc:
+            active_diagnostics.warn(
+                "practice-test-page-scan",
+                "读取候选测验页面地址失败",
+                exc,
+            )
     candidates.sort(key=lambda x: x[0])
     if candidates:
-        logger.info(f"找到测验页面: {candidates[0][1].url[:80]}")
+        logger.info(f"找到测验页面: {candidates[0][2][:80]}")
         return candidates[0][1]
     return None
 
 
-async def _close_extra_pages(context: BrowserContext, main_page: Page):
+async def _close_extra_pages(
+    context: BrowserContext,
+    main_page: Page,
+    diagnostics: RateLimitedDiagnostics | None = None,
+):
     """关闭除主页面外的多余页面"""
+    active_diagnostics = diagnostics or RateLimitedDiagnostics(logger)
     all_pages = context.pages
     for p in all_pages:
         if p != main_page:
             try:
                 await p.close()
                 logger.info("已关闭测验标签页")
-            except Exception:
-                pass
+            except TargetClosedError:
+                continue
+            except Exception as exc:
+                active_diagnostics.warn(
+                    "practice-close-extra-page",
+                    "关闭多余测验页面失败",
+                    exc,
+                )
 
 
-async def _return_to_my_course(page: Page, context: BrowserContext, main_page: Page, config: Config):
+async def _return_to_my_course(
+    page: Page,
+    context: BrowserContext,
+    main_page: Page,
+    config: Config,
+    diagnostics: RateLimitedDiagnostics | None = None,
+):
     """提交后返回我的课堂页（关闭测验标签，保留主页面）"""
-    await _close_extra_pages(context, main_page)
+    active_diagnostics = diagnostics or RateLimitedDiagnostics(logger)
+    await _close_extra_pages(context, main_page, active_diagnostics)
     try:
         if await navigate_to_my_course(main_page, config):
             return True
         logger.warn("未能返回我的学堂，等待后续恢复")
         return False
+    except TargetClosedError:
+        raise
     except Exception as e:
         logger.warn(f"返回我的课堂页时出错: {str(e)[:50]}")
         try:
             return await navigate_to_my_course(main_page, config)
+        except TargetClosedError:
+            raise
         except Exception as retry_exc:
-            _warn_limited(
+            active_diagnostics.warn(
                 "return_to_course_retry",
-                "再次返回我的学堂失败: "
-                f"{type(retry_exc).__name__}: {str(retry_exc)[:80]}",
+                "再次返回我的学堂失败",
+                retry_exc,
             )
             return False
 
 
 async def practice_loop(page: Page, context: BrowserContext, config: Config):
+    """Run practice mode and always release the active response listener."""
+    active_handler = [None]
+    try:
+        return await _run_practice_loop(
+            page,
+            context,
+            config,
+            active_handler,
+        )
+    finally:
+        if active_handler[0] is not None:
+            try:
+                active_handler[0].remove_listener()
+            except Exception as exc:
+                RateLimitedDiagnostics(logger).warn(
+                    "practice-listener-cleanup",
+                    "释放刷题响应监听器失败",
+                    exc,
+                )
+
+
+async def _run_practice_loop(
+    page: Page,
+    context: BrowserContext,
+    config: Config,
+    active_handler: list,
+):
     """
     刷题主循环
 
@@ -171,12 +219,14 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
     4. doHomework 触发 → 自动答题提交
     5. 返回我的课堂页 → 继续等待用户操作
     """
+    diagnostics = RateLimitedDiagnostics(logger)
     if not await navigate_to_my_course(page, config):
         raise RuntimeError("未能进入我的学堂，刷题模式已停止")
     await page.wait_for_timeout(1500)
 
     main_page = page
     test_handler = TestResponseHandler()
+    active_handler[0] = test_handler
     test_handler.setup_listener(context, clear_data=True)
 
     logger.info("=" * 60)
@@ -191,11 +241,39 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
     while True:
         try:
             await main_page.title()
-        except Exception:
+        except TargetClosedError:
             logger.info("浏览器页面已关闭，刷题模式结束")
             break
+        except PlaywrightTimeoutError as exc:
+            diagnostics.warn(
+                "practice-page-health-timeout",
+                "检查刷题页面状态超时",
+                exc,
+            )
+            await asyncio.sleep(1)
+            continue
+        except Exception as exc:
+            diagnostics.warn(
+                "practice-page-health",
+                "检查刷题页面状态失败",
+                exc,
+            )
+            await asyncio.sleep(1)
+            continue
 
-        has_questions = await test_handler.wait_for_questions(timeout=10)
+        try:
+            has_questions = await test_handler.wait_for_questions(timeout=10)
+        except TargetClosedError:
+            logger.info("浏览器页面已关闭，刷题模式结束")
+            break
+        except Exception as exc:
+            diagnostics.warn(
+                "practice-question-listener",
+                "等待测验题目响应失败",
+                exc,
+            )
+            await asyncio.sleep(1)
+            continue
 
         if has_questions and test_handler.questions_data:
             total = len(test_handler.questions_data)
@@ -206,7 +284,7 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
             logger.info("等待测验页面打开...")
             test_page = None
             for attempt in range(20):
-                test_page = _find_test_page(context, main_page)
+                test_page = _find_test_page(context, main_page, diagnostics)
                 if test_page:
                     break
                 await asyncio.sleep(2)
@@ -224,7 +302,14 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
                             work_page = p
                             logger.info(f"[OK] 找到题目页: {u[:100]}")
                             break
-                    except Exception:
+                    except TargetClosedError:
+                        continue
+                    except Exception as exc:
+                        diagnostics.warn(
+                            "practice-homework-page-scan",
+                            "读取题目页面地址失败",
+                            exc,
+                        )
                         continue
                 if work_page:
                     break
@@ -233,8 +318,14 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
                     for p in context.pages:
                         try:
                             logger.info(f"    页面: {p.url[:100]}")
-                        except Exception:
-                            pass
+                        except TargetClosedError:
+                            continue
+                        except Exception as exc:
+                            diagnostics.warn(
+                                "practice-page-listing",
+                                "记录浏览器页面地址失败",
+                                exc,
+                            )
                 await asyncio.sleep(2)
             else:
                 work_page = test_page or main_page
@@ -242,34 +333,76 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
 
             logger.info("等待试卷 DOM 渲染...")
             exam_rendered = False
+            exam_page_closed = False
             for attempt in range(30):
                 try:
                     await work_page.wait_for_load_state("domcontentloaded")
-                except Exception:
+                except TargetClosedError:
+                    logger.warn("测验页面已关闭，停止等待试卷渲染")
+                    exam_page_closed = True
+                    break
+                except PlaywrightTimeoutError:
                     pass
+                except Exception as exc:
+                    diagnostics.warn(
+                        "practice-exam-load-state",
+                        "等待测验页面加载失败",
+                        exc,
+                    )
                 for sel in ('.examPaper_box', '.examPaper_subject', '.subject_node', '.nodeLab'):
                     try:
                         if await work_page.locator(sel).first.count() > 0:
                             logger.info(f"[OK] 试卷已渲染: {sel} (等待 {attempt*2}s)")
                             exam_rendered = True
                             break
-                    except Exception:
+                    except TargetClosedError:
+                        logger.warn("测验页面已关闭，停止等待试卷渲染")
+                        exam_page_closed = True
+                        break
+                    except PlaywrightTimeoutError:
                         continue
+                    except Exception as exc:
+                        diagnostics.warn(
+                            "practice-exam-locator",
+                            "检查试卷渲染状态失败",
+                            exc,
+                        )
+                        continue
+                if exam_page_closed:
+                    break
                 if exam_rendered:
                     break
                 if attempt % 5 == 0 and attempt > 0:
                     try:
                         logger.info(f"试卷尚未渲染 ({attempt*2}s)，当前URL: {work_page.url[:100]}")
-                    except Exception:
-                        pass
+                    except TargetClosedError:
+                        exam_page_closed = True
+                        break
+                    except Exception as exc:
+                        diagnostics.warn(
+                            "practice-exam-url",
+                            "读取测验页面地址失败",
+                            exc,
+                        )
                 await asyncio.sleep(2)
 
             if not exam_rendered:
                 logger.error("[ERROR] 试卷超时未渲染，跳过本题")
                 test_handler.remove_listener()
                 test_handler = TestResponseHandler()
+                active_handler[0] = test_handler
                 test_handler.setup_listener(context, clear_data=True)
-                await _return_to_my_course(main_page, context, main_page, config)
+                try:
+                    await _return_to_my_course(
+                        main_page,
+                        context,
+                        main_page,
+                        config,
+                        diagnostics,
+                    )
+                except TargetClosedError:
+                    logger.info("浏览器页面已关闭，刷题模式结束")
+                    break
                 continue
 
             try:
@@ -278,6 +411,9 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
                     test_handler.questions_data,
                     auto_submit=True,
                 )
+            except TargetClosedError:
+                logger.info("测验页面已关闭，刷题模式结束")
+                break
             except Exception as e:
                 logger.error(f"答题过程异常: {str(e)[:100]}")
                 logger.write_log(traceback.format_exc())
@@ -285,6 +421,7 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
 
             test_handler.remove_listener()
             test_handler = TestResponseHandler()
+            active_handler[0] = test_handler
             test_handler.setup_listener(context, clear_data=True)
 
             if success:
@@ -292,9 +429,13 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
             else:
                 logger.warn("答题提交可能未完全成功")
 
-            returned = await _return_to_my_course(
-                main_page, context, main_page, config
-            )
+            try:
+                returned = await _return_to_my_course(
+                    main_page, context, main_page, config, diagnostics
+                )
+            except TargetClosedError:
+                logger.info("浏览器页面已关闭，刷题模式结束")
+                break
 
             logger.info(f"\n{'=' * 60}")
             if returned:
@@ -311,8 +452,15 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
             if idle_report_counter % 6 == 0:
                 try:
                     logger.info(f"等待用户操作... 当前页面: {main_page.url[:70]}")
-                except Exception:
-                    pass
+                except TargetClosedError:
+                    logger.info("浏览器页面已关闭，刷题模式结束")
+                    break
+                except Exception as exc:
+                    diagnostics.warn(
+                        "practice-idle-page-url",
+                        "读取当前课程页面地址失败",
+                        exc,
+                    )
 
             try:
                 if "passport" in main_page.url and "login" in main_page.url:
@@ -327,19 +475,20 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
                         continue
                     test_handler.remove_listener()
                     test_handler = TestResponseHandler()
+                    active_handler[0] = test_handler
                     test_handler.setup_listener(context, clear_data=True)
                     logger.info("已重新登录并返回我的课堂页")
+            except TargetClosedError:
+                logger.info("浏览器页面已关闭，刷题模式结束")
+                break
             except Exception as exc:
-                _warn_limited(
+                diagnostics.warn(
                     "practice_session_recovery",
-                    "检查或恢复登录状态失败: "
-                    f"{type(exc).__name__}: {str(exc)[:80]}",
+                    "检查或恢复登录状态失败",
+                    exc,
                 )
 
         await asyncio.sleep(1)
-
-    test_handler.remove_listener()
-
 
 async def main(account_id=None, config_path="configs.ini"):
     """刷题模式主入口"""
@@ -349,7 +498,6 @@ async def main(account_id=None, config_path="configs.ini"):
     print("=" * 60)
 
     logger.configure(account_id, force=True, clear=True)
-    _DIAGNOSTIC_LAST_AT.clear()
     config = Config(config_path, account_id=account_id)
 
     modules = []
