@@ -442,7 +442,6 @@ class UnifiedLauncher:
             self.log_system("⚠️ 未检测到 Yatori 核心，请在 Web 界面中触发安装。")
         else:
             # Yatori 已安装，检查更新
-            self.log_system("正在检查 Yatori 更新...")
             self.check_yatori_update_async()
 
     def __init__(self):

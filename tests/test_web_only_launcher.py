@@ -169,6 +169,27 @@ class WebOnlyLauncherTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
 
+    def test_question_bank_runtime_updates_server_description(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        status_function = frontend.split("function setQbStatus", 1)[1].split(
+            "function renderSettingsTabContent", 1
+        )[0]
+
+        self.assertIn("e('qb-server-desc')", status_function)
+        self.assertIn("服务运行正常，可供 Yatori 与 AutoVisor 查询", status_function)
+        self.assertIn("服务已停止，点击右上角按钮启动", status_function)
+
+    def test_automatic_update_check_only_logs_once_through_controller(self):
+        source = Path(launcher_module.__file__).read_text(encoding="utf-8")
+        method = source.split("def auto_check_cores", 1)[1].split(
+            "def __init__", 1
+        )[0]
+
+        self.assertIn("self.check_yatori_update_async()", method)
+        self.assertNotIn('self.log_system("正在检查 Yatori 更新...")', method)
+
     def test_frontend_stops_after_save_failure_and_displays_action_errors(self):
         frontend = (
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"

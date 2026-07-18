@@ -147,8 +147,15 @@ class CoreManager:
         }
 
     def _build_github_candidate_urls(self, url):
-        """涓虹粰瀹氱殑 GitHub URL 鏋勫缓闀滃儚鍊欓€夊湴鍧€"""
-        return [(name, prefix + url) for name, prefix in self.GITHUB_MIRRORS]
+        """Build direct and explicitly enabled proxy candidates for a GitHub URL."""
+        candidates = [("GitHub 直连", url)]
+        if self.allow_github_proxies:
+            candidates.extend(
+                (name, prefix + url)
+                for name, prefix in self.GITHUB_MIRRORS
+                if prefix
+            )
+        return candidates
     
     def _format_size(self, size_bytes):
         """格式化字节大小"""
@@ -353,13 +360,10 @@ class CoreManager:
     def _get_yatori_latest_fallback(self):
         """备用方式获取最新版本（爬取 releases 页面获取实际下载链接）"""
         latest_url = f"https://github.com/{self.YATORI_REPO}/releases/latest"
-
-        # 尝试通过代理探测重定向
-        urls_to_try = [latest_url] + [proxy + latest_url for proxy in self.GITHUB_PROXIES]
-
-        for try_url in urls_to_try:
+        last_error = None
+        for source_name, try_url in self._build_github_candidate_urls(latest_url):
             try:
-                self._log(f"探测版本: {try_url}")
+                self._log(f"探测 Yatori 版本 ({source_name})")
                 req = urllib.request.Request(
                     try_url,
                     headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
@@ -385,62 +389,90 @@ class CoreManager:
                                 'body': '通过备用方式获取'
                             }
                         self._log(f"获取到版本 {version}，但无法解析下载链接，继续尝试...")
-            except:
+            except Exception as exc:
+                last_error = exc
                 continue
-
-        # 最后的保底措施 - 使用已知版本
-        default_version = "v1.2.8"
-        download_url = f"https://github.com/{self.YATORI_REPO}/releases/download/{default_version}/yatori-go-console-1.2.8-windows-amd64.zip"
-        return {
-            'version': default_version,
-            'download_url': download_url,
-            'asset_name': '保底版本',
-            'body': '保底版本'
-        }
+        if last_error:
+            self._log(f"Yatori 备用版本探测失败: {last_error}")
+        return None
 
     def _scrape_yatori_download_url(self, tag_url):
         """爬取 release tag 页面，解析出 Windows 实际 .zip 下载链接"""
-        urls_to_try = [tag_url] + [proxy + tag_url for proxy in self.GITHUB_PROXIES]
+        version = tag_url.rstrip('/').split('/tag/')[-1]
+        expanded_url = (
+            f"https://github.com/{self.YATORI_REPO}/releases/expanded_assets/"
+            f"{version}"
+        )
+        page_urls = (expanded_url, tag_url)
+        last_error = None
 
-        for try_url in urls_to_try:
-            try:
-                self._log(f"解析资源链接: {try_url}")
-                req = urllib.request.Request(
-                    try_url,
-                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                )
-                with urllib.request.urlopen(req, timeout=15, context=self.ssl_context) as response:
-                    html = response.read().decode('utf-8', errors='replace')
-
-                    # 匹配包含 windows 和 .zip 的下载路径
-                    repo_path = self.YATORI_REPO.lower()
-                    # GitHub release 页面中下载链接形如:
-                    # href="/yatori-dev/yatori-go-console/releases/download/v.../yatori...windows...zip"
-                    pattern = re.compile(
-                        rf'(/{repo_path}/releases/download/[^"\']*windows[^"\']*\.zip)',
-                        re.IGNORECASE
+        for page_url in page_urls:
+            for source_name, try_url in self._build_github_candidate_urls(page_url):
+                try:
+                    page_kind = "资源列表" if page_url == expanded_url else "发行页面"
+                    self._log(f"解析 Yatori {page_kind} ({source_name})")
+                    req = urllib.request.Request(
+                        try_url,
+                        headers={
+                            'User-Agent': (
+                                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                'AppleWebKit/537.36'
+                            )
+                        }
                     )
-                    match = pattern.search(html)
-                    if match:
-                        download_url = "https://github.com" + match.group(1)
-                        self._log(f"匹配到 Windows 资源: {download_url.split('/')[-1]}")
+                    with urllib.request.urlopen(
+                        req,
+                        timeout=15,
+                        context=self.ssl_context,
+                    ) as response:
+                        html = response.read().decode('utf-8', errors='replace')
+                    asset = self._extract_yatori_asset_url(html)
+                    if asset:
+                        download_url, is_windows = asset
+                        if is_windows:
+                            self._log(
+                                f"匹配到 Windows 资源: {download_url.split('/')[-1]}"
+                            )
+                        else:
+                            self._log(
+                                "未找到平台标识，使用唯一可用 ZIP: "
+                                f"{download_url.split('/')[-1]}"
+                            )
                         return download_url
+                except Exception as exc:
+                    last_error = exc
+                    continue
 
-                    # 回退：匹配任意 .zip 资源
-                    fallback_pattern = re.compile(
-                        rf'(/{repo_path}/releases/download/[^"\']*\.zip)',
-                        re.IGNORECASE
-                    )
-                    fallback_match = fallback_pattern.search(html)
-                    if fallback_match:
-                        download_url = "https://github.com" + fallback_match.group(1)
-                        self._log(f"未找到 Windows 资源，使用第一个 .zip: {download_url.split('/')[-1]}")
-                        return download_url
+        if last_error:
+            self._log(f"Yatori 发行资源解析失败: {last_error}")
+        else:
+            self._log("Yatori 发行资源中未找到任何 .zip 下载链接")
 
-                    self._log("页面中未找到任何 .zip 下载链接")
-            except:
-                continue
+        return None
 
+    def _extract_yatori_asset_url(self, html):
+        repo_path = re.escape(self.YATORI_REPO)
+        base_pattern = rf'/{repo_path}/releases/download/[^"\']*'
+        windows_match = re.search(
+            rf'({base_pattern}(?:windows|win64|win-amd64)[^"\']*\.zip)',
+            html,
+            re.IGNORECASE,
+        )
+        if windows_match:
+            return "https://github.com" + windows_match.group(1), True
+
+        zip_matches = re.findall(
+            rf'({base_pattern}\.zip)',
+            html,
+            re.IGNORECASE,
+        )
+        compatible = [
+            path
+            for path in zip_matches
+            if not re.search(r'(linux|darwin|macos|aarch64|arm64)', path, re.I)
+        ]
+        if len(compatible) == 1:
+            return "https://github.com" + compatible[0], False
         return None
 
     def get_autovisor_latest_release(self):
@@ -476,7 +508,8 @@ class CoreManager:
             except json.JSONDecodeError as e:
                 self._log(f"[错误] Autovisor API 响应解析失败: {e}")
 
-            self._log("Autovisor API 直连失败，尝试通过 GitHub 页面和代理回退...")
+            fallback_label = "GitHub 页面与代理" if self.allow_github_proxies else "GitHub 页面"
+            self._log(f"Autovisor API 直连失败，尝试通过{fallback_label}回退...")
             return self._get_autovisor_latest_fallback()
         except Exception as e:
             self._log(f"[错误] Autovisor 获取版本信息时发生未知错误: {type(e).__name__}: {e}")
@@ -485,11 +518,10 @@ class CoreManager:
     def _get_autovisor_latest_fallback(self):
         """通过 GitHub releases/latest 页面及代理回退探测 Autovisor 最新版本"""
         latest_url = f"https://github.com/{self.AUTOVISOR_REPO}/releases/latest"
-        urls_to_try = [latest_url] + [proxy + latest_url for proxy in self.GITHUB_PROXIES]
-
-        for try_url in urls_to_try:
+        last_error = None
+        for source_name, try_url in self._build_github_candidate_urls(latest_url):
             try:
-                self._log(f"探测 Autovisor 版本: {try_url}")
+                self._log(f"探测 Autovisor 版本 ({source_name})")
                 req = urllib.request.Request(
                     try_url,
                     headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
@@ -509,9 +541,11 @@ class CoreManager:
                             'source': 'tag-archive'
                         }
             except Exception as e:
-                self._log(f"Autovisor 版本探测失败: {e}")
+                last_error = e
                 continue
 
+        if last_error:
+            self._log(f"Autovisor 版本探测失败: {last_error}")
         return None
 
     def download_file(self, url, target_path, progress_callback=None):

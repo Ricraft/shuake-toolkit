@@ -4,6 +4,7 @@ import os
 import ssl
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -100,6 +101,83 @@ class InfrastructureTests(unittest.TestCase):
             self.assertEqual(manager.ssl_context.verify_mode, ssl.CERT_REQUIRED)
             self.assertTrue(manager.ssl_context.check_hostname)
             self.assertFalse(manager.allow_github_proxies)
+            direct = manager._build_github_candidate_urls(
+                "https://github.com/example/project/releases/latest"
+            )
+            self.assertEqual(
+                direct,
+                [
+                    (
+                        "GitHub 直连",
+                        "https://github.com/example/project/releases/latest",
+                    )
+                ],
+            )
+
+            manager.allow_github_proxies = True
+            self.assertEqual(
+                len(manager._build_github_candidate_urls("https://github.com/a/b")),
+                len(manager.GITHUB_MIRRORS),
+            )
+
+    def test_yatori_fallback_does_not_invent_obsolete_release(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            manager.allow_github_proxies = False
+            with patch(
+                "src.core_manager.urllib.request.urlopen",
+                side_effect=urllib.error.URLError("offline"),
+            ) as urlopen:
+                result = manager._get_yatori_latest_fallback()
+
+            self.assertIsNone(result)
+            self.assertEqual(urlopen.call_count, 1)
+            self.assertFalse(any("v1.2.8" in message for message in logs))
+
+    def test_yatori_scraper_uses_expanded_assets_before_release_page(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return (
+                    b'<a href="/Yatori-Dev/yatori-go-console/releases/download/'
+                    b'v2.6.2/yatori-windows-amd64.zip">download</a>'
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            manager.allow_github_proxies = False
+            requested = []
+
+            def open_url(request, **_kwargs):
+                requested.append(request.full_url)
+                return Response()
+
+            with patch(
+                "src.core_manager.urllib.request.urlopen",
+                side_effect=open_url,
+            ):
+                result = manager._scrape_yatori_download_url(
+                    "https://github.com/Yatori-Dev/yatori-go-console/releases/tag/v2.6.2"
+                )
+
+            self.assertEqual(
+                result,
+                "https://github.com/Yatori-Dev/yatori-go-console/releases/download/"
+                "v2.6.2/yatori-windows-amd64.zip",
+            )
+            self.assertEqual(
+                requested,
+                [
+                    "https://github.com/Yatori-Dev/yatori-go-console/releases/"
+                    "expanded_assets/v2.6.2"
+                ],
+            )
 
     def test_background_tasks_are_cancelled(self):
         async def scenario():

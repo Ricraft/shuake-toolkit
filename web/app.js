@@ -84,7 +84,49 @@
 
         function setCoreStatus(core, running, version) { document.getElementById(`${core}-dot`).classList.toggle('running', running); document.getElementById(`${core}-status`).textContent = running?'运行中':'未启动'; document.getElementById(`${core}-ready`).textContent = running?'运行中':'待命'; document.getElementById(`${core}-ready`).className = 'status-badge '+(running?'ready':'idle'); document.getElementById(`${core}-version`).textContent = version||`${core} Core`; document.getElementById(`${core}-action-btn`).innerHTML = running?'<i class="fas fa-stop"></i> 停止核心':'<i class="fas fa-power-off"></i> 启动核心'; document.getElementById(`${core}-action-btn`).onclick = () => handleCoreAction(core); }
 
-        function setQbStatus(running, port, stats) { const e=(id)=>document.getElementById(id); if(e('qb-dot'))e('qb-dot').classList.toggle('running',running); if(e('qb-status'))e('qb-status').textContent=running?'运行中':'未启动'; if(e('qb-ready')){e('qb-ready').textContent=running?'运行中':'待命';e('qb-ready').className='status-badge '+(running?'ready':'idle');} const localN = stats.local||0, aiN = stats.ai_cached||0, totalN = stats.total||0; const compactStats = `共 ${totalN} 条 (非AI: ${localN} 条 | AI缓存: ${aiN} 条)`; if(e('qb-stats'))e('qb-stats').textContent=compactStats; if(e('qb-port-display'))e('qb-port-display').textContent=`端口: ${port}`; if(e('qb-action-btn'))e('qb-action-btn').innerHTML=running?'<i class="fas fa-stop"></i> 停止题库':'<i class="fas fa-power-off"></i> 启动题库'; ['settings-qb-status','qb-page-status'].forEach(id=>{if(e(id)){e(id).textContent=running?'运行中':'未启动';e(id).className='status-badge '+(running?'ready':'idle');}}); ['settings-qb-btn','qb-page-btn'].forEach(id=>{if(e(id))e(id).innerHTML=running?'<i class="fas fa-stop"></i> 停止题库':'<i class="fas fa-power-off"></i> 启动题库';}); if(e('settings-qb-stats'))e('settings-qb-stats').textContent=compactStats; if(e('qb-page-stats'))e('qb-page-stats').textContent=compactStats; if(e('qb-stat-total'))e('qb-stat-total').textContent=totalN; if(e('qb-stat-local'))e('qb-stat-local').textContent=localN; if(e('qb-stat-ai'))e('qb-stat-ai').textContent=aiN; }
+        function setQbStatus(running, port, stats) {
+            const e = (id) => document.getElementById(id);
+            if (e('qb-dot')) e('qb-dot').classList.toggle('running', running);
+            if (e('qb-status')) e('qb-status').textContent = running ? '运行中' : '未启动';
+            if (e('qb-ready')) {
+                e('qb-ready').textContent = running ? '运行中' : '待命';
+                e('qb-ready').className = 'status-badge ' + (running ? 'ready' : 'idle');
+            }
+            const localN = stats.local || 0;
+            const aiN = stats.ai_cached || 0;
+            const totalN = stats.total || 0;
+            const compactStats = `共 ${totalN} 条 (非AI: ${localN} 条 | AI缓存: ${aiN} 条)`;
+            if (e('qb-stats')) e('qb-stats').textContent = compactStats;
+            if (e('qb-port-display')) e('qb-port-display').textContent = `端口: ${port}`;
+            if (e('qb-server-desc')) {
+                e('qb-server-desc').textContent = running
+                    ? '服务运行正常，可供 Yatori 与 AutoVisor 查询'
+                    : '服务已停止，点击右上角按钮启动';
+            }
+            if (e('qb-action-btn')) {
+                e('qb-action-btn').innerHTML = running
+                    ? '<i class="fas fa-stop"></i> 停止题库'
+                    : '<i class="fas fa-power-off"></i> 启动题库';
+            }
+            ['settings-qb-status', 'qb-page-status'].forEach(id => {
+                if (e(id)) {
+                    e(id).textContent = running ? '运行中' : '未启动';
+                    e(id).className = 'status-badge ' + (running ? 'ready' : 'idle');
+                }
+            });
+            ['settings-qb-btn', 'qb-page-btn'].forEach(id => {
+                if (e(id)) {
+                    e(id).innerHTML = running
+                        ? '<i class="fas fa-stop"></i> 停止题库'
+                        : '<i class="fas fa-power-off"></i> 启动题库';
+                }
+            });
+            if (e('settings-qb-stats')) e('settings-qb-stats').textContent = compactStats;
+            if (e('qb-page-stats')) e('qb-page-stats').textContent = compactStats;
+            if (e('qb-stat-total')) e('qb-stat-total').textContent = totalN;
+            if (e('qb-stat-local')) e('qb-stat-local').textContent = localN;
+            if (e('qb-stat-ai')) e('qb-stat-ai').textContent = aiN;
+        }
 
         function renderSettingsTabContent(tab = currentConfigTab) { if (!state.settings) return; if (tab==='yatori') renderYatoriAccounts(state.settings.yatori.users||[]); else renderAutovisorAccounts(state.settings.autovisor.accounts||[]); }
 
