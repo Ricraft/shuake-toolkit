@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import asyncio
 
+from playwright._impl._errors import TargetClosedError
+
+from modules.diagnostics import RateLimitedDiagnostics
 from modules.logger import Logger
 
 
@@ -16,8 +19,9 @@ class TestResponseHandler:
 
     __test__ = False
 
-    def __init__(self, *, logger_instance=None):
+    def __init__(self, *, logger_instance=None, diagnostics=None):
         self._logger = logger_instance or logger
+        self._diagnostics = diagnostics or RateLimitedDiagnostics(self._logger)
         self.questions_data = None
         self.questions_event = asyncio.Event()
         self._handler = None
@@ -97,7 +101,17 @@ class TestResponseHandler:
             if self.questions_data:
                 return
             self._debug_count += 1
-            url = response.url
+            try:
+                url = response.url
+            except TargetClosedError:
+                return
+            except Exception as exc:
+                self._diagnostics.warn(
+                    "test-response-url",
+                    "读取测验响应地址失败",
+                    exc,
+                )
+                return
             is_target = any(
                 keyword in url for keyword in ("doHomework", "lookHomework")
             )
@@ -130,24 +144,47 @@ class TestResponseHandler:
                         "响应中未找到题目数据 "
                         f"(keys: {body_keys}, has rt: {isinstance(body, dict) and 'rt' in body})"
                     )
+            except TargetClosedError:
+                return
             except Exception as exc:
-                active_logger.warn(f"解析响应失败: {exc}")
+                self._diagnostics.warn(
+                    "test-response-parse",
+                    "解析测验响应失败",
+                    exc,
+                )
 
         self._handler = on_response
         context.on("response", self._handler)
 
         for page in context.pages:
             try:
+                page_url = page.url
                 page.on("response", self._handler)
                 self._page_handlers[id(page)] = page
-                active_logger.info(f"已为页面注册监听器: {page.url[:60]}")
-            except Exception:
+                active_logger.info(f"已为页面注册监听器: {page_url[:60]}")
+            except TargetClosedError:
                 continue
+            except Exception as exc:
+                self._diagnostics.warn(
+                    "test-listener-page-setup",
+                    "为已有页面注册测验响应监听器失败",
+                    exc,
+                )
 
         async def on_new_page(new_page):
-            active_logger.info(f"新页面打开，注册监听器: {new_page.url[:60]}")
-            new_page.on("response", self._handler)
-            self._page_handlers[id(new_page)] = new_page
+            try:
+                page_url = new_page.url
+                new_page.on("response", self._handler)
+                self._page_handlers[id(new_page)] = new_page
+                active_logger.info(f"新页面打开，注册监听器: {page_url[:60]}")
+            except TargetClosedError:
+                return
+            except Exception as exc:
+                self._diagnostics.warn(
+                    "test-listener-new-page",
+                    "为新页面注册测验响应监听器失败",
+                    exc,
+                )
 
         self._new_page_handler = on_new_page
         context.on("page", self._new_page_handler)
@@ -178,21 +215,39 @@ class TestResponseHandler:
         if context is not None and handler is not None:
             try:
                 context.remove_listener("response", handler)
-            except Exception:
+            except TargetClosedError:
                 pass
+            except Exception as exc:
+                self._diagnostics.warn(
+                    "test-listener-context-cleanup",
+                    "移除上下文测验响应监听器失败",
+                    exc,
+                )
 
         for page in list(self._page_handlers.values()):
             try:
                 page.remove_listener("response", handler)
-            except Exception:
+            except TargetClosedError:
                 pass
+            except Exception as exc:
+                self._diagnostics.warn(
+                    "test-listener-page-cleanup",
+                    "移除页面测验响应监听器失败",
+                    exc,
+                )
         self._page_handlers.clear()
 
         if context is not None and self._new_page_handler is not None:
             try:
                 context.remove_listener("page", self._new_page_handler)
-            except Exception:
+            except TargetClosedError:
                 pass
+            except Exception as exc:
+                self._diagnostics.warn(
+                    "test-listener-new-page-cleanup",
+                    "移除新页面监听器失败",
+                    exc,
+                )
 
         self._context = None
         self._handler = None

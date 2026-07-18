@@ -5,6 +5,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from playwright._impl._errors import TargetClosedError
+
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -185,3 +187,91 @@ def test_ignores_invalid_responses_and_times_out_cleanly():
     assert "目标响应状态码: 503" in logger.warnings
     assert any("响应中未找到题目数据" in message for message in logger.warnings)
     assert any("等待响应超时" in message for message in logger.warnings)
+
+
+def test_existing_page_registration_failure_is_reported_and_isolated():
+    logger = _Logger()
+
+    class BrokenPage(_Emitter):
+        @property
+        def url(self):
+            raise OSError("existing page unavailable")
+
+    valid_page = _Page("https://example.test/valid")
+    context = _Context([BrokenPage(), valid_page])
+    handler = TestResponseHandler(logger_instance=logger)
+
+    handler.setup_listener(context)
+
+    assert len(valid_page.handlers["response"]) == 1
+    assert any("existing page unavailable" in item for item in logger.warnings)
+
+
+def test_new_page_registration_failure_does_not_escape_callback():
+    logger = _Logger()
+
+    class BrokenPage(_Page):
+        def on(self, _event, _handler):
+            raise OSError("new page registration failed")
+
+    context = _Context()
+    handler = TestResponseHandler(logger_instance=logger)
+    handler.setup_listener(context)
+
+    asyncio.run(
+        context.emit(
+            "page",
+            BrokenPage("https://example.test/new"),
+        )
+    )
+
+    assert any(
+        "new page registration failed" in item for item in logger.warnings
+    )
+
+
+def test_response_url_failure_is_reported_without_breaking_listener():
+    logger = _Logger()
+
+    class BrokenResponse:
+        @property
+        def url(self):
+            raise OSError("response url failed")
+
+    context = _Context()
+    handler = TestResponseHandler(logger_instance=logger)
+    handler.setup_listener(context)
+
+    asyncio.run(context.emit("response", BrokenResponse()))
+
+    assert handler.questions_data is None
+    assert any("response url failed" in item for item in logger.warnings)
+
+
+def test_page_cleanup_failure_is_reported_but_closed_page_is_quiet():
+    logger = _Logger()
+
+    class CleanupPage(_Page):
+        def __init__(self, url, cleanup_error):
+            super().__init__(url)
+            self.cleanup_error = cleanup_error
+
+        def remove_listener(self, _event, _handler):
+            raise self.cleanup_error
+
+    closed_page = CleanupPage(
+        "https://example.test/closed",
+        TargetClosedError("already closed"),
+    )
+    broken_page = CleanupPage(
+        "https://example.test/broken",
+        OSError("page cleanup failed"),
+    )
+    context = _Context([closed_page, broken_page])
+    handler = TestResponseHandler(logger_instance=logger)
+    handler.setup_listener(context)
+
+    handler.remove_listener()
+
+    assert len(logger.warnings) == 1
+    assert "page cleanup failed" in logger.warnings[0]
