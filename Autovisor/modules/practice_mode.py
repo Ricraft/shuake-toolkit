@@ -310,6 +310,8 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
 
         await asyncio.sleep(1)
 
+    test_handler.remove_listener()
+
 
 async def main(account_id=None, config_path="configs.ini"):
     """刷题模式主入口"""
@@ -327,13 +329,21 @@ async def main(account_id=None, config_path="configs.ini"):
         modules = installer.start()
         logger.info("依赖库检查完成")
 
+    browser = None
     async with async_playwright() as p:
-        browser, page, context = await init_page(p, config)
+        try:
+            browser, page, context = await init_page(p, config)
 
-        if not config.username or not config.password:
-            logger.info("请手动填写账号密码...")
-        logger.info("正在登录...")
-        if not await auto_login(context, page, config, modules):
-            raise RuntimeError("登录未完成，刷题模式已停止")
+            if not config.username or not config.password:
+                logger.info("请手动填写账号密码...")
+            logger.info("正在登录...")
+            if not await auto_login(context, page, config, modules):
+                raise RuntimeError("登录未完成，刷题模式已停止")
 
-        await practice_loop(page, context, config)
+            await practice_loop(page, context, config)
+        finally:
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception as exc:
+                    logger.warn(f"关闭刷题浏览器失败: {exc}")
