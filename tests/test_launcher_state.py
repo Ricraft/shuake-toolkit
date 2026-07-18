@@ -2,11 +2,43 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from 统一启动器 import UnifiedLauncher
 
 
 class LauncherStateTests(unittest.TestCase):
+    def test_runtime_state_exposes_active_practice_account(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.running = {
+            "yatori": False,
+            "autovisor": False,
+            "practice": True,
+        }
+        launcher.starting = {
+            "yatori": False,
+            "autovisor": False,
+            "practice": False,
+        }
+        launcher.practice_account_id = 7
+        launcher.log_history = {"yatori": [], "autovisor": [], "system": []}
+        launcher.yatori_path = "missing-yatori"
+        launcher.autovisor_path = "missing-autovisor"
+        launcher.question_bank = SimpleNamespace(
+            running=True,
+            port=8083,
+            get_stats=lambda: {"total": 0},
+        )
+        launcher._shutdown_pending = False
+        launcher._get_yatori_display_version = lambda: "y"
+        launcher._get_autovisor_display_version = lambda: "a"
+        launcher._get_autovisor_multi_mode = lambda: True
+
+        runtime = launcher.get_web_runtime_state()
+
+        self.assertTrue(runtime["running"]["practice"])
+        self.assertEqual(runtime["practice_account_id"], 7)
+
     def test_runtime_start_claim_is_exclusive_and_resets_stop_request(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.running = {"yatori": False}

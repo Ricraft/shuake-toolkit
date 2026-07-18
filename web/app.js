@@ -64,6 +64,7 @@
             if (effectiveId < runtimeAppliedSequence) return false;
             runtimeAppliedSequence = effectiveId;
             renderRuntime(runtime);
+            syncPracticeButtons();
             return true;
         }
 
@@ -128,14 +129,14 @@
             if (e('qb-stat-ai')) e('qb-stat-ai').textContent = aiN;
         }
 
-        function renderSettingsTabContent(tab = currentConfigTab) { if (!state.settings) return; if (tab==='yatori') renderYatoriAccounts(state.settings.yatori.users||[]); else renderAutovisorAccounts(state.settings.autovisor.accounts||[]); }
+        function renderSettingsTabContent(tab = currentConfigTab) { if (!state.settings) return; if (tab==='yatori') renderYatoriAccounts(state.settings.yatori.users||[]); else renderAutovisorAccounts(state.settings.autovisor.accounts||[]); syncPracticeButtons(); }
 
         function renderSettings(settings) { state.settings = normalizeSettings(settings); const y=state.settings.yatori, a=state.settings.autovisor; document.getElementById('y-log-level').value=y.setting.basicSetting.logLevel; document.getElementById('y-log-model').value=String(y.setting.basicSetting.logModel); document.getElementById('y-web-model').value=String(y.setting.basicSetting.WebModel); document.getElementById('y-completion-tone').checked=!!y.setting.basicSetting.completionTone; document.getElementById('y-color-log').checked=!!y.setting.basicSetting.colorLog; document.getElementById('y-log-out-file').checked=!!y.setting.basicSetting.logOutFileSw; document.getElementById('y-email-sw').checked=!!y.setting.emailInform.sw; document.getElementById('y-smtp-host').value=y.setting.emailInform.SMTPHost; document.getElementById('y-smtp-port').value=y.setting.emailInform.SMTPPort||''; document.getElementById('y-email-user').value=y.setting.emailInform.userName; document.getElementById('y-email-password').value=y.setting.emailInform.password; document.getElementById('y-ai-type').value=y.setting.aiSetting.aiType; document.getElementById('y-ai-url').value=y.setting.aiSetting.aiUrl; document.getElementById('y-ai-model').value=y.setting.aiSetting.model; document.getElementById('y-ai-api-key').value=y.setting.aiSetting.API_KEY; document.getElementById('y-api-url').value=y.setting.apiQueSetting.url; syncYatoriAiField(); if(document.getElementById('a-browser-driver'))document.getElementById('a-browser-driver').value=a.browser_driver; if(document.getElementById('a-browser-path'))document.getElementById('a-browser-path').value=a.browser_path; if(document.getElementById('a-multi-mode'))document.getElementById('a-multi-mode').checked=!!a.multi_mode; syncAutovisorMulti(!!a.multi_mode); renderSettingsTabContent(currentConfigTab); if (settings.questionbank) loadQbSettings(settings.questionbank); }
 
         function renderYatoriAccounts(users) { const c = document.getElementById('yatori-accounts'); if (!users.length) { c.innerHTML = '<div class="empty-tip">还没有账号，点击右上角添加一个。</div>'; return; } c.innerHTML = users.map((user, idx) => { const pc = user.accountType||'XUEXITONG', rule = getYatoriPlatformModeRule(pc), fm = getYatoriFilterMode(user); const vm = String(user.coursesCustom?.videoModel??'1'), ae = String(user.coursesCustom?.autoExam??'0'), sv = String(user.coursesCustom?.examAutoSubmit??'0'); const showExam = rule.examModes.some(v => v!=='0'), isXXT = pc === 'XUEXITONG'; return `<div class="glass-card flex flex-col gap-4 yatori-account-card" data-index="${idx}" data-filter-mode="${fm}"><div class="flex justify-between items-center"><div class="flex items-center gap-2"><h4 class="font-bold text-sm">${escapeHtml(user.remarkName||`账号 ${idx+1}`)}</h4><span class="text-xs" style="color:var(--text-muted);" data-role="platform-badge">(${escapeHtml(getYatoriPlatformLabel(pc))})</span></div><button class="btn btn-outline btn-sm" onclick="removeYatoriAccount(${idx})"><i class="fas fa-trash-alt"></i></button></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="input-group"><span class="input-label">账号类型</span><div class="select-wrapper"><select data-field="accountType" class="input-field" onchange="handleYatoriPlatformChange(this)">${renderYatoriPlatformOptions(pc)}</select><i class="fas fa-chevron-down"></i></div><p class="text-xs mt-1" style="color:var(--text-muted);" data-role="url-hint">${escapeHtml(rule.urlHint)}</p></div><div class="input-group"><span class="input-label">备注名称</span><input data-field="remarkName" class="input-field" value="${escapeHtml(user.remarkName)}"></div><div class="input-group"><span class="input-label">登录账号</span><input data-field="account" class="input-field" value="${escapeHtml(user.account)}"></div><div class="input-group"><span class="input-label">密码/Cookie/Token</span><input data-field="password" type="password" class="input-field" value="${escapeHtml(user.password)}"></div><div class="input-group"><span class="input-label">站点地址</span><input data-field="url" class="input-field" value="${escapeHtml(user.url)}" placeholder="${rule.requireUrl?'建议填写该平台或学校分站地址':'按平台默认入口可留空'}"></div><div class="input-group"><span class="input-label">通知邮箱（逗号分隔）</span><input data-field="informEmails" class="input-field" value="${escapeHtml((user.informEmails||[]).join(', '))}"></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="input-group"><span class="input-label">视频模式</span><div class="select-wrapper"><select data-field="videoModel" class="input-field">${renderYatoriVideoOptions(pc, vm)}</select><i class="fas fa-chevron-down"></i></div></div><div class="input-group"><span class="input-label">自动考试模式</span><div class="select-wrapper"><select data-field="autoExam" class="input-field">${renderYatoriExamOptions(pc, ae)}</select><i class="fas fa-chevron-down"></i></div><p class="text-xs mt-1" style="color:var(--text-muted);" data-role="exam-hint">${escapeHtml(rule.examHint)}</p></div></div><div class="flex flex-wrap gap-4 items-end"><div class="input-group w-full md:w-56" data-role="submit-wrap" ${showExam?'':'style="display:none;"'}><span class="input-label">交卷模式</span><div class="select-wrapper"><select data-field="examAutoSubmit" class="input-field">${renderYatoriSubmitOptions(sv)}</select><i class="fas fa-chevron-down"></i></div></div><div class="flex flex-wrap gap-4 items-center"><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="isProxy" type="checkbox" ${Number(user.isProxy)?'checked':''}> 启用代理</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="shuffleSw" type="checkbox" ${Number(user.coursesCustom.shuffleSw)?'checked':''}> 随机打乱课程</label></div></div><div class="flex flex-wrap items-center gap-3"><span class="input-label">课程筛选</span><button class="btn btn-sm ${fm==='include'?'btn-primary':'btn-outline'}" data-filter-button="include" onclick="toggleYatoriCourseFilter(this,'include')">只刷特定课程</button><button class="btn btn-sm ${fm==='exclude'?'btn-primary':'btn-outline'}" data-filter-button="exclude" onclick="toggleYatoriCourseFilter(this,'exclude')">不刷某个课程</button><button class="btn btn-ghost btn-sm" data-filter-clear onclick="clearYatoriCourseFilter(this)" ${fm?'':'style="display:none;"'}>清空</button>${isXXT?`<button id="xxt-course-btn-${idx}" class="btn btn-primary btn-sm" onclick="getXuexitongCourses(${idx})" style="margin-left:auto"><i class="fas fa-download"></i> 获取课程</button>`:''}</div><div class="input-group" data-filter-panel="include" ${fm==='include'?'':'style="display:none;"'}><span class="input-label">只刷这些课程（每行一个）</span><textarea data-field="includeCourses" class="input-field">${escapeHtml((user.coursesCustom.includeCourses||[]).join('\n'))}</textarea></div><div class="input-group" data-filter-panel="exclude" ${fm==='exclude'?'':'style="display:none;"'}><span class="input-label">不刷这些课程（每行一个）</span><textarea data-field="excludeCourses" class="input-field">${escapeHtml((user.coursesCustom.excludeCourses||[]).join('\n'))}</textarea></div></div>`; }).join(''); document.querySelectorAll('.yatori-account-card').forEach(card => { syncYatoriPlatformCard(card); updateYatoriCourseFilterUI(card); }); }
 
         let courseFetchRunning = false;
-        let practiceModeRunning = false;
+        let practiceActionPending = false;
         function renderAutovisorAccounts(accounts) { const c = document.getElementById('autovisor-accounts'); if (!accounts.length) { c.innerHTML = '<div class="empty-tip">还没有账号，点击右上角添加一个。</div>'; return; } c.innerHTML = accounts.map((a, i) => `<div class="glass-card flex flex-col gap-4 autovisor-account-card" data-index="${i}"><div class="flex justify-between items-center"><h4 class="font-bold text-sm">${escapeHtml(a.name||`账号 ${i+1}`)}</h4><button class="btn btn-outline btn-sm" onclick="removeAutovisorAccount(${i})"><i class="fas fa-trash-alt"></i></button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="input-group"><span class="input-label">卡片名称</span><input data-field="name" class="input-field" value="${escapeHtml(a.name)}"></div><div class="input-group"><span class="input-label">账号/学号</span><input data-field="username" class="input-field" value="${escapeHtml(a.username)}"></div><div class="input-group"><span class="input-label">密码</span><input data-field="password" type="password" class="input-field" value="${escapeHtml(a.password)}"></div><div class="input-group"><span class="input-label">播放倍速</span><div class="select-wrapper"><select data-field="limit_speed" class="input-field">${AUTOVISOR_SPEED_OPTIONS.map(o=>`<option value="${o}" ${String(a.limit_speed)===o?'selected':''}>x${o}</option>`).join('')}</select><i class="fas fa-chevron-down"></i></div></div><div class="input-group"><span class="input-label">最大时长(分钟)</span><input data-field="limit_max_time" type="number" min="1" class="input-field" value="${escapeHtml(a.limit_max_time)}"></div></div><div class="flex flex-col gap-2"><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="enable_auto_captcha" type="checkbox" ${a.enable_auto_captcha?'checked':''}> 自动验证码</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="enable_hide_window" type="checkbox" ${a.enable_hide_window?'checked':''}> 隐藏窗口</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="sound_off" type="checkbox" ${a.sound_off?'checked':''}> 静音播放</label></div><div class="input-group"><div class="flex justify-between items-center mb-1"><span class="input-label">课程链接（每行一个）</span><div class="flex items-center gap-2"><button id="practice-btn-${i}" class="btn btn-outline btn-sm" onclick="startPracticeMode(${i})"><i class="fas fa-pencil-alt"></i> 刷题模式</button><button class="btn btn-ghost btn-sm" onclick="clearCourseUrls(${i})" title="清空所有课程链接"><i class="fas fa-eraser"></i></button><button id="course-btn-${i}" class="btn btn-primary btn-sm" onclick="getAutovisorCourses(${i})"><i class="fas fa-download"></i> 获取课程</button></div></div><textarea data-field="course_urls" class="input-field" id="course-urls-${i}">${escapeHtml((a.course_urls||[]).join('\n'))}</textarea></div></div>`).join(''); }
         async function getAutovisorCourses(accountIndex) {
             if (courseFetchRunning) { showToast('正在获取课程中，请稍候...', 'warning'); return; }
@@ -206,51 +207,89 @@
             }
             showToast('课程链接已清空', 'success');
         }
+        function getPracticeRuntimeState() {
+            const runtime = state.runtime || {};
+            return {
+                running: !!runtime.running?.practice,
+                starting: !!runtime.starting?.practice,
+                accountId: Number(runtime.practice_account_id || 0),
+            };
+        }
+        function syncPracticeButtons() {
+            const buttons = [...document.querySelectorAll('[id^="practice-btn-"]')];
+            if (!buttons.length) return;
+            if (practiceActionPending) {
+                buttons.forEach(button => { button.disabled = true; });
+                return;
+            }
+            const practice = getPracticeRuntimeState();
+            const accounts = state.settings?.autovisor?.accounts || [];
+            buttons.forEach(button => {
+                const index = Number(button.id.replace('practice-btn-', ''));
+                const accountId = Number(accounts[index]?.account_id || index + 1);
+                const active = practice.accountId > 0 && accountId === practice.accountId;
+                button.classList.remove('btn-success');
+                button.classList.add('btn-outline');
+                if (practice.running && active) {
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-stop"></i> 停止刷题';
+                } else if (practice.starting && active) {
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-stop"></i> 取消启动';
+                } else if (practice.running || practice.starting) {
+                    button.disabled = true;
+                    button.innerHTML = '<i class="fas fa-lock"></i> 其他账号运行中';
+                } else {
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-pencil-alt"></i> 刷题模式';
+                }
+            });
+        }
         async function startPracticeMode(accountIndex) {
-            if (practiceModeRunning) { showToast('刷题模式已启动，请勿重复操作', 'warning'); return; }
+            if (practiceActionPending) {
+                showToast('刷题模式操作正在处理中', 'warning');
+                return;
+            }
             let btn = document.getElementById(`practice-btn-${accountIndex}`);
             if (!btn) return;
-            practiceModeRunning = true;
+            const account = state.settings?.autovisor?.accounts?.[accountIndex];
+            const accountId = Number(account?.account_id || accountIndex + 1);
+            const practice = getPracticeRuntimeState();
+            const shouldStop = (practice.running || practice.starting)
+                && practice.accountId === accountId;
+            practiceActionPending = true;
             btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> 保存配置...';
+            btn.innerHTML = shouldStop
+                ? '<i class="fas fa-circle-notch fa-spin"></i> 停止中...'
+                : '<i class="fas fa-circle-notch fa-spin"></i> 保存配置...';
             try {
+                if (shouldStop) {
+                    const result = await apiCall('stop_practice_mode');
+                    showToast(
+                        result?.message || (result?.ok ? '已请求停止刷题模式' : '停止刷题模式失败'),
+                        result?.ok ? 'success' : 'error',
+                    );
+                    await refreshRuntime();
+                    return;
+                }
                 const saveResult = await saveSettings(false);
                 if (!saveResult?.ok) {
                     showToast('保存配置失败，无法启动刷题模式', 'error');
-                    btn = document.getElementById(`practice-btn-${accountIndex}`);
-                    if (btn) { btn.innerHTML = '<i class="fas fa-pencil-alt"></i> 刷题模式'; btn.disabled = false; }
-                    practiceModeRunning = false;
                     return;
                 }
                 btn = document.getElementById(`practice-btn-${accountIndex}`);
-                if (!btn) { practiceModeRunning = false; return; }
-                btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> 启动中...';
+                if (btn) btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> 启动中...';
                 const result = await apiCall('start_practice_mode', accountIndex);
-                btn = document.getElementById(`practice-btn-${accountIndex}`);
-                if (!btn) { practiceModeRunning = false; return; }
-                if (result?.ok) {
-                    btn.innerHTML = '<i class="fas fa-check"></i> 已启动';
-                    btn.classList.add('btn-success');
-                    setTimeout(() => {
-                        const btn2 = document.getElementById(`practice-btn-${accountIndex}`);
-                        if (btn2) {
-                            btn2.innerHTML = '<i class="fas fa-pencil-alt"></i> 刷题模式';
-                            btn2.classList.remove('btn-success');
-                            btn2.classList.add('btn-outline');
-                            practiceModeRunning = false;
-                        }
-                    }, 5000);
-                    showToast(result.message || '刷题模式已启动', 'success');
-                } else {
-                    showToast(result?.message || '启动刷题模式失败', 'error');
-                    btn.innerHTML = '<i class="fas fa-pencil-alt"></i> 刷题模式';
-                    practiceModeRunning = false;
-                }
+                showToast(
+                    result?.message || (result?.ok ? '刷题模式已启动' : '启动刷题模式失败'),
+                    result?.ok ? 'success' : 'error',
+                );
+                await refreshRuntime();
             } catch (e) {
-                showToast(e?.message || '启动刷题模式时发生错误', 'error');
-                btn = document.getElementById(`practice-btn-${accountIndex}`);
-                if (btn) { btn.innerHTML = '<i class="fas fa-pencil-alt"></i> 刷题模式'; btn.disabled = false; }
-                practiceModeRunning = false;
+                showToast(e?.message || '刷题模式操作失败', 'error');
+            } finally {
+                practiceActionPending = false;
+                syncPracticeButtons();
             }
         }
         function extractCourseKey(url) {

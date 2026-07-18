@@ -68,3 +68,6 @@ class WebLauncherAPI:
 
     def start_practice_mode(self, account_index=0):
         return self._launcher.start_practice_mode_from_web(account_index)
+
+    def stop_practice_mode(self):
+        return self._launcher.stop_practice_mode_from_web()

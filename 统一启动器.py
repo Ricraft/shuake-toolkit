@@ -484,6 +484,7 @@ class UnifiedLauncher:
             'practice': False,
         }
         self._last_start_error = {}
+        self.practice_account_id = None
 
         base_dir = self.get_base_dir()
         self.preferences_path = self.get_preferences_file_path(base_dir)
@@ -914,6 +915,7 @@ class UnifiedLauncher:
             },
             'running': dict(self.running),
             'starting': dict(self.starting),
+            'practice_account_id': getattr(self, 'practice_account_id', None),
             'qb_running': self.question_bank.running,
             'qb_port': self.question_bank.port,
             'qb_stats': self.question_bank.get_stats(),
@@ -1148,10 +1150,13 @@ class UnifiedLauncher:
         self._get_process_supervisor().mark_running(script_type, process)
 
     def _mark_runtime_stopped(self, script_type, process=None):
-        return self._get_process_supervisor().mark_stopped(
+        stopped = self._get_process_supervisor().mark_stopped(
             script_type,
             process,
         )
+        if stopped and script_type == 'practice':
+            self.practice_account_id = None
+        return stopped
 
     def start_yatori(self):
         """启动 Yatori"""
@@ -1400,6 +1405,16 @@ class UnifiedLauncher:
             self._terminate_process_tree(process, "刷题模式")
         self._mark_runtime_stopped('practice', process)
 
+    def stop_practice_mode_from_web(self):
+        """Stop practice mode from its account-card action."""
+        if not (
+            self.running.get('practice')
+            or self.starting.get('practice')
+        ):
+            return {'ok': False, 'message': '刷题模式当前未运行'}
+        self.stop_practice_mode()
+        return {'ok': True, 'message': '已请求停止刷题模式'}
+
 
     # ============================================================
     # 题库服务器管理
@@ -1476,12 +1491,18 @@ class UnifiedLauncher:
 
         if not self._claim_runtime_start('practice'):
             return {'ok': False, 'message': '刷题模式已经在运行或启动中'}
+        self.practice_account_id = account_id
 
         process = None
         try:
             if not self.question_bank.running:
                 self.log_system("[刷题模式] 正在启动题库服务器...")
                 self.start_question_bank(silent=True)
+
+            if self.stop_requested.get('practice'):
+                self.log_system("[刷题模式] 启动已取消")
+                self._mark_runtime_stopped('practice')
+                return {'ok': False, 'message': '刷题模式启动已取消'}
 
             self.log_system("[刷题模式] 正在启动刷题模式...")
             creationflags, startupinfo = self._get_subprocess_window_kwargs()
