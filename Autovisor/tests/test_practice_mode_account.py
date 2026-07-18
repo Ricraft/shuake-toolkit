@@ -220,3 +220,122 @@ def test_practice_loop_removes_listener_when_main_page_closes(monkeypatch):
 
     assert events[0] == ("setup", context, True)
     assert events[-1] == ("remove",)
+
+
+def test_recovery_warning_is_rate_limited():
+    warnings = []
+    active_logger = SimpleNamespace(warn=warnings.append)
+    practice_mode._DIAGNOSTIC_LAST_AT.clear()
+
+    assert practice_mode._warn_limited(
+        "recovery",
+        "first",
+        now=10,
+        active_logger=active_logger,
+    )
+    assert not practice_mode._warn_limited(
+        "recovery",
+        "duplicate",
+        now=20,
+        active_logger=active_logger,
+    )
+    assert practice_mode._warn_limited(
+        "recovery",
+        "after interval",
+        now=40,
+        active_logger=active_logger,
+    )
+
+    assert warnings == ["first", "after interval"]
+
+
+def test_practice_loop_reports_session_recovery_error_once(monkeypatch):
+    warnings = []
+    practice_mode._DIAGNOSTIC_LAST_AT.clear()
+
+    class Page:
+        def __init__(self):
+            self.title_calls = 0
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        async def title(self):
+            self.title_calls += 1
+            if self.title_calls > 1:
+                raise RuntimeError("page closed")
+            return "course"
+
+        @property
+        def url(self):
+            raise OSError("session probe failed")
+
+    class Handler:
+        questions_data = None
+
+        def setup_listener(self, *_args, **_kwargs):
+            return None
+
+        async def wait_for_questions(self, timeout=10):
+            return False
+
+        def remove_listener(self):
+            return None
+
+    async def navigated(*_args, **_kwargs):
+        return True
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(practice_mode, "navigate_to_my_course", navigated)
+    monkeypatch.setattr(practice_mode, "TestResponseHandler", Handler)
+    monkeypatch.setattr(practice_mode.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(practice_mode.logger, "warn", warnings.append)
+
+    asyncio.run(
+        practice_mode.practice_loop(
+            Page(),
+            SimpleNamespace(pages=[]),
+            SimpleNamespace(),
+        )
+    )
+
+    matching = [message for message in warnings if "session probe failed" in message]
+    assert len(matching) == 1
+
+
+def test_return_to_course_reports_second_navigation_failure(monkeypatch):
+    warnings = []
+    practice_mode._DIAGNOSTIC_LAST_AT.clear()
+
+    async def close_pages(*_args, **_kwargs):
+        return None
+
+    attempts = iter(
+        [RuntimeError("first navigation failed"), OSError("retry failed")]
+    )
+
+    async def failed_navigation(*_args, **_kwargs):
+        raise next(attempts)
+
+    monkeypatch.setattr(practice_mode, "_close_extra_pages", close_pages)
+    monkeypatch.setattr(
+        practice_mode,
+        "navigate_to_my_course",
+        failed_navigation,
+    )
+    monkeypatch.setattr(practice_mode.logger, "warn", warnings.append)
+
+    result = asyncio.run(
+        practice_mode._return_to_my_course(
+            object(),
+            object(),
+            object(),
+            object(),
+        )
+    )
+
+    assert result is False
+    assert any("first navigation failed" in message for message in warnings)
+    assert any("retry failed" in message for message in warnings)

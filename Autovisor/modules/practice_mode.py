@@ -38,6 +38,25 @@ from modules.slider import slider_verify
 from modules import installer
 
 logger = Logger()
+_DIAGNOSTIC_LAST_AT = {}
+
+
+def _warn_limited(
+    key: str,
+    message: str,
+    *,
+    interval: float = 30,
+    now: float | None = None,
+    active_logger=None,
+) -> bool:
+    """Emit repetitive recovery diagnostics at a bounded rate."""
+    current = time.monotonic() if now is None else now
+    last = _DIAGNOSTIC_LAST_AT.get(key)
+    if last is not None and current - last < interval:
+        return False
+    _DIAGNOSTIC_LAST_AT[key] = current
+    (active_logger or logger).warn(message)
+    return True
 
 async def init_page(p: Playwright, config: Config):
     """初始化浏览器页面"""
@@ -133,7 +152,12 @@ async def _return_to_my_course(page: Page, context: BrowserContext, main_page: P
         logger.warn(f"返回我的课堂页时出错: {str(e)[:50]}")
         try:
             return await navigate_to_my_course(main_page, config)
-        except Exception:
+        except Exception as retry_exc:
+            _warn_limited(
+                "return_to_course_retry",
+                "再次返回我的学堂失败: "
+                f"{type(retry_exc).__name__}: {str(retry_exc)[:80]}",
+            )
             return False
 
 
@@ -305,8 +329,12 @@ async def practice_loop(page: Page, context: BrowserContext, config: Config):
                     test_handler = TestResponseHandler()
                     test_handler.setup_listener(context, clear_data=True)
                     logger.info("已重新登录并返回我的课堂页")
-            except Exception:
-                pass
+            except Exception as exc:
+                _warn_limited(
+                    "practice_session_recovery",
+                    "检查或恢复登录状态失败: "
+                    f"{type(exc).__name__}: {str(exc)[:80]}",
+                )
 
         await asyncio.sleep(1)
 
@@ -321,6 +349,7 @@ async def main(account_id=None, config_path="configs.ini"):
     print("=" * 60)
 
     logger.configure(account_id, force=True, clear=True)
+    _DIAGNOSTIC_LAST_AT.clear()
     config = Config(config_path, account_id=account_id)
 
     modules = []
