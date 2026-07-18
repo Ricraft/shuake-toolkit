@@ -217,7 +217,7 @@ class RuntimeProcessServiceTests(unittest.TestCase):
 
     def test_monitor_uses_requested_output_channel_and_clears_state(self):
         launcher = FakeLauncher()
-        process = FakeProcess(return_code=3)
+        process = FakeProcess(return_code=0)
 
         result = self.make_service(
             launcher,
@@ -235,6 +235,27 @@ class RuntimeProcessServiceTests(unittest.TestCase):
         self.assertEqual(launcher.streamed[1], "autovisor")
         self.assertEqual(launcher.stopped, [("practice", process)])
         self.assertIn("[刷题模式] 已退出", launcher.logs)
+
+    def test_monitor_reports_unrequested_nonzero_exit(self):
+        launcher = FakeLauncher()
+        process = FakeProcess(return_code=3)
+
+        self.make_service(
+            launcher,
+            lambda *_args, **_kwargs: None,
+        ).monitor(
+            core="core",
+            label="刷题模式",
+            process=process,
+            encodings=["utf-8"],
+        )
+
+        message = "刷题模式 已退出，返回码: 3"
+        self.assertIn(message, launcher.logs)
+        self.assertEqual(
+            launcher.notifications,
+            [("刷题模式 运行异常", message, True)],
+        )
 
     def test_monitor_thread_failure_terminates_process_and_clears_state(self):
         launcher = FakeLauncher()

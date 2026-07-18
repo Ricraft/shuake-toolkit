@@ -43,16 +43,18 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-if __name__ == "__main__":
-    args = parse_args()
+def run(account_id=None):
+    """Run practice mode and return a process-friendly exit code."""
     print("=" * 60)
     print("智慧树刷题模式 v1.0")
     print("=" * 60)
+    exit_code = 0
     try:
-        asyncio.run(main(account_id=args.account_id))
+        asyncio.run(main(account_id=account_id))
     except KeyboardInterrupt:
         print("\n用户中断，刷题模式已退出")
     except Exception as e:
+        exit_code = 1
         logger = Logger()
         logger.error(f"刷题模式异常: {repr(e)}", shift=True)
         logger.write_log(traceback.format_exc())
@@ -68,3 +70,9 @@ if __name__ == "__main__":
                 input("程序已结束，按 Enter 退出...")
         except EOFError:
             pass
+    return exit_code
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    raise SystemExit(run(account_id=args.account_id))

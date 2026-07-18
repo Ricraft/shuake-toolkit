@@ -118,11 +118,25 @@ class RuntimeProcessService:
                     output_source or core,
                     encodings,
                 )
-                process.wait()
-                self.launcher._mark_runtime_stopped(core, process)
-                self.launcher.log_system(
-                    exit_message or f"{label} 已退出"
+                return_code = process.wait()
+                stop_requested = self.launcher.stop_requested.get(
+                    core,
+                    False,
                 )
+                self.launcher._mark_runtime_stopped(core, process)
+                if return_code:
+                    message = f"{label} 已退出，返回码: {return_code}"
+                    self.launcher.log_system(message)
+                    if not stop_requested:
+                        self.launcher._notify_runtime_event(
+                            f"{label} 运行异常",
+                            message,
+                            error=True,
+                        )
+                else:
+                    self.launcher.log_system(
+                        exit_message or f"{label} 已退出"
+                    )
             except Exception as exc:
                 self._cleanup_failed_process(process, label)
                 self.launcher._mark_runtime_stopped(core, process)
