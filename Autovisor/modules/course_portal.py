@@ -7,6 +7,8 @@ from urllib.parse import urlsplit
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from modules.login_selectors import LOGIN_HOSTS
+
 
 MY_COURSE_HOMEPAGE = "https://www.zhihuishu.com/"
 MY_COURSE_PORTAL = "https://onlineweb.zhihuishu.com/"
@@ -29,7 +31,13 @@ PORTAL_RENDER_TIMEOUT_MS = 20_000
 
 def is_login_url(url: str) -> bool:
     parsed = urlsplit(url)
-    return parsed.hostname == "passport.zhihuishu.com" and "login" in parsed.path.lower()
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname == "login.zhihuishu.com":
+        return True
+    return (
+        hostname in LOGIN_HOSTS
+        and "login" in parsed.path.lower()
+    )
 
 
 def is_course_portal_url(url: str) -> bool:

@@ -6,8 +6,10 @@ from collections.abc import Callable
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from modules.course_portal import is_login_url
 from modules.login_selectors import (
     AUTO_LOGIN_TIMEOUT_MS,
+    LOGIN_AGREEMENT_CHECKBOX,
     LOGIN_FORM_TIMEOUT_MS,
     LOGIN_PANEL,
     LOGIN_SUBMIT,
@@ -41,7 +43,7 @@ async def login_to_zhihuishu(
             wait_until="commit",
             timeout=LOGIN_FORM_TIMEOUT_MS,
         )
-        if "login" not in page.url:
+        if not is_login_url(page.url):
             logger.info("检测到已登录,跳过登录步骤.")
             return True
 
@@ -64,6 +66,18 @@ async def login_to_zhihuishu(
             )
             await page.locator(USERNAME_INPUT).fill(config.username)
             await page.locator(PASSWORD_INPUT).fill(config.password)
+            agreement = page.locator(LOGIN_AGREEMENT_CHECKBOX)
+            agreement_count = await agreement.count()
+            if agreement_count > 1:
+                raise RuntimeError("登录协议勾选框不唯一，页面结构可能已变化")
+            if agreement_count == 1 and not await agreement.is_checked():
+                await agreement.check(
+                    force=True,
+                    timeout=LOGIN_FORM_TIMEOUT_MS,
+                )
+                if not await agreement.is_checked():
+                    raise RuntimeError("未能勾选智慧树用户协议和隐私政策")
+                logger.info("已勾选智慧树用户协议和隐私政策")
             await page.wait_for_selector(
                 LOGIN_SUBMIT,
                 state="attached",

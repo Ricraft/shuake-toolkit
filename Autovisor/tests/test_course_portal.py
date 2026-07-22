@@ -80,7 +80,12 @@ class _Page:
 
 
 def test_course_portal_url_checks_are_host_scoped():
+    assert is_login_url("https://login.zhihuishu.com/")
+    assert is_login_url(
+        "https://login.zhihuishu.com/?origin=zhs&service=https://example.com/"
+    )
     assert is_login_url("https://passport.zhihuishu.com/login")
+    assert not is_login_url("https://passport.zhihuishu.com/profile")
     assert not is_login_url("https://example.com/?next=passport.zhihuishu.com/login")
     assert is_course_portal_url("https://onlineweb.zhihuishu.com/onlinestuh5")
     assert not is_course_portal_url("https://onlineweb.zhihuishu.com.example.com/")

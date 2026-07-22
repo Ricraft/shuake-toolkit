@@ -5,6 +5,7 @@ import random
 from playwright.async_api import Page
 from playwright._impl._errors import TimeoutError
 from modules.logger import Logger
+from modules.login_selectors import LOGIN_PANEL
 
 # 防御性导入 OpenCV 和 NumPy（由 caller 通过 runtime_deps 提供）
 try:
@@ -118,12 +119,12 @@ async def slider_verify(page: Page):
     isPassed = 0
     for x in range(0, 3):
         try:
-            await page.wait_for_selector(".wall-main", state="attached")
+            await page.wait_for_selector(LOGIN_PANEL, state="attached")
             await page.wait_for_selector(".yidun_bgimg", state="attached")
             logger.info(f"第{x + 1}次尝试过滑块验证...")
             max_loc = await progress_img(page)
             await move_slider(page, max_loc[0])
-            await page.wait_for_selector(".wall-main", state='hidden', timeout=3000)
+            await page.wait_for_selector(LOGIN_PANEL, state='hidden', timeout=3000)
             isPassed = 1
             break
         except TimeoutError:

@@ -23,6 +23,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Aut
 
 from playwright.async_api import async_playwright, Page, BrowserContext
 from modules.logger import Logger
+from modules.login_selectors import (
+    LOGIN_AGREEMENT_CHECKBOX,
+    LOGIN_PANEL,
+    LOGIN_SUBMIT,
+    LOGIN_URL,
+    PASSWORD_INPUT,
+    USERNAME_INPUT,
+)
 
 logger = Logger()
 
@@ -30,7 +38,6 @@ logger = Logger()
 # 设置方式: set ZHS_DEBUG_USER=your_phone && set ZHS_DEBUG_PASS=your_password
 TEST_USERNAME = os.environ.get("ZHS_DEBUG_USER", "")
 TEST_PASSWORD = os.environ.get("ZHS_DEBUG_PASS", "")
-LOGIN_URL = "https://passport.zhihuishu.com/login"
 MY_COURSES_URL = "https://onlineweb.zhihuishu.com/onlinestuh5"
 
 # 页面类型识别模式
@@ -119,19 +126,26 @@ async def test_login(page: Page, username: str, password: str):
     """测试登录流程"""
     print_info("正在访问登录页面: {}".format(LOGIN_URL))
     await page.goto(LOGIN_URL, wait_until="commit")
-    await page.wait_for_selector(".wall-main", state='attached')
+    await page.wait_for_selector(LOGIN_PANEL, state='attached')
     
     # 填写账号密码
-    await page.wait_for_selector("#lUsername", state="attached")
-    await page.wait_for_selector("#lPassword", state="attached")
-    await page.locator('#lUsername').fill(username)
-    await page.locator('#lPassword').fill(password)
+    await page.wait_for_selector(USERNAME_INPUT, state="attached")
+    await page.wait_for_selector(PASSWORD_INPUT, state="attached")
+    await page.locator(USERNAME_INPUT).fill(username)
+    await page.locator(PASSWORD_INPUT).fill(password)
     print_info("已填写账号: {}****{}".format(username[:4], username[-4:]))
+
+    agreement = page.locator(LOGIN_AGREEMENT_CHECKBOX)
+    agreement_count = await agreement.count()
+    if agreement_count > 1:
+        raise RuntimeError("登录协议勾选框不唯一")
+    if agreement_count == 1 and not await agreement.is_checked():
+        await agreement.check(force=True)
     
     # 点击登录
-    await page.wait_for_selector(".wall-sub-btn", state="attached")
+    await page.wait_for_selector(LOGIN_SUBMIT, state="attached")
     await page.wait_for_timeout(500)
-    await page.locator(".wall-sub-btn").first.click()
+    await page.locator(LOGIN_SUBMIT).click()
     print_info("已点击登录按钮")
     
     # 等待滑块验证码或登录成功
@@ -141,7 +155,7 @@ async def test_login(page: Page, username: str, password: str):
     except:
         print_info("未检测到滑块验证码")
     
-    await page.wait_for_selector(".wall-main", state='hidden', timeout=120000)
+    await page.wait_for_selector(LOGIN_PANEL, state='hidden', timeout=120000)
     print_success("登录成功！")
     return True
 

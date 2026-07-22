@@ -11,6 +11,11 @@ import re
 from pathlib import Path
 from typing import Optional
 
+try:
+    from modules.login_selectors import LOGIN_URL
+except ModuleNotFoundError:  # Package import: Autovisor.modules.configs
+    from .login_selectors import LOGIN_URL
+
 
 _NUMBERED_SECTION_RE = re.compile(r"^(?P<base>.+)-(?P<account_id>\d+)$")
 _COURSE_URL_RE = re.compile(
@@ -56,7 +61,7 @@ class Config:
             self._load_values()
 
         # 登录
-        self.login_url = "https://passport.zhihuishu.com/login"
+        self.login_url = LOGIN_URL
         self.block_js = "return document.getElementsByClassName('yidun_jigsaw')[0].src"
         self.bg_js = "return document.getElementsByClassName('yidun_bg-img')[0].src"
         # 弹窗

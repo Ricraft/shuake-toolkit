@@ -35,7 +35,10 @@ from modules.logger import Logger
 from modules.diagnostics import RateLimitedDiagnostics
 from modules.configs import Config
 from modules.login_flow import login_to_zhihuishu
-from modules.course_portal import navigate_to_my_course as navigate_course_portal
+from modules.course_portal import (
+    is_login_url,
+    navigate_to_my_course as navigate_course_portal,
+)
 from modules.tasks import handle_test_page
 from modules.test_capture import TestResponseHandler
 from modules.utils import (
@@ -463,7 +466,7 @@ async def _run_practice_loop(
                     )
 
             try:
-                if "passport" in main_page.url and "login" in main_page.url:
+                if is_login_url(main_page.url):
                     logger.warn("检测到登录页，session 已过期，正在重新登录...")
                     if not await auto_login(context, main_page, config):
                         logger.error("重新登录失败，保持当前页面等待下一次重试")

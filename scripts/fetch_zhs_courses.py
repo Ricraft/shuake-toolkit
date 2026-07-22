@@ -17,8 +17,20 @@ if sys.stderr and sys.stderr.encoding and "gbk" in sys.stderr.encoding.lower():
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
+AUTOVISOR_DIR = os.path.join(SCRIPT_DIR, "Autovisor")
+if AUTOVISOR_DIR not in sys.path:
+    sys.path.insert(0, AUTOVISOR_DIR)
 
 from src.atomic_io import atomic_dump_json
+from modules.course_portal import is_login_url
+from modules.login_selectors import (
+    LOGIN_AGREEMENT_CHECKBOX,
+    LOGIN_PANEL,
+    LOGIN_SUBMIT,
+    LOGIN_URL,
+    PASSWORD_INPUT,
+    USERNAME_INPUT,
+)
 
 
 def _detect_browser_path():
@@ -343,32 +355,39 @@ async def main():
 
         page.on('response', handle_response)
 
-        login_url = "https://passport.zhihuishu.com/login"
+        login_url = LOGIN_URL
 
         print("正在访问智慧树登录页...", flush=True)
         await page.goto(login_url, wait_until="commit")
         await page.wait_for_timeout(2000)
 
-        if "login" not in page.url:
+        if not is_login_url(page.url):
             print("检测到已登录（Cookie生效），跳过登录步骤", flush=True)
         else:
-            await page.wait_for_selector(".wall-main", state="attached")
+            await page.wait_for_selector(LOGIN_PANEL, state="attached")
             print("检测到登录表单", flush=True)
 
             if username and password:
                 print("正在自动填入账号密码...", flush=True)
                 try:
-                    await page.wait_for_selector("#lUsername", state="attached")
-                    await page.wait_for_selector("#lPassword", state="attached")
+                    await page.wait_for_selector(USERNAME_INPUT, state="attached")
+                    await page.wait_for_selector(PASSWORD_INPUT, state="attached")
 
-                    await page.locator('#lUsername').fill(username)
+                    await page.locator(USERNAME_INPUT).fill(username)
                     await page.wait_for_timeout(500)
-                    await page.locator('#lPassword').fill(password)
+                    await page.locator(PASSWORD_INPUT).fill(password)
                     await page.wait_for_timeout(500)
 
-                    await page.wait_for_selector(".wall-sub-btn", state="attached")
+                    agreement = page.locator(LOGIN_AGREEMENT_CHECKBOX)
+                    agreement_count = await agreement.count()
+                    if agreement_count > 1:
+                        raise RuntimeError("登录协议勾选框不唯一")
+                    if agreement_count == 1 and not await agreement.is_checked():
+                        await agreement.check(force=True)
+
+                    await page.wait_for_selector(LOGIN_SUBMIT, state="attached")
                     await page.wait_for_timeout(500)
-                    await page.locator(".wall-sub-btn").first.click()
+                    await page.locator(LOGIN_SUBMIT).click()
                     print("已提交登录信息", flush=True)
 
                     await page.wait_for_timeout(1500)
@@ -380,7 +399,7 @@ async def main():
                     print(f"自动填入失败: {e}", flush=True)
                     print("请手动登录...", flush=True)
                     try:
-                        await page.wait_for_selector(".wall-main", state="hidden", timeout=60000)
+                        await page.wait_for_selector(LOGIN_PANEL, state="hidden", timeout=60000)
                         print("手动登录完成", flush=True)
                     except Exception:
                         print("等待登录超时", flush=True)
@@ -389,7 +408,7 @@ async def main():
             else:
                 print("请手动登录...", flush=True)
                 try:
-                    await page.wait_for_selector(".wall-main", state="hidden", timeout=60000)
+                    await page.wait_for_selector(LOGIN_PANEL, state="hidden", timeout=60000)
                     print("手动登录完成", flush=True)
                 except Exception:
                     print("等待登录超时", flush=True)
@@ -397,7 +416,7 @@ async def main():
                     return
 
             try:
-                await page.wait_for_selector(".wall-main", state="hidden", timeout=8000)
+                await page.wait_for_selector(LOGIN_PANEL, state="hidden", timeout=8000)
                 print("登录成功", flush=True)
             except Exception:
                 print("等待登录表单消失超时，请检查是否需要手动操作", flush=True)
