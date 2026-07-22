@@ -1,8 +1,10 @@
 import json
+import io
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -165,10 +167,12 @@ print('COURSE_CATALOG_IMPORT_OK')
             original_root = fetch_zhs_courses.SCRIPT_DIR
             fetch_zhs_courses.SCRIPT_DIR = str(root)
             try:
-                self.assertEqual(
-                    fetch_zhs_courses.load_config(6),
-                    ("sixth", "p%word"),
-                )
+                output_log = io.StringIO()
+                with redirect_stdout(output_log):
+                    loaded = fetch_zhs_courses.load_config(6)
+                self.assertEqual(loaded, ("sixth", "p%word"))
+                self.assertNotIn("sixth", output_log.getvalue())
+                self.assertIn("s***h", output_log.getvalue())
                 self.assertEqual(
                     fetch_zhs_courses.load_config(0),
                     (None, None),
@@ -193,6 +197,20 @@ print('COURSE_CATALOG_IMPORT_OK')
         self.assertIn("wait_for_login_completion", source)
         self.assertNotIn("#sharingClassed > div:nth-child", source)
         self.assertNotIn("page.click('text=\"我的学堂\"')", source)
+        self.assertNotIn("lesson['secret']", source)
+
+    def test_zhs_account_log_masking_never_returns_the_original_identifier(self):
+        for value in ("a", "ab", "alice", "13800138000"):
+            masked = fetch_zhs_courses._mask_identifier(value)
+            self.assertNotEqual(masked, value)
+            self.assertIn("*", masked)
+
+    def test_zhs_course_credential_log_only_reports_presence(self):
+        status = fetch_zhs_courses._credential_status("raw-course-secret")
+
+        self.assertEqual(status, "已获取")
+        self.assertNotIn("raw-course-secret", status)
+        self.assertEqual(fetch_zhs_courses._credential_status(""), "未提供")
 
 
 class _Response:

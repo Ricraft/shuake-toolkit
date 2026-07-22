@@ -50,6 +50,19 @@ class _ConsoleLogger:
         print(f"错误: {message}", flush=True)
 
 
+def _mask_identifier(value):
+    text = str(value or "")
+    if len(text) <= 2:
+        return "*" * len(text)
+    if len(text) <= 6:
+        return f"{text[0]}***{text[-1]}"
+    return f"{text[:3]}****{text[-2:]}"
+
+
+def _credential_status(value):
+    return "已获取" if value else "未提供"
+
+
 def _detect_browser_path():
     config_path = os.path.join(SCRIPT_DIR, "Autovisor", "configs.ini")
     cfg = configparser.ConfigParser(interpolation=None)
@@ -103,7 +116,10 @@ def load_config(account_index=1):
     try:
         username = config.get(section, 'username', raw=True)
         password = config.get(section, 'password', raw=True)
-        print(f"已从配置文件({section})读取账号: {username}", flush=True)
+        print(
+            f"已从配置文件({section})读取账号: {_mask_identifier(username)}",
+            flush=True,
+        )
         return username, password
     except Exception as e:
         print(f"读取配置文件失败: {e}", flush=True)
@@ -455,7 +471,8 @@ async def main():
                 print(f"   课时名称: {lesson['lessonName']}", flush=True)
                 print(f"   课时编号: {lesson['lessonNum']}", flush=True)
                 print(f"   完成进度: {lesson['progress']}", flush=True)
-                print(f"   密钥: {lesson['secret']}", flush=True)
+                secret_status = _credential_status(lesson["secret"])
+                print(f"   课程访问凭据: {secret_status}", flush=True)
                 print(f"   课程类型: {lesson['courseType']}", flush=True)
                 print(f"   开始时间: {format_time(lesson['courseStartTime'])}", flush=True)
                 print(f"   截止时间: {format_time(lesson['courseEndTime'])}", flush=True)

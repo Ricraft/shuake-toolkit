@@ -42,7 +42,7 @@ from modules.logger import Logger
 from modules.diagnostics import RateLimitedDiagnostics
 from modules.configs import Config
 from modules.course_queue import run_course_queue
-from modules.course_portal import is_login_url
+from modules.course_portal import is_login_page
 from modules.course_session import CourseAuthenticationError
 from modules.hike_course_flow import run_hike_course
 from modules.login_flow import login_to_zhihuishu
@@ -361,7 +361,7 @@ async def learning_loop(
                 current_host = (urlsplit(current_url).hostname or "").lower()
                 if (
                     current_host == "www.zhihuishu.com"
-                    or is_login_url(current_url)
+                    or await is_login_page(page)
                 ):
                     raise CourseAuthenticationError(
                         "视频播放期间被重定向到首页或登录页"

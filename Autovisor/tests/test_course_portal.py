@@ -17,6 +17,7 @@ from modules.course_portal import (
     PORTAL_READY_SELECTOR,
     PORTAL_RENDER_TIMEOUT_MS,
     is_course_portal_url,
+    is_login_page,
     is_login_url,
     navigate_to_my_course,
 )
@@ -41,6 +42,20 @@ class _Logger:
         self.errors.append(message)
 
 
+class _Locator:
+    def __init__(self, page):
+        self.page = page
+
+    async def count(self):
+        return 1 if self.page.login_panel else 0
+
+    async def is_visible(self):
+        return self.page.login_panel
+
+    async def all(self):
+        return [self] if self.page.login_panel else []
+
+
 class _Page:
     def __init__(
         self,
@@ -50,12 +65,14 @@ class _Page:
         goto_failures=(),
         render=False,
         redirect_to=None,
+        login_panel=False,
     ):
         self.url = url
         self.click_failures = set(click_failures)
         self.goto_failures = set(goto_failures)
         self.render = render
         self.redirect_to = redirect_to
+        self.login_panel = login_panel
         self.clicks = []
         self.goto_calls = []
         self.waits = []
@@ -78,6 +95,9 @@ class _Page:
             raise PlaywrightTimeoutError("portal not ready")
         return object()
 
+    def locator(self, _selector):
+        return _Locator(self)
+
 
 def test_course_portal_url_checks_are_host_scoped():
     assert is_login_url("https://login.zhihuishu.com/")
@@ -89,6 +109,15 @@ def test_course_portal_url_checks_are_host_scoped():
     assert not is_login_url("https://example.com/?next=passport.zhihuishu.com/login")
     assert is_course_portal_url("https://onlineweb.zhihuishu.com/onlinestuh5")
     assert not is_course_portal_url("https://onlineweb.zhihuishu.com.example.com/")
+
+
+def test_rendered_login_panel_is_detected_before_url_redirect_finishes():
+    page = _Page(MY_COURSE_PORTAL, login_panel=True)
+
+    assert asyncio.run(is_login_page(page)) is True
+    assert asyncio.run(navigate_to_my_course(page, _Logger())) is False
+    assert page.clicks == []
+    assert page.goto_calls == []
 
 
 def test_login_page_is_rejected_without_navigation():

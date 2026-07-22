@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from modules.course_portal import is_login_url
+from modules.course_portal import is_login_page
 from modules.course_types import CourseProfile
 from modules.utils import optimize_page
 
@@ -52,7 +52,7 @@ class CourseSession:
         status = getattr(response, "status", None)
         if isinstance(status, int) and status >= 400:
             raise CourseNavigationError(f"课程页面返回 HTTP {status}")
-        if is_login_url(page.url):
+        if await is_login_page(page):
             raise CourseAuthenticationError("课程页面重定向到登录页")
         await self.optimizer(
             page,
@@ -62,7 +62,7 @@ class CourseSession:
             self.profile.is_national_wisdom,
             self.profile.is_meeting_class,
         )
-        if is_login_url(page.url):
+        if await is_login_page(page):
             raise CourseAuthenticationError("页面优化期间登录状态失效")
         logger.info("页面优化完成!")
 

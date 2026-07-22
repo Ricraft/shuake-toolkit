@@ -67,12 +67,34 @@ class _Element:
         return self.text
 
 
+class _Locator:
+    def __init__(self, visible):
+        self.visible = visible
+
+    async def count(self):
+        return 1 if self.visible else 0
+
+    async def is_visible(self):
+        return self.visible
+
+    async def all(self):
+        return [self] if self.visible else []
+
+
 class _Page:
-    def __init__(self, titles=None, *, response_status=None, redirect_url=None):
+    def __init__(
+        self,
+        titles=None,
+        *,
+        response_status=None,
+        redirect_url=None,
+        login_panel=False,
+    ):
         self.titles = titles or {}
         self.url = "https://example.com/"
         self.response_status = response_status
         self.redirect_url = redirect_url
+        self.login_panel = login_panel
         self.goto_calls = []
         self.selector_calls = []
 
@@ -88,6 +110,9 @@ class _Page:
         if selector not in self.titles:
             raise PlaywrightTimeoutError(f"missing: {selector}")
         return _Element(self.titles[selector])
+
+    def locator(self, _selector):
+        return _Locator(self.login_panel)
 
 
 class _Logger:
@@ -172,6 +197,25 @@ def test_course_session_rejects_login_redirect_before_optimization():
         optimized.append(True)
 
     page = _Page(redirect_url="https://passport.zhihuishu.com/login")
+    session = CourseSession.from_url(
+        "https://studyvideoh5.zhihuishu.com/course", optimizer=optimizer
+    )
+
+    with pytest.raises(CourseAuthenticationError, match="重定向到登录页"):
+        asyncio.run(session.open(page, object(), _Logger()))
+    assert optimized == []
+
+
+def test_course_session_rejects_rendered_login_before_url_redirect():
+    optimized = []
+
+    async def optimizer(*_args):
+        optimized.append(True)
+
+    page = _Page(
+        redirect_url="https://onlineweb.zhihuishu.com/",
+        login_panel=True,
+    )
     session = CourseSession.from_url(
         "https://studyvideoh5.zhihuishu.com/course", optimizer=optimizer
     )
