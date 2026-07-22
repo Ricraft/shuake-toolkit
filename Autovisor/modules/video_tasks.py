@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 
 from playwright._impl._errors import TargetClosedError
-from playwright.async_api import Page
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from modules.configs import Config
 from modules.course_types import CourseProfile
@@ -20,6 +20,14 @@ from modules.utils import (
 
 
 logger = Logger()
+
+
+def _report_loop_failure(active_logger, label: str, exc: Exception, count: int) -> None:
+    """Log unknown background-loop failures without flooding the Web console."""
+    if count == 1 or count % 5 == 0:
+        active_logger.warn(
+            "%s异常（连续%d次）: %s" % (label, count, repr(exc)[:100])
+        )
 
 
 async def task_monitor(
@@ -61,6 +69,7 @@ async def activate_window(
     poll_interval: float = 2,
 ) -> None:
     active_logger = logger_instance or logger
+    consecutive_errors = 0
     while True:
         try:
             await asyncio.sleep(poll_interval)
@@ -70,11 +79,21 @@ async def activate_window(
                 await asyncio.sleep(0.3)
                 window.restore()
                 active_logger.info("检测到播放窗口最小化,已自动恢复.")
+            consecutive_errors = 0
         except TargetClosedError:
             active_logger.write_log("浏览器已关闭,窗口激活模块已下线.\n")
             return
-        except Exception:
+        except PlaywrightTimeoutError:
+            consecutive_errors = 0
             continue
+        except Exception as exc:
+            consecutive_errors += 1
+            _report_loop_failure(
+                active_logger,
+                "窗口激活",
+                exc,
+                consecutive_errors,
+            )
 
 
 async def video_optimize(
@@ -93,6 +112,7 @@ async def video_optimize(
 
     click_counter = 0
     first_set_rate = True
+    consecutive_errors = 0
     while True:
         try:
             await asyncio.sleep(poll_interval)
@@ -140,11 +160,21 @@ async def video_optimize(
                     if first_set_rate:
                         active_logger.info(f"倍数已设置为 {config.limitSpeed}x")
                         first_set_rate = False
+            consecutive_errors = 0
         except TargetClosedError:
             active_logger.write_log("浏览器已关闭,视频调节模块已下线.\n")
             return
-        except Exception:
+        except PlaywrightTimeoutError:
+            consecutive_errors = 0
             continue
+        except Exception as exc:
+            consecutive_errors += 1
+            _report_loop_failure(
+                active_logger,
+                "视频调节",
+                exc,
+                consecutive_errors,
+            )
 
 
 async def play_video(
@@ -162,6 +192,7 @@ async def play_video(
         return
 
     default_speed = config.limitSpeed
+    consecutive_errors = 0
     while True:
         try:
             await asyncio.sleep(poll_interval)
@@ -190,6 +221,7 @@ async def play_video(
                             "'ended', { value: false, writable: true });"
                         )
                     elif ended:
+                        consecutive_errors = 0
                         continue
 
                 active_logger.info("检测到视频暂停,正在尝试播放.")
@@ -223,27 +255,34 @@ async def play_video(
                 else:
                     active_logger.warn(f"视频播放失败: {play_result['error']}")
             elif profile.is_national_wisdom:
-                try:
-                    status = await page.evaluate(
-                        """() => {
-                            const video = document.querySelector('video');
-                            if (!video) return null;
-                            return {
-                                currentTime: video.currentTime,
-                                duration: video.duration,
-                                readyState: video.readyState,
-                                networkState: video.networkState,
-                                src: video.src || video.currentSrc || null
-                            };
-                        }"""
-                    )
-                    if status and status["duration"] > 0 and status["currentTime"] < 0.5:
-                        await page.evaluate(config.remove_pause)
-                        await page.evaluate('document.querySelector("video").play();')
-                except Exception:
-                    pass
+                status = await page.evaluate(
+                    """() => {
+                        const video = document.querySelector('video');
+                        if (!video) return null;
+                        return {
+                            currentTime: video.currentTime,
+                            duration: video.duration,
+                            readyState: video.readyState,
+                            networkState: video.networkState,
+                            src: video.src || video.currentSrc || null
+                        };
+                    }"""
+                )
+                if status and status["duration"] > 0 and status["currentTime"] < 0.5:
+                    await page.evaluate(config.remove_pause)
+                    await page.evaluate('document.querySelector("video").play();')
+            consecutive_errors = 0
         except TargetClosedError:
             active_logger.write_log("浏览器已关闭,视频播放模块已下线.\n")
             return
-        except Exception:
+        except PlaywrightTimeoutError:
+            consecutive_errors = 0
             continue
+        except Exception as exc:
+            consecutive_errors += 1
+            _report_loop_failure(
+                active_logger,
+                "视频播放",
+                exc,
+                consecutive_errors,
+            )
