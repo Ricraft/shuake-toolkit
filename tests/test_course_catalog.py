@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.course_catalog import (
     CourseCatalogCache,
@@ -183,14 +184,82 @@ print('COURSE_CATALOG_IMPORT_OK')
                 fetch_zhs_courses.SCRIPT_DIR = original_root
 
             output = root / "data" / "zhs_course.json"
-            fetch_zhs_courses.save_course_data(
-                output,
-                "sixth",
-                [{"courseName": "课程"}],
-                [],
+            self.assertTrue(
+                fetch_zhs_courses.save_course_data(
+                    output,
+                    "sixth",
+                    [{"courseName": "课程"}],
+                    [],
+                )
             )
             saved = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(saved["sixth"]["courses"][0]["courseName"], "课程")
+
+    def test_zhs_fetch_response_contract_distinguishes_empty_success_from_failure(self):
+        self.assertEqual(
+            fetch_zhs_courses.extract_share_course_rows(
+                {"code": "200", "result": {"courseOpenDtos": []}}
+            ),
+            [],
+        )
+        self.assertIsNone(
+            fetch_zhs_courses.extract_share_course_rows(
+                {"code": 500, "result": {"courseOpenDtos": []}}
+            )
+        )
+        self.assertIsNone(
+            fetch_zhs_courses.extract_share_course_rows(
+                {"code": 200, "result": {"unexpected": []}}
+            )
+        )
+
+    def test_zhs_fetch_merges_repeated_course_responses_without_duplicates(self):
+        courses = {}
+        fetch_zhs_courses.merge_share_courses(
+            courses,
+            [
+                {
+                    "secret": "same-course",
+                    "courseName": "课程",
+                    "progress": "10%",
+                    "courseType": 0,
+                    "courseStartTime": 0,
+                }
+            ],
+        )
+        fetch_zhs_courses.merge_share_courses(
+            courses,
+            [
+                {
+                    "secret": "same-course",
+                    "courseName": "课程",
+                    "progress": "20%",
+                    "courseType": 0,
+                    "courseStartTime": 0,
+                }
+            ],
+        )
+
+        self.assertEqual(len(courses), 1)
+        course = courses["same-course"]
+        self.assertEqual(course["progress"], "20%")
+        self.assertEqual(course["courseType"], 0)
+        self.assertEqual(course["courseStartTime"], 0)
+
+    def test_zhs_fetch_save_failure_is_reported_to_the_caller(self):
+        with patch.object(
+            fetch_zhs_courses,
+            "atomic_dump_json",
+            side_effect=OSError("disk full"),
+        ):
+            self.assertFalse(
+                fetch_zhs_courses.save_course_data(
+                    "unused.json",
+                    "alice",
+                    [],
+                    [],
+                )
+            )
 
     def test_zhs_fetch_script_reuses_shared_portal_navigation_contract(self):
         source = Path(fetch_zhs_courses.__file__).read_text(encoding="utf-8")
@@ -199,6 +268,7 @@ print('COURSE_CATALOG_IMPORT_OK')
         self.assertIn("login_to_zhihuishu(", source)
         self.assertIn("headless=False", source)
         self.assertIn("create_session_context(browser, runtime_config)", source)
+        self.assertIn("raise SystemExit(asyncio.run(main()))", source)
         self.assertNotIn("#sharingClassed > div:nth-child", source)
         self.assertNotIn("page.click('text=\"我的学堂\"')", source)
         self.assertNotIn("lesson['secret']", source)

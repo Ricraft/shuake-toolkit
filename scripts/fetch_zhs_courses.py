@@ -29,6 +29,14 @@ from modules.login_flow import login_to_zhihuishu
 from modules.utils import load_cookies
 
 
+EXIT_OK = 0
+EXIT_CONFIG = 2
+EXIT_LOGIN = 3
+EXIT_PORTAL = 4
+EXIT_COURSE_RESPONSE = 5
+EXIT_SAVE = 6
+
+
 class _ConsoleLogger:
     """Adapt the shared course portal navigator to script output."""
 
@@ -56,6 +64,56 @@ def _mask_identifier(value):
 
 def _credential_status(value):
     return "已获取" if value else "未提供"
+
+
+def extract_share_course_rows(payload):
+    """Return course rows for a successful known API response.
+
+    ``None`` means the response is invalid or reports failure, while an empty
+    list is a valid response for an account with no current courses.
+    """
+    if not isinstance(payload, dict) or str(payload.get("code")) != "200":
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    rows = result.get("courseOpenDtos")
+    if not isinstance(rows, list):
+        return None
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def normalize_share_course(row):
+    course_name = row.get("courseName", "未知课程")
+    lesson_name = row.get("lessonName")
+    lesson_num = row.get("lessonNum")
+    course_type = row.get("courseType")
+    course_start_time = row.get("courseStartTime")
+    course_end_time = row.get("courseEndTime")
+    return {
+        "courseName": course_name,
+        "lessonName": lesson_name if lesson_name else "(未选择课时)",
+        "lessonNum": lesson_num if lesson_num else "-",
+        "progress": row.get("progress", "0%"),
+        "secret": row.get("secret", ""),
+        "courseType": course_type if course_type is not None else "-",
+        "courseStartTime": (
+            course_start_time if course_start_time is not None else "-"
+        ),
+        "courseEndTime": course_end_time if course_end_time is not None else "-",
+    }
+
+
+def merge_share_courses(target, rows):
+    """Merge repeated portal responses without duplicating course cards."""
+    for row in rows:
+        record = normalize_share_course(row)
+        secret = str(record["secret"] or "").strip()
+        key = secret or "\0".join(
+            str(record[field] or "")
+            for field in ("courseName", "lessonName", "lessonNum", "courseType")
+        )
+        target[key] = record
 
 
 def _browser_candidates(driver, local_app_data=""):
@@ -327,8 +385,10 @@ def save_course_data(file_path, username, courses, notices):
     try:
         atomic_dump_json(file_path, data)
         _safe_print(f"数据已保存到 {file_path}")
+        return True
     except Exception as e:
         _safe_print(f"保存数据失败: {e}")
+        return False
 
 
 async def main():
@@ -337,12 +397,12 @@ async def main():
         runtime_config = load_runtime_config(account_index)
     except Exception as exc:
         print(f"读取配置文件失败: {exc}", flush=True)
-        return
+        return EXIT_CONFIG
     username = runtime_config.username
 
     if not username:
         print("无法获取账号信息，退出", flush=True)
-        return
+        return EXIT_CONFIG
 
     output_file = os.path.join(SCRIPT_DIR, "data", "zhs_course.json")
 
@@ -363,48 +423,34 @@ async def main():
         page = await context.new_page()
         page.set_default_timeout(30_000)
 
-        all_lessons = []
+        lessons_by_key = {}
+        courses_response_captured = False
         notices_data = None
         notices_captured = False
 
         async def handle_response(response):
-            nonlocal notices_captured, notices_data
+            nonlocal courses_response_captured, notices_captured, notices_data
 
             url = response.url
 
             if 'queryShareCourseInfo' in url:
                 try:
                     data = await response.json()
-                    if data.get('code') == 200:
-                        courses = data.get('result', {}).get('courseOpenDtos', [])
-                        if courses:
-                            print(f"捕获到 {len(courses)} 门课程", flush=True)
-                            for course in courses:
-                                course_name = course.get('courseName', '未知课程')
-                                lesson_name = course.get('lessonName')
-                                lesson_num = course.get('lessonNum')
-                                progress = course.get('progress', '0%')
-                                secret = course.get('secret', '')
-                                course_type = course.get('courseType')
-                                course_start_time = course.get('courseStartTime')
-                                course_end_time = course.get('courseEndTime')
-
-                                lesson_info = {
-                                    'courseName': course_name,
-                                    'lessonName': lesson_name if lesson_name else '(未选择课时)',
-                                    'lessonNum': lesson_num if lesson_num else '-',
-                                    'progress': progress,
-                                    'secret': secret,
-                                    'courseType': course_type if course_type else '-',
-                                    'courseStartTime': course_start_time if course_start_time else '-',
-                                    'courseEndTime': course_end_time if course_end_time else '-'
-                                }
-                                all_lessons.append(lesson_info)
-
-                                if lesson_name:
-                                    print(f"  {course_name}: {lesson_name} ({progress})", flush=True)
-                                else:
-                                    print(f"  {course_name}: {progress}", flush=True)
+                    courses = extract_share_course_rows(data)
+                    if courses is None:
+                        print("课程接口返回了无法识别的数据，本次不会覆盖旧课程", flush=True)
+                        return
+                    courses_response_captured = True
+                    merge_share_courses(lessons_by_key, courses)
+                    print(f"捕获到 {len(courses)} 门课程", flush=True)
+                    for course in courses:
+                        course_name = course.get('courseName', '未知课程')
+                        lesson_name = course.get('lessonName')
+                        progress = course.get('progress', '0%')
+                        if lesson_name:
+                            print(f"  {course_name}: {lesson_name} ({progress})", flush=True)
+                        else:
+                            print(f"  {course_name}: {progress}", flush=True)
                 except Exception as e:
                     print(f"解析课程响应失败: {e}", flush=True)
 
@@ -446,14 +492,24 @@ async def main():
         if not login_ok:
             print("登录未完成，课程数据未更新", flush=True)
             await browser.close()
-            return
+            return EXIT_LOGIN
 
         print("正在进入我的学堂并等待课程列表...", flush=True)
         if not await navigate_to_my_course(page, _ConsoleLogger()):
             print("未能进入我的学堂，课程数据未更新", flush=True)
             await browser.close()
-            return
+            return EXIT_PORTAL
         await page.wait_for_timeout(3000)
+
+        if not courses_response_captured:
+            print(
+                "未捕获到有效课程接口响应，可能是页面接口已变化；旧课程数据保持不变",
+                flush=True,
+            )
+            await browser.close()
+            return EXIT_COURSE_RESPONSE
+
+        all_lessons = list(lessons_by_key.values())
 
         print(f"\n{'='*60}", flush=True)
         print(f"课程信息统计: 共 {len(all_lessons)} 节课时", flush=True)
@@ -492,11 +548,14 @@ async def main():
                 print(f"   招募ID: {notice.get('recruitId')}", flush=True)
                 print("-" * 60, flush=True)
 
-        save_course_data(output_file, username, all_lessons, notices_list)
+        if not save_course_data(output_file, username, all_lessons, notices_list):
+            await browser.close()
+            return EXIT_SAVE
 
         await browser.close()
         print("课程读取完成", flush=True)
+        return EXIT_OK
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))
