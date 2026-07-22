@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import 统一启动器 as launcher_module
+from src.config_service import ConfigService
 from src.dependencies import CORE_DEPENDENCIES, OPTIONAL_DEPENDENCIES
 from src.launcher_api import WebLauncherAPI
 from 统一启动器 import UnifiedLauncher
@@ -464,6 +465,46 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("if (!saveResult?.ok)", xxt_source)
         self.assertIn("课程已添加到当前页面，但尚未保存，请重试", xxt_source)
         self.assertNotIn("ta.value = selected.join('\\n')", xxt_source)
+
+    def test_web_save_rejects_non_zhihuishu_course_urls(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        validation_source = frontend.split(
+            "function isZhihuishuCourseUrl", 1
+        )[1].split("async function saveSettings", 1)[0]
+
+        self.assertIn("parsed.protocol === 'https:'", validation_source)
+        self.assertIn("hostname.endsWith('.zhihuishu.com')", validation_source)
+        self.assertIn("if (!isZhihuishuCourseUrl", validation_source)
+        self.assertIn("必须是智慧树官方 HTTPS 地址", validation_source)
+
+    def test_backend_save_rejects_non_zhihuishu_course_urls_before_writing(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._normalize_autovisor_speed = lambda value, _default: value
+        launcher._validate_autovisor_accounts = (
+            ConfigService.validate_autovisor_accounts
+        )
+        launcher.get_web_initial_state = lambda: {"unchanged": True}
+
+        result = launcher.save_settings_from_web(
+            {
+                "yatori": {},
+                "autovisor": {
+                    "accounts": [
+                        {
+                            "account_id": 1,
+                            "limit_speed": "1.0",
+                            "course_urls": ["https://example.com/course"],
+                        }
+                    ]
+                },
+            }
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("第 1 个课程链接无效", result["message"])
+        self.assertEqual(result["state"], {"unchanged": True})
 
     def test_practice_mode_cancel_during_question_bank_start_skips_process(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)

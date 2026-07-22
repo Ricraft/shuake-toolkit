@@ -8,6 +8,7 @@ import io
 import re
 from pathlib import Path
 from typing import Callable, Iterable
+from urllib.parse import parse_qs, urlsplit
 
 from src.atomic_io import atomic_write_text
 
@@ -106,7 +107,60 @@ class ConfigService:
                 or not str(account.get("password", "") or "")
             ):
                 return f"Autovisor 账号 {index} 开启隐藏窗口时必须填写账号和密码"
+            for url_index, course_url in enumerate(
+                ConfigService.split_lines(account.get("course_urls", [])),
+                start=1,
+            ):
+                if not ConfigService.is_zhihuishu_course_url(course_url):
+                    return (
+                        f"Autovisor 账号 {index} 的第 {url_index} 个课程链接无效："
+                        "必须是智慧树官方 HTTPS 地址"
+                    )
         return None
+
+    @staticmethod
+    def is_zhihuishu_course_url(value) -> bool:
+        try:
+            parsed = urlsplit(str(value or "").strip())
+        except ValueError:
+            return False
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        return (
+            parsed.scheme.lower() == "https"
+            and bool(hostname)
+            and (hostname == "zhihuishu.com" or hostname.endswith(".zhihuishu.com"))
+        )
+
+    @staticmethod
+    def normalize_zhihuishu_course_urls(value) -> list[str]:
+        """Trim and deduplicate configured course links in execution order."""
+        normalized = []
+        seen = set()
+        for course_url in ConfigService.split_lines(value):
+            try:
+                parsed = urlsplit(course_url)
+                query = parse_qs(parsed.query)
+            except ValueError:
+                parsed = None
+                query = {}
+            key = ""
+            for field in ("recruitAndCourseId", "secret", "liveId"):
+                values = query.get(field) or []
+                identifier = str(values[0]).strip() if values else ""
+                if identifier:
+                    key = (
+                        f"live:{identifier}"
+                        if field == "liveId"
+                        else f"course:{identifier}"
+                    )
+                    break
+            if not key:
+                key = course_url
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(course_url)
+        return normalized
 
     @staticmethod
     def default_yatori_user(index=None) -> dict:
@@ -420,7 +474,9 @@ class ConfigService:
             for option in list(parser.options(url_section)):
                 if option.lower().startswith("url"):
                     parser.remove_option(url_section, option)
-            course_urls = self.split_lines(account.get("course_urls", []))
+            course_urls = self.normalize_zhihuishu_course_urls(
+                account.get("course_urls", [])
+            )
             if course_urls:
                 for url_index, course_url in enumerate(course_urls, start=1):
                     parser.set(url_section, f"URL{url_index}", course_url)

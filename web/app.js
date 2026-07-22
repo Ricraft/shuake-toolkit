@@ -305,16 +305,16 @@
                 const recruitId = urlObj.searchParams.get('recruitAndCourseId');
                 const secret = urlObj.searchParams.get('secret');
                 const liveId = urlObj.searchParams.get('liveId');
-                if (recruitId) return `recruit:${recruitId}`;
-                if (secret) return `secret:${secret}`;
+                if (recruitId) return `course:${recruitId}`;
+                if (secret) return `course:${secret}`;
                 if (liveId) return `live:${liveId}`;
                 return url;
             } catch (e) {
                 const recruitMatch = url.match(/recruitAndCourseId=([^&]+)/);
                 const secretMatch = url.match(/secret=([^&]+)/);
                 const liveMatch = url.match(/liveId=([^&]+)/);
-                if (recruitMatch) return `recruit:${recruitMatch[1]}`;
-                if (secretMatch) return `secret:${secretMatch[1]}`;
+                if (recruitMatch) return `course:${recruitMatch[1]}`;
+                if (secretMatch) return `course:${secretMatch[1]}`;
                 if (liveMatch) return `live:${liveMatch[1]}`;
                 return url;
             }
@@ -342,6 +342,16 @@
                 merged.push(name);
             });
             return merged;
+        }
+        function isZhihuishuCourseUrl(value) {
+            try {
+                const parsed = new URL(String(value || '').trim());
+                const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+                return parsed.protocol === 'https:'
+                    && (hostname === 'zhihuishu.com' || hostname.endsWith('.zhihuishu.com'));
+            } catch (error) {
+                return false;
+            }
         }
         function showCourseSelectionDialog(accountIndex, courses, textarea) {
             const existing = document.getElementById('course-select-overlay');
@@ -607,6 +617,11 @@
             for (let i = 0; i < a.accounts.length; i++) {
                 if (a.accounts[i].enable_hide_window && (!a.accounts[i].username || !a.accounts[i].password)) {
                     return `Autovisor 账号 ${i + 1} 开启隐藏窗口后，必须填写账号和密码`;
+                }
+                for (let urlIndex = 0; urlIndex < a.accounts[i].course_urls.length; urlIndex++) {
+                    if (!isZhihuishuCourseUrl(a.accounts[i].course_urls[urlIndex])) {
+                        return `Autovisor 账号 ${i + 1} 的第 ${urlIndex + 1} 个课程链接无效：必须是智慧树官方 HTTPS 地址`;
+                    }
                 }
             }
             return '';

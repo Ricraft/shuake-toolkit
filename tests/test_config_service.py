@@ -155,6 +155,40 @@ class ConfigServiceTests(unittest.TestCase):
 
             self.assertEqual(Config(str(path)).password, "100%ready")
 
+    def test_autovisor_course_urls_require_official_https_and_are_deduplicated(self):
+        valid = "https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=one"
+        duplicate = "https://wisdom-mooc.zhihuishu.com/study/index?secret=one"
+        live = "https://lc.zhihuishu.com/live/vod_room.html?liveId=live-1"
+
+        self.assertTrue(ConfigService.is_zhihuishu_course_url(valid))
+        self.assertTrue(ConfigService.is_zhihuishu_course_url(live))
+        self.assertFalse(
+            ConfigService.is_zhihuishu_course_url(
+                "http://studyvideoh5.zhihuishu.com/stuStudy"
+            )
+        )
+        self.assertFalse(
+            ConfigService.is_zhihuishu_course_url(
+                "https://zhihuishu.com.example.com/stuStudy"
+            )
+        )
+        self.assertFalse(ConfigService.is_zhihuishu_course_url("not-a-url"))
+
+        error = ConfigService.validate_autovisor_accounts(
+            [{"course_urls": [valid, "https://example.com/course"]}]
+        )
+        self.assertIn("第 2 个课程链接无效", error)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            service = self.make_service(root)
+            config = {"accounts": [{"account_id": 1, "course_urls": [valid, duplicate, live]}]}
+
+            service.save_autovisor(config)
+            saved_urls = service.load_autovisor()["accounts"][0]["course_urls"]
+
+            self.assertEqual(saved_urls, [valid, live])
+
 
 if __name__ == "__main__":
     unittest.main()
