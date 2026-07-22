@@ -246,6 +246,21 @@ print('COURSE_CATALOG_IMPORT_OK')
         self.assertEqual(course["courseType"], 0)
         self.assertEqual(course["courseStartTime"], 0)
 
+    def test_zhs_fetch_waits_for_course_response_with_a_bounded_timeout(self):
+        ready = asyncio.Event()
+        ready.set()
+        self.assertTrue(
+            asyncio.run(fetch_zhs_courses.wait_for_course_response(ready, timeout=0.1))
+        )
+        self.assertFalse(
+            asyncio.run(
+                fetch_zhs_courses.wait_for_course_response(
+                    asyncio.Event(),
+                    timeout=0.001,
+                )
+            )
+        )
+
     def test_zhs_fetch_save_failure_is_reported_to_the_caller(self):
         with patch.object(
             fetch_zhs_courses,
@@ -269,6 +284,7 @@ print('COURSE_CATALOG_IMPORT_OK')
         self.assertIn("headless=False", source)
         self.assertIn("create_session_context(browser, runtime_config)", source)
         self.assertIn("raise SystemExit(asyncio.run(main()))", source)
+        self.assertNotIn("wait_for_timeout(3000)", source)
         self.assertNotIn("#sharingClassed > div:nth-child", source)
         self.assertNotIn("page.click('text=\"我的学堂\"')", source)
         self.assertNotIn("lesson['secret']", source)

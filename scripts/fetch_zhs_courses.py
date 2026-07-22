@@ -35,6 +35,7 @@ EXIT_LOGIN = 3
 EXIT_PORTAL = 4
 EXIT_COURSE_RESPONSE = 5
 EXIT_SAVE = 6
+COURSE_RESPONSE_TIMEOUT_SECONDS = 20
 
 
 class _ConsoleLogger:
@@ -114,6 +115,15 @@ def merge_share_courses(target, rows):
             for field in ("courseName", "lessonName", "lessonNum", "courseType")
         )
         target[key] = record
+
+
+async def wait_for_course_response(event, timeout=COURSE_RESPONSE_TIMEOUT_SECONDS):
+    """Wait for the portal API instead of relying on an arbitrary page delay."""
+    try:
+        await asyncio.wait_for(event.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+    return True
 
 
 def _browser_candidates(driver, local_app_data=""):
@@ -424,12 +434,12 @@ async def main():
         page.set_default_timeout(30_000)
 
         lessons_by_key = {}
-        courses_response_captured = False
+        courses_response_event = asyncio.Event()
         notices_data = None
         notices_captured = False
 
         async def handle_response(response):
-            nonlocal courses_response_captured, notices_captured, notices_data
+            nonlocal notices_captured, notices_data
 
             url = response.url
 
@@ -440,8 +450,8 @@ async def main():
                     if courses is None:
                         print("课程接口返回了无法识别的数据，本次不会覆盖旧课程", flush=True)
                         return
-                    courses_response_captured = True
                     merge_share_courses(lessons_by_key, courses)
+                    courses_response_event.set()
                     print(f"捕获到 {len(courses)} 门课程", flush=True)
                     for course in courses:
                         course_name = course.get('courseName', '未知课程')
@@ -499,11 +509,10 @@ async def main():
             print("未能进入我的学堂，课程数据未更新", flush=True)
             await browser.close()
             return EXIT_PORTAL
-        await page.wait_for_timeout(3000)
-
-        if not courses_response_captured:
+        if not await wait_for_course_response(courses_response_event):
             print(
-                "未捕获到有效课程接口响应，可能是页面接口已变化；旧课程数据保持不变",
+                "20 秒内未捕获到有效课程接口响应，可能是网络缓慢或页面接口已变化；"
+                "旧课程数据保持不变",
                 flush=True,
             )
             await browser.close()
