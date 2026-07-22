@@ -425,7 +425,10 @@ def save_course_data(file_path, username, courses, notices):
     data = load_existing_course_data(file_path)
 
     data[username] = {
-        "update_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        # CourseAPIService uses the file content as the refresh fingerprint.
+        # Keep sub-second precision so two legitimate refreshes in the same
+        # second (especially repeated empty results) are still distinguishable.
+        "update_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
         "courses": courses,
         "notices": notices
     }

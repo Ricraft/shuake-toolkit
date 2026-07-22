@@ -360,6 +360,31 @@ print('COURSE_CATALOG_IMPORT_OK')
                 )
             )
 
+    def test_zhs_fetch_repeated_save_in_same_second_changes_refresh_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "zhs_course.json"
+            courses = [{"courseName": "课程", "recruitAndCourseId": "course-1"}]
+
+            with patch.object(fetch_zhs_courses, "datetime") as mocked_datetime:
+                mocked_datetime.now.return_value = datetime(2026, 7, 22, 10, 0, 0, 1)
+                self.assertTrue(
+                    fetch_zhs_courses.save_course_data(output, "alice", courses, [])
+                )
+            first_content = output.read_bytes()
+            first_update_time = json.loads(first_content)["alice"]["update_time"]
+
+            with patch.object(fetch_zhs_courses, "datetime") as mocked_datetime:
+                mocked_datetime.now.return_value = datetime(2026, 7, 22, 10, 0, 0, 2)
+                self.assertTrue(
+                    fetch_zhs_courses.save_course_data(output, "alice", courses, [])
+                )
+            second_content = output.read_bytes()
+            second_update_time = json.loads(second_content)["alice"]["update_time"]
+
+            self.assertNotEqual(first_content, second_content)
+            self.assertEqual(first_update_time, "2026-07-22 10:00:00.000001")
+            self.assertEqual(second_update_time, "2026-07-22 10:00:00.000002")
+
     def test_zhs_fetch_script_reuses_shared_portal_navigation_contract(self):
         source = Path(fetch_zhs_courses.__file__).read_text(encoding="utf-8")
 
