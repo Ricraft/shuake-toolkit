@@ -225,6 +225,28 @@ print('COURSE_CATALOG_IMPORT_OK')
             {"recruitAndCourseId": "current-id", "courseName": "课程"}
         )
         self.assertEqual(normalized["secret"], "current-id")
+
+    def test_zhs_fetch_course_api_discovery_is_host_and_path_scoped(self):
+        self.assertTrue(
+            fetch_zhs_courses.is_course_api_candidate(
+                "https://onlineservice-api.zhihuishu.com/gateway/queryShareCourseInfo"
+            )
+        )
+        self.assertTrue(
+            fetch_zhs_courses.is_course_api_candidate(
+                "https://onlineservice-api.zhihuishu.com/gateway/newCourseList"
+            )
+        )
+        self.assertFalse(
+            fetch_zhs_courses.is_course_api_candidate(
+                "https://onlineservice-api.zhihuishu.com.example.com/course/list"
+            )
+        )
+        self.assertFalse(
+            fetch_zhs_courses.is_course_api_candidate(
+                "https://onlineservice-api.zhihuishu.com/gateway/user/profile"
+            )
+        )
         self.assertIsNone(
             fetch_zhs_courses.extract_share_course_rows(
                 {"code": 200, "result": {"unexpected": []}}

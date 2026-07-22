@@ -7,6 +7,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 if sys.stdout and sys.stdout.encoding and "gbk" in sys.stdout.encoding.lower():
     import io
@@ -83,6 +84,19 @@ def extract_share_course_rows(payload):
     if not isinstance(rows, list):
         return None
     return [row for row in rows if isinstance(row, dict)]
+
+
+def is_course_api_candidate(url):
+    """Limit structural response discovery to official course API routes."""
+    try:
+        parsed = urlsplit(str(url or ""))
+    except ValueError:
+        return False
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    return (
+        hostname == "onlineservice-api.zhihuishu.com"
+        and "course" in parsed.path.lower()
+    )
 
 
 def normalize_share_course(row):
@@ -444,12 +458,17 @@ async def main():
 
             url = response.url
 
-            if 'queryShareCourseInfo' in url:
+            if is_course_api_candidate(url):
+                known_course_endpoint = 'queryShareCourseInfo' in url
                 try:
                     data = await response.json()
                     courses = extract_share_course_rows(data)
                     if courses is None:
-                        print("课程接口返回了无法识别的数据，本次不会覆盖旧课程", flush=True)
+                        if known_course_endpoint:
+                            print(
+                                "课程接口返回了无法识别的数据，本次不会覆盖旧课程",
+                                flush=True,
+                            )
                         return
                     merge_share_courses(lessons_by_key, courses)
                     courses_response_event.set()
@@ -463,7 +482,8 @@ async def main():
                         else:
                             print(f"  {course_name}: {progress}", flush=True)
                 except Exception as e:
-                    print(f"解析课程响应失败: {e}", flush=True)
+                    if known_course_endpoint:
+                        print(f"解析课程响应失败: {e}", flush=True)
 
             if 'getImportantNoticeList' in url and not notices_captured:
                 try:
