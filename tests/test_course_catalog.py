@@ -495,10 +495,17 @@ class CourseCatalogServiceTests(unittest.TestCase):
             )
             first = service.get_xuexitong_courses(0, "alice", "secret-a")
             cached = service.get_xuexitong_courses(0, "alice", "changed-password")
+            refreshed = service.get_xuexitong_courses(
+                0,
+                "alice",
+                "secret-a",
+                force_refresh=True,
+            )
             second_user = service.get_xuexitong_courses(0, "bob", "secret-b")
 
             self.assertTrue(first["ok"])
             self.assertEqual(cached, first)
+            self.assertEqual(refreshed, first)
             self.assertEqual(first["courses"][0]["name"], "课程1")
             self.assertEqual(second_user["courses"][0]["name"], "课程2")
             self.assertEqual(len(sessions), 2)
@@ -509,6 +516,8 @@ class CourseCatalogServiceTests(unittest.TestCase):
                 for url, _ in session.gets
             ))
             self.assertFalse(sessions[0].posts[0][1]["allow_redirects"])
+            self.assertEqual(len(sessions[0].posts), 2)
+            self.assertEqual(len(sessions[0].gets), 2)
 
     def test_xuexitong_response_contract_distinguishes_empty_from_failure(self):
         self.assertTrue(is_xuexitong_course_payload({"channelList": []}))

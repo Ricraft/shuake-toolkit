@@ -55,10 +55,16 @@ class WebLauncherAPI:
         return self._launcher.save_qb_settings_from_web(payload)
 
     def get_autovisor_courses(self, account_index=0):
-        return self._launcher.get_autovisor_courses_from_web(account_index)
+        return self._launcher.get_autovisor_courses_from_web(
+            account_index,
+            force_refresh=True,
+        )
 
     def get_xuexitong_courses(self, account_index=0):
-        return self._launcher.get_xuexitong_courses_from_web(account_index)
+        return self._launcher.get_xuexitong_courses_from_web(
+            account_index,
+            force_refresh=True,
+        )
 
     def cancel_shutdown(self):
         return self._launcher._cancel_shutdown()

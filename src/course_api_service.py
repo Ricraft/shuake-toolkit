@@ -209,7 +209,7 @@ class CourseAPIService:
                 self._clear_active_process(process)
         return None
 
-    def get_autovisor_courses(self, account_index=0) -> dict:
+    def get_autovisor_courses(self, account_index=0, *, force_refresh=False) -> dict:
         if not self._fetch_lock.acquire(blocking=False):
             return {
                 "ok": False,
@@ -217,11 +217,19 @@ class CourseAPIService:
             }
         self._fetch_cancelled.clear()
         try:
-            return self._get_autovisor_courses_locked(account_index)
+            return self._get_autovisor_courses_locked(
+                account_index,
+                force_refresh=force_refresh,
+            )
         finally:
             self._fetch_lock.release()
 
-    def _get_autovisor_courses_locked(self, account_index=0) -> dict:
+    def _get_autovisor_courses_locked(
+        self,
+        account_index=0,
+        *,
+        force_refresh=False,
+    ) -> dict:
         try:
             account_index = normalize_account_index(account_index)
         except CourseCatalogError as exc:
@@ -249,10 +257,13 @@ class CourseAPIService:
             }
 
         catalog = self.launcher._get_course_catalog_service()
-        cached = catalog.get_cached("zhs", catalog_account_index, username)
-        if cached is not None:
-            self.launcher.log_system("[课程获取] 账号身份匹配，使用30分钟内缓存")
-            return cached
+        if not force_refresh:
+            cached = catalog.get_cached("zhs", catalog_account_index, username)
+            if cached is not None:
+                self.launcher.log_system("[课程获取] 账号身份匹配，使用30分钟内缓存")
+                return cached
+        else:
+            self.launcher.log_system("[课程获取] 用户主动刷新，跳过本地课程缓存")
 
         base_dir = self.launcher.get_base_dir()
         script_path = Path(base_dir) / "scripts" / "fetch_zhs_courses.py"
@@ -331,7 +342,7 @@ class CourseAPIService:
             self.launcher.log_system(f"[课程获取] 缓存写入失败: {exc}")
         return result
 
-    def get_xuexitong_courses(self, account_index=0) -> dict:
+    def get_xuexitong_courses(self, account_index=0, *, force_refresh=False) -> dict:
         try:
             account_index = normalize_account_index(account_index)
         except CourseCatalogError as exc:
@@ -361,6 +372,7 @@ class CourseAPIService:
                 account_index,
                 username,
                 password,
+                force_refresh=force_refresh,
             )
         except Exception as exc:
             return {"ok": False, "message": f"获取学习通课程失败: {exc}"}

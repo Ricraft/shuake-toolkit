@@ -352,16 +352,21 @@ class CourseCatalogService:
         account_index: int,
         username: str,
         password: str,
+        *,
+        force_refresh: bool = False,
     ) -> dict:
         index = normalize_account_index(account_index)
         username = str(username or "").strip()
         password = str(password or "").strip()
         if not username or not password:
             return {"ok": False, "message": "账号或密码为空，请先在配置中填写"}
-        cached = self.get_cached("xxt", index, username)
-        if cached is not None:
-            self.log("[学习通课程] 账号身份匹配，使用30分钟内缓存")
-            return cached
+        if not force_refresh:
+            cached = self.get_cached("xxt", index, username)
+            if cached is not None:
+                self.log("[学习通课程] 账号身份匹配，使用30分钟内缓存")
+                return cached
+        else:
+            self.log("[学习通课程] 用户主动刷新，跳过本地课程缓存")
 
         session = self._session_for(username)
         headers = {

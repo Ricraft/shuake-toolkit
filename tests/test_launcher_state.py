@@ -216,15 +216,17 @@ class LauncherStateTests(unittest.TestCase):
         }
 
         class Catalog:
-            def get_xuexitong_courses(self, index, username, password):
-                self.request = (index, username, password)
+            def get_xuexitong_courses(
+                self, index, username, password, *, force_refresh=False
+            ):
+                self.request = (index, username, password, force_refresh)
                 return {"ok": True, "courses": []}
 
         catalog = Catalog()
         launcher._get_course_catalog_service = lambda: catalog
 
         self.assertTrue(launcher.get_xuexitong_courses_from_web(0)["ok"])
-        self.assertEqual(catalog.request, (0, "alice", "secret"))
+        self.assertEqual(catalog.request, (0, "alice", "secret", False))
         self.assertFalse(launcher.get_xuexitong_courses_from_web(-1)["ok"])
 
 

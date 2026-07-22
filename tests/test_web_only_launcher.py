@@ -407,6 +407,22 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(calls, [4])
 
+    def test_course_fetch_bridge_forces_user_requested_refresh(self):
+        calls = []
+        launcher = SimpleNamespace(
+            get_autovisor_courses_from_web=lambda index, force_refresh=False: (
+                calls.append(("zhs", index, force_refresh)) or {"ok": True}
+            ),
+            get_xuexitong_courses_from_web=lambda index, force_refresh=False: (
+                calls.append(("xxt", index, force_refresh)) or {"ok": True}
+            ),
+        )
+        bridge = WebLauncherAPI(launcher)
+
+        self.assertTrue(bridge.get_autovisor_courses(2)["ok"])
+        self.assertTrue(bridge.get_xuexitong_courses(3)["ok"])
+        self.assertEqual(calls, [("zhs", 2, True), ("xxt", 3, True)])
+
     def test_practice_mode_stop_bridge_returns_backend_result(self):
         bridge = WebLauncherAPI(
             SimpleNamespace(

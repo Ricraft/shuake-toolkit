@@ -119,6 +119,44 @@ def test_fresh_zhihuishu_result_is_parsed_cached_and_logs_unterminated_tail(tmp_
     assert service._active_process is None
 
 
+def test_forced_zhihuishu_refresh_bypasses_cached_empty_result(tmp_path):
+    course_file = prepare_files(root=tmp_path, initial_data={"alice": {"courses": []}})
+    catalog = FakeCatalog(cached={"ok": True, "courses": []})
+    launcher = make_launcher(tmp_path, catalog)
+    process_calls = []
+
+    def create_process(*_args, **_kwargs):
+        process_calls.append(True)
+        course_file.write_text(
+            json.dumps(
+                {
+                    "alice": {
+                        "courses": [
+                            {
+                                "courseName": "新开放课程",
+                                "recruitAndCourseId": "new-course",
+                                "courseType": 1,
+                            }
+                        ]
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return FakeProcess()
+
+    result = CourseAPIService(
+        launcher,
+        process_factory=create_process,
+    ).get_autovisor_courses(0, force_refresh=True)
+
+    assert process_calls == [True]
+    assert result["ok"] is True
+    assert result["courses"][0]["name"] == "新开放课程"
+    assert any("主动刷新" in line for line in launcher.logs)
+
+
 def test_concurrent_zhihuishu_fetch_is_rejected_before_launch(tmp_path):
     launcher = make_launcher(tmp_path, FakeCatalog())
     process_calls = []

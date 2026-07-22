@@ -1480,11 +1480,17 @@ class UnifiedLauncher:
             self._course_api_service = service
         return service
 
-    def get_autovisor_courses_from_web(self, account_index=0):
-        return self._get_course_api_service().get_autovisor_courses(account_index)
+    def get_autovisor_courses_from_web(self, account_index=0, *, force_refresh=False):
+        return self._get_course_api_service().get_autovisor_courses(
+            account_index,
+            force_refresh=force_refresh,
+        )
 
-    def get_xuexitong_courses_from_web(self, account_index=0):
-        return self._get_course_api_service().get_xuexitong_courses(account_index)
+    def get_xuexitong_courses_from_web(self, account_index=0, *, force_refresh=False):
+        return self._get_course_api_service().get_xuexitong_courses(
+            account_index,
+            force_refresh=force_refresh,
+        )
 
     def start_practice_mode_from_web(self, account_index=0):
         return self._get_practice_mode_service().start(account_index)
