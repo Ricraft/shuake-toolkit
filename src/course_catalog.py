@@ -132,6 +132,17 @@ def _safe_list(value) -> list:
     return value if isinstance(value, list) else []
 
 
+def get_zhs_course_access_id(raw: dict) -> str:
+    """Read the runnable course identifier from old or current API fields."""
+    if not isinstance(raw, dict):
+        return ""
+    for field in ("secret", "recruitAndCourseId"):
+        value = str(raw.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def parse_zhs_course_data(
     data: dict,
     username: str = "",
@@ -159,7 +170,9 @@ def parse_zhs_course_data(
     for raw in _safe_list(account_data.get("courses")):
         if not isinstance(raw, dict):
             continue
-        secret = str(raw.get("secret") or "").strip()
+        secret = get_zhs_course_access_id(raw)
+        if not secret:
+            continue
         try:
             course_type = int(raw.get("courseType", 1))
         except (TypeError, ValueError):

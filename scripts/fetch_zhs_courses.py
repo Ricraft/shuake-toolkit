@@ -23,6 +23,7 @@ if AUTOVISOR_DIR not in sys.path:
     sys.path.insert(0, AUTOVISOR_DIR)
 
 from src.atomic_io import atomic_dump_json
+from src.course_catalog import get_zhs_course_access_id
 from modules.configs import Config
 from modules.course_portal import navigate_to_my_course
 from modules.login_flow import login_to_zhihuishu
@@ -96,7 +97,7 @@ def normalize_share_course(row):
         "lessonName": lesson_name if lesson_name else "(未选择课时)",
         "lessonNum": lesson_num if lesson_num else "-",
         "progress": row.get("progress", "0%"),
-        "secret": row.get("secret", ""),
+        "secret": get_zhs_course_access_id(row),
         "courseType": course_type if course_type is not None else "-",
         "courseStartTime": (
             course_start_time if course_start_time is not None else "-"

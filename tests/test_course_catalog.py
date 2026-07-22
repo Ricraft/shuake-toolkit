@@ -16,6 +16,7 @@ from src.course_catalog import (
     CourseCatalogError,
     CourseCatalogService,
     autovisor_account_section,
+    get_zhs_course_access_id,
     normalize_account_index,
     parse_xuexitong_course_data,
     parse_zhs_course_data,
@@ -104,9 +105,13 @@ print('COURSE_CATALOG_IMPORT_OK')
                         "courseName": "普通课程",
                     },
                     {
-                        "secret": "shared-id",
+                        "recruitAndCourseId": "shared-id",
                         "courseType": 7,
                         "courseName": "共享课程",
+                    },
+                    {
+                        "courseType": 1,
+                        "courseName": "缺少访问标识",
                     },
                 ],
                 "notices": [
@@ -131,6 +136,14 @@ print('COURSE_CATALOG_IMPORT_OK')
         self.assertEqual(parse_zhs_course_data(source, "missing"), ([], "missing"))
         with self.assertRaises(CourseCatalogError):
             parse_zhs_course_data(source)
+
+    def test_zhs_course_access_id_supports_current_and_legacy_fields(self):
+        self.assertEqual(get_zhs_course_access_id({"secret": " old "}), "old")
+        self.assertEqual(
+            get_zhs_course_access_id({"recruitAndCourseId": " current "}),
+            "current",
+        )
+        self.assertEqual(get_zhs_course_access_id({}), "")
 
     def test_xuexitong_parser_deduplicates_and_tolerates_bad_channels(self):
         payload = {
@@ -207,6 +220,11 @@ print('COURSE_CATALOG_IMPORT_OK')
                 {"code": 500, "result": {"courseOpenDtos": []}}
             )
         )
+
+        normalized = fetch_zhs_courses.normalize_share_course(
+            {"recruitAndCourseId": "current-id", "courseName": "课程"}
+        )
+        self.assertEqual(normalized["secret"], "current-id")
         self.assertIsNone(
             fetch_zhs_courses.extract_share_course_rows(
                 {"code": 200, "result": {"unexpected": []}}
