@@ -23,6 +23,7 @@ class CourseAPIService:
         self.launcher = launcher
         self.process_factory = process_factory or subprocess.Popen
         self._fetch_lock = threading.Lock()
+        self._xxt_fetch_lock = threading.Lock()
         self._process_lock = threading.Lock()
         self._active_process = None
         self._fetch_cancelled = threading.Event()
@@ -343,6 +344,25 @@ class CourseAPIService:
         return result
 
     def get_xuexitong_courses(self, account_index=0, *, force_refresh=False) -> dict:
+        if not self._xxt_fetch_lock.acquire(blocking=False):
+            return {
+                "ok": False,
+                "message": "学习通课程获取正在进行中，请稍候",
+            }
+        try:
+            return self._get_xuexitong_courses_locked(
+                account_index,
+                force_refresh=force_refresh,
+            )
+        finally:
+            self._xxt_fetch_lock.release()
+
+    def _get_xuexitong_courses_locked(
+        self,
+        account_index=0,
+        *,
+        force_refresh=False,
+    ) -> dict:
         try:
             account_index = normalize_account_index(account_index)
         except CourseCatalogError as exc:

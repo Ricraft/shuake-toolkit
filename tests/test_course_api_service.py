@@ -177,6 +177,33 @@ def test_concurrent_zhihuishu_fetch_is_rejected_before_launch(tmp_path):
     assert process_calls == []
 
 
+def test_concurrent_xuexitong_fetch_is_rejected_before_login(tmp_path):
+    launcher = make_launcher(tmp_path, FakeCatalog())
+    launcher._load_yatori_config_data = lambda: {
+        "users": [
+            {
+                "accountType": "XUEXITONG",
+                "account": "alice",
+                "password": "secret",
+            }
+        ]
+    }
+    launcher._get_course_catalog_service = lambda: (_ for _ in ()).throw(
+        AssertionError("并发拒绝前不应登录")
+    )
+    service = CourseAPIService(launcher)
+    service._xxt_fetch_lock.acquire()
+    try:
+        result = service.get_xuexitong_courses(0, force_refresh=True)
+    finally:
+        service._xxt_fetch_lock.release()
+
+    assert result == {
+        "ok": False,
+        "message": "学习通课程获取正在进行中，请稍候",
+    }
+
+
 def test_stop_active_fetch_terminates_process_and_is_idempotent(tmp_path):
     launcher = make_launcher(tmp_path, FakeCatalog())
     service = CourseAPIService(launcher)

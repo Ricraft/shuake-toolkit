@@ -503,16 +503,19 @@
                 btn = document.getElementById(`xxt-course-btn-${accountIndex}`);
                 if (!btn) { xxtCourseFetchRunning = false; return; }
                 if (result?.ok) {
-                    btn.innerHTML = '<i class="fas fa-check"></i> 获取完成';
+                    const courses = Array.isArray(result.courses) ? result.courses : [];
+                    const hasCourses = courses.length > 0;
+                    btn.innerHTML = hasCourses
+                        ? '<i class="fas fa-check"></i> 获取完成'
+                        : '<i class="fas fa-info-circle"></i> 暂无课程';
                     setTimeout(() => {
                         const btn2 = document.getElementById(`xxt-course-btn-${accountIndex}`);
                         if (btn2) { btn2.innerHTML = '<i class="fas fa-download"></i> 获取课程'; btn2.disabled = false; }
                     }, 3000);
-                    if (result.courses && result.courses.length > 0) {
-                        showXuexitongCourseDialog(accountIndex, result.courses);
+                    if (hasCourses) {
+                        showXuexitongCourseDialog(accountIndex, courses);
                     } else {
-                        showToast('未获取到课程数据', 'warning');
-                        btn.disabled = false;
+                        showToast('当前账号暂无可刷课程', 'info');
                     }
                 } else {
                     showToast(result?.message || '获取课程失败', 'error');

@@ -490,6 +490,19 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("showToast('当前账号暂无可刷课程', 'info')", function_source)
         self.assertNotIn("未获取到课程数据", function_source)
 
+    def test_xuexitong_course_fetch_treats_empty_success_as_normal_state(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        function_source = frontend.split(
+            "async function getXuexitongCourses", 1
+        )[1].split("function showXuexitongCourseDialog", 1)[0]
+
+        self.assertIn("Array.isArray(result.courses)", function_source)
+        self.assertIn("当前账号暂无可刷课程", function_source)
+        self.assertIn("showToast('当前账号暂无可刷课程', 'info')", function_source)
+        self.assertNotIn("未获取到课程数据", function_source)
+
     def test_course_selection_dialogs_preserve_existing_entries(self):
         frontend = (
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
