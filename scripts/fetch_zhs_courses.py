@@ -6,6 +6,7 @@ import configparser
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 if sys.stdout and sys.stdout.encoding and "gbk" in sys.stdout.encoding.lower():
     import io
@@ -22,16 +23,10 @@ if AUTOVISOR_DIR not in sys.path:
     sys.path.insert(0, AUTOVISOR_DIR)
 
 from src.atomic_io import atomic_dump_json
-from modules.course_portal import is_login_url, navigate_to_my_course
-from modules.login_flow import wait_for_login_completion
-from modules.login_selectors import (
-    LOGIN_AGREEMENT_CHECKBOX,
-    LOGIN_PANEL,
-    LOGIN_SUBMIT,
-    LOGIN_URL,
-    PASSWORD_INPUT,
-    USERNAME_INPUT,
-)
+from modules.configs import Config
+from modules.course_portal import navigate_to_my_course
+from modules.login_flow import login_to_zhihuishu
+from modules.utils import load_cookies
 
 
 class _ConsoleLogger:
@@ -63,7 +58,32 @@ def _credential_status(value):
     return "已获取" if value else "未提供"
 
 
-def _detect_browser_path():
+def _browser_candidates(driver, local_app_data=""):
+    edge_candidates = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    chrome_candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    if local_app_data:
+        edge_candidates.append(
+            os.path.join(
+                local_app_data, "Microsoft", "Edge", "Application", "msedge.exe"
+            )
+        )
+        chrome_candidates.append(
+            os.path.join(
+                local_app_data, "Google", "Chrome", "Application", "chrome.exe"
+            )
+        )
+    if str(driver or "").lower() == "chrome":
+        return chrome_candidates + edge_candidates
+    return edge_candidates + chrome_candidates
+
+
+def _detect_browser_path(preferred_driver=""):
     config_path = os.path.join(SCRIPT_DIR, "Autovisor", "configs.ini")
     cfg = configparser.ConfigParser(interpolation=None)
     try:
@@ -73,57 +93,63 @@ def _detect_browser_path():
     exe_path = cfg.get('browser-option', 'EXE_PATH', fallback='')
     if exe_path and os.path.isfile(exe_path):
         return exe_path
-    candidates = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    ]
-    local = os.environ.get("LOCALAPPDATA", "")
-    if local:
-        candidates.extend([
-            os.path.join(local, "Microsoft", "Edge", "Application", "msedge.exe"),
-            os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
-        ])
+    configured_driver = preferred_driver or cfg.get(
+        'browser-option', 'driver', fallback='edge'
+    )
+    candidates = _browser_candidates(
+        configured_driver,
+        os.environ.get("LOCALAPPDATA", ""),
+    )
     for path in candidates:
         if os.path.isfile(path):
             return path
     return None
 
 
-def load_config(account_index=1):
+def load_runtime_config(account_index=1):
     try:
         account_index = int(account_index)
     except (TypeError, ValueError):
-        print("账号索引格式错误", flush=True)
-        return None, None
+        raise ValueError("账号索引格式错误")
     if account_index < 1:
-        print("账号索引必须从 1 开始", flush=True)
-        return None, None
-    section = (
-        "user-account"
-        if account_index == 1
-        else f"user-account-{account_index}"
-    )
+        raise ValueError("账号索引必须从 1 开始")
 
     config_path = os.path.join(SCRIPT_DIR, "Autovisor", "configs.ini")
-    config = configparser.ConfigParser(interpolation=None)
-    try:
-        config.read(config_path, encoding='utf-8')
-    except UnicodeDecodeError:
-        config.read(config_path, encoding='gbk')
+    return Config(config_path, account_id=account_index)
 
+
+def load_config(account_index=1):
     try:
-        username = config.get(section, 'username', raw=True)
-        password = config.get(section, 'password', raw=True)
+        config = load_runtime_config(account_index)
         print(
-            f"已从配置文件({section})读取账号: {_mask_identifier(username)}",
+            f"已读取账号配置 {config.account_id}: {_mask_identifier(config.username)}",
             flush=True,
         )
-        return username, password
+        return config.username, config.password
     except Exception as e:
         print(f"读取配置文件失败: {e}", flush=True)
         return None, None
+
+
+def resolve_cookie_path(config):
+    cookie_path = Path(config.cookies_file)
+    if not cookie_path.is_absolute():
+        cookie_path = Path(SCRIPT_DIR) / "Autovisor" / cookie_path
+    return cookie_path
+
+
+async def create_session_context(browser, config):
+    context = await browser.new_context()
+    cookie_path = resolve_cookie_path(config)
+    cookie_path.parent.mkdir(parents=True, exist_ok=True)
+    cookies = load_cookies(str(cookie_path))
+    if cookies:
+        try:
+            await context.add_cookies(cookies)
+            print("已加载该账号的登录凭证", flush=True)
+        except Exception as exc:
+            print(f"历史登录凭证无效，将重新登录: {exc}", flush=True)
+    return context, cookie_path
 
 
 def format_time(timestamp):
@@ -307,7 +333,12 @@ def save_course_data(file_path, username, courses, notices):
 
 async def main():
     account_index = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    username, password = load_config(account_index)
+    try:
+        runtime_config = load_runtime_config(account_index)
+    except Exception as exc:
+        print(f"读取配置文件失败: {exc}", flush=True)
+        return
+    username = runtime_config.username
 
     if not username:
         print("无法获取账号信息，退出", flush=True)
@@ -316,14 +347,21 @@ async def main():
     output_file = os.path.join(SCRIPT_DIR, "data", "zhs_course.json")
 
     async with async_playwright() as p:
-        browser_path = _detect_browser_path()
+        browser_path = (
+            runtime_config.exe_path
+            if runtime_config.exe_path and os.path.isfile(runtime_config.exe_path)
+            else _detect_browser_path(runtime_config.driver)
+        )
         if browser_path:
             print(f"使用浏览器: {browser_path}", flush=True)
+        print("课程获取将打开可见浏览器，便于完成登录或安全验证", flush=True)
         browser = await p.chromium.launch(
-            headless=True,
+            headless=False,
             executable_path=browser_path,
         )
-        page = await browser.new_page()
+        context, cookie_path = await create_session_context(browser, runtime_config)
+        page = await context.new_page()
+        page.set_default_timeout(30_000)
 
         all_lessons = []
         notices_data = None
@@ -388,71 +426,27 @@ async def main():
 
         page.on('response', handle_response)
 
-        login_url = LOGIN_URL
-
-        print("正在访问智慧树登录页...", flush=True)
-        await page.goto(login_url, wait_until="commit")
-        await page.wait_for_timeout(2000)
-
-        if not is_login_url(page.url):
-            print("检测到已登录（Cookie生效），跳过登录步骤", flush=True)
-        else:
-            await page.wait_for_selector(LOGIN_PANEL, state="attached")
-            print("检测到登录表单", flush=True)
-
-            if username and password:
-                print("正在自动填入账号密码...", flush=True)
-                try:
-                    await page.wait_for_selector(USERNAME_INPUT, state="attached")
-                    await page.wait_for_selector(PASSWORD_INPUT, state="attached")
-
-                    await page.locator(USERNAME_INPUT).fill(username)
-                    await page.wait_for_timeout(500)
-                    await page.locator(PASSWORD_INPUT).fill(password)
-                    await page.wait_for_timeout(500)
-
-                    agreement = page.locator(LOGIN_AGREEMENT_CHECKBOX)
-                    agreement_count = await agreement.count()
-                    if agreement_count > 1:
-                        raise RuntimeError("登录协议勾选框不唯一")
-                    if agreement_count == 1 and not await agreement.is_checked():
-                        await agreement.check(force=True)
-
-                    await page.wait_for_selector(LOGIN_SUBMIT, state="attached")
-                    await page.wait_for_timeout(500)
-                    await page.locator(LOGIN_SUBMIT).click()
-                    print("已提交登录信息", flush=True)
-
-                    await page.wait_for_timeout(1500)
-
-                    print("正在检查是否需要滑块验证...", flush=True)
-                    await handle_slider_with_retry(page)
-
-                except Exception as e:
-                    print(f"自动填入失败: {e}", flush=True)
-                    print("请手动登录...", flush=True)
-                    try:
-                        await wait_for_login_completion(page, 60_000)
-                        print("手动登录完成", flush=True)
-                    except Exception:
-                        print("等待登录超时", flush=True)
-                        await browser.close()
-                        return
-            else:
-                print("请手动登录...", flush=True)
-                try:
-                    await wait_for_login_completion(page, 60_000)
-                    print("手动登录完成", flush=True)
-                except Exception:
-                    print("等待登录超时", flush=True)
-                    await browser.close()
-                    return
-
-            try:
-                await wait_for_login_completion(page, 8_000)
-                print("登录成功", flush=True)
-            except Exception:
-                print("等待登录表单消失超时，请检查是否需要手动操作", flush=True)
+        print("正在检查智慧树登录状态...", flush=True)
+        try:
+            login_ok = await asyncio.wait_for(
+                login_to_zhihuishu(
+                    context,
+                    page,
+                    runtime_config,
+                    _ConsoleLogger(),
+                    modules=[object()] if runtime_config.enableAutoCaptcha else None,
+                    cookie_path=str(cookie_path),
+                    slider_handler=handle_slider_with_retry,
+                ),
+                timeout=180,
+            )
+        except asyncio.TimeoutError:
+            login_ok = False
+            print("等待登录或安全验证超时", flush=True)
+        if not login_ok:
+            print("登录未完成，课程数据未更新", flush=True)
+            await browser.close()
+            return
 
         print("正在进入我的学堂并等待课程列表...", flush=True)
         if not await navigate_to_my_course(page, _ConsoleLogger()):

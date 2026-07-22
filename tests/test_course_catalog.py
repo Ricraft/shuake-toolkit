@@ -1,3 +1,4 @@
+import asyncio
 import json
 import io
 import subprocess
@@ -7,6 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.course_catalog import (
     CourseCatalogCache,
@@ -194,10 +196,60 @@ print('COURSE_CATALOG_IMPORT_OK')
         source = Path(fetch_zhs_courses.__file__).read_text(encoding="utf-8")
 
         self.assertIn("navigate_to_my_course(page, _ConsoleLogger())", source)
-        self.assertIn("wait_for_login_completion", source)
+        self.assertIn("login_to_zhihuishu(", source)
+        self.assertIn("headless=False", source)
+        self.assertIn("create_session_context(browser, runtime_config)", source)
         self.assertNotIn("#sharingClassed > div:nth-child", source)
         self.assertNotIn("page.click('text=\"我的学堂\"')", source)
         self.assertNotIn("lesson['secret']", source)
+
+    def test_zhs_fetch_context_reuses_account_specific_cookies(self):
+        class Context:
+            def __init__(self):
+                self.cookies = []
+
+            async def add_cookies(self, cookies):
+                self.cookies.extend(cookies)
+
+        class Browser:
+            def __init__(self, context):
+                self.context = context
+
+            async def new_context(self):
+                return self.context
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cookie_file = root / "Autovisor" / "res" / "cookies_6.json"
+            cookie_file.parent.mkdir(parents=True)
+            cookie_file.write_text(
+                json.dumps([{"name": "session", "value": "token"}]),
+                encoding="utf-8",
+            )
+            original_root = fetch_zhs_courses.SCRIPT_DIR
+            fetch_zhs_courses.SCRIPT_DIR = str(root)
+            context = Context()
+            try:
+                loaded_context, resolved_path = asyncio.run(
+                    fetch_zhs_courses.create_session_context(
+                        Browser(context),
+                        SimpleNamespace(cookies_file="res/cookies_6.json"),
+                    )
+                )
+            finally:
+                fetch_zhs_courses.SCRIPT_DIR = original_root
+
+            self.assertIs(loaded_context, context)
+            self.assertEqual(resolved_path, cookie_file)
+            self.assertEqual(context.cookies[0]["name"], "session")
+
+    def test_zhs_browser_candidates_follow_account_preference(self):
+        chrome_first = fetch_zhs_courses._browser_candidates("chrome")
+        edge_first = fetch_zhs_courses._browser_candidates("edge")
+
+        self.assertIn("Google\\Chrome", chrome_first[0])
+        self.assertIn("Microsoft\\Edge", edge_first[0])
+        self.assertEqual(set(chrome_first), set(edge_first))
 
     def test_zhs_account_log_masking_never_returns_the_original_identifier(self):
         for value in ("a", "ab", "alice", "13800138000"):
