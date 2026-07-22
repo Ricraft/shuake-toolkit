@@ -1,8 +1,17 @@
 """智慧树新旧登录页的稳定 URL 与 DOM 契约。"""
 
-LOGIN_URL = (
-    "https://login.zhihuishu.com/?origin=zhs&service="
-    "https://onlineservice-api.zhihuishu.com/gateway/f/v1/login/gologin"
+from urllib.parse import urlencode
+
+LOGIN_RETURN_URL = "https://onlineweb.zhihuishu.com/"
+LOGIN_SERVICE_URL = (
+    "https://onlineservice-api.zhihuishu.com/gateway/f/v1/login/gologin?"
+    + urlencode({"fromurl": LOGIN_RETURN_URL})
+)
+LOGIN_URL = "https://login.zhihuishu.com/?" + urlencode(
+    {
+        "origin": "zhs",
+        "service": LOGIN_SERVICE_URL,
+    }
 )
 LOGIN_HOSTS = frozenset(
     {

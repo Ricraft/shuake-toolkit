@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -12,6 +13,8 @@ from modules.login_selectors import (
     LEGACY_USERNAME_INPUT,
     LOGIN_AGREEMENT_CHECKBOX,
     LOGIN_PANEL,
+    LOGIN_RETURN_URL,
+    LOGIN_SERVICE_URL,
     LOGIN_SUBMIT,
     LOGIN_URL,
     MODERN_LOGIN_PANEL,
@@ -28,6 +31,13 @@ sys.path.remove(_AUTOVISOR_ROOT)
 def test_login_selectors_match_public_login_page_contract():
     assert LOGIN_URL.startswith("https://login.zhihuishu.com/")
     assert "onlineservice-api.zhihuishu.com" in LOGIN_URL
+    outer_query = parse_qs(urlsplit(LOGIN_URL).query)
+    assert outer_query["origin"] == ["zhs"]
+    assert outer_query["service"] == [LOGIN_SERVICE_URL]
+    assert parse_qs(urlsplit(LOGIN_SERVICE_URL).query)["fromurl"] == [
+        LOGIN_RETURN_URL
+    ]
+    assert LOGIN_RETURN_URL == "https://onlineweb.zhihuishu.com/"
     assert MODERN_LOGIN_PANEL == "#login_center_app .login-container"
     assert MODERN_USERNAME_INPUT.endswith('input[name="mobile"]')
     assert MODERN_PASSWORD_INPUT.endswith('input[type="password"]')
