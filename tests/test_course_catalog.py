@@ -17,6 +17,7 @@ from src.course_catalog import (
     CourseCatalogService,
     autovisor_account_section,
     get_zhs_course_access_id,
+    is_xuexitong_course_payload,
     normalize_account_index,
     parse_xuexitong_course_data,
     parse_zhs_course_data,
@@ -465,6 +466,48 @@ class CourseCatalogServiceTests(unittest.TestCase):
                 for url, _ in session.gets
             ))
             self.assertFalse(sessions[0].posts[0][1]["allow_redirects"])
+
+    def test_xuexitong_response_contract_distinguishes_empty_from_failure(self):
+        self.assertTrue(is_xuexitong_course_payload({"channelList": []}))
+        self.assertFalse(is_xuexitong_course_payload({"status": False}))
+        self.assertFalse(is_xuexitong_course_payload({"channelList": {}}))
+
+        class EmptySession(_Session):
+            def get(self, url, **kwargs):
+                self.gets.append((url, kwargs))
+                return _Response(200, {"channelList": []})
+
+        class InvalidSession(_Session):
+            def get(self, url, **kwargs):
+                self.gets.append((url, kwargs))
+                return _Response(200, {"status": False, "message": "未登录"})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            empty_service = CourseCatalogService(
+                Path(temp_dir) / "empty",
+                session_factory=lambda: EmptySession(""),
+            )
+            empty_result = empty_service.get_xuexitong_courses(
+                0, "empty-user", "secret"
+            )
+            self.assertEqual(empty_result, {"ok": True, "courses": []})
+            self.assertEqual(
+                empty_service.get_cached("xxt", 0, "empty-user"),
+                empty_result,
+            )
+
+            invalid_service = CourseCatalogService(
+                Path(temp_dir) / "invalid",
+                session_factory=lambda: InvalidSession(""),
+            )
+            invalid_result = invalid_service.get_xuexitong_courses(
+                0, "invalid-user", "secret"
+            )
+            self.assertFalse(invalid_result["ok"])
+            self.assertIn("登录已失效或接口已变化", invalid_result["message"])
+            self.assertIsNone(
+                invalid_service.get_cached("xxt", 0, "invalid-user")
+            )
 
 
 if __name__ == "__main__":

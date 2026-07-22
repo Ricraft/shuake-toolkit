@@ -280,6 +280,11 @@ def parse_xuexitong_course_data(data: dict) -> list[dict]:
     return courses
 
 
+def is_xuexitong_course_payload(data: Any) -> bool:
+    """Distinguish a valid empty course list from an error/login payload."""
+    return isinstance(data, dict) and isinstance(data.get("channelList"), list)
+
+
 def encrypt_xuexitong_credential(message: str) -> str:
     from Crypto.Cipher import AES
 
@@ -438,6 +443,11 @@ class CourseCatalogService:
             payload = response.json()
         except Exception as exc:
             return {"ok": False, "message": f"课程列表请求失败: {exc}"}
+        if not is_xuexitong_course_payload(payload):
+            return {
+                "ok": False,
+                "message": "课程列表返回格式异常，可能登录已失效或接口已变化",
+            }
         courses = parse_xuexitong_course_data(payload)
         result = {"ok": True, "courses": courses}
         self.put_cached("xxt", index, username, result)
