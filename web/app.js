@@ -319,16 +319,39 @@
                 return url;
             }
         }
+        function mergeCourseUrls(existingUrls, selectedUrls) {
+            const merged = [];
+            const seen = new Set();
+            [...(existingUrls || []), ...(selectedUrls || [])].forEach(value => {
+                const url = String(value || '').trim();
+                if (!url) return;
+                const key = extractCourseKey(url) || url;
+                if (seen.has(key)) return;
+                seen.add(key);
+                merged.push(url);
+            });
+            return merged;
+        }
+        function mergeCourseNames(existingNames, selectedNames) {
+            const merged = [];
+            const seen = new Set();
+            [...(existingNames || []), ...(selectedNames || [])].forEach(value => {
+                const name = String(value || '').trim();
+                if (!name || seen.has(name)) return;
+                seen.add(name);
+                merged.push(name);
+            });
+            return merged;
+        }
         function showCourseSelectionDialog(accountIndex, courses, textarea) {
             const existing = document.getElementById('course-select-overlay');
             if (existing) existing.remove();
-            
-            const existingKeys = new Set(
-                (textarea.value || '')
-                    .split('\n')
-                    .map(s => extractCourseKey(s.trim()))
-                    .filter(Boolean)
-            );
+
+            const existingUrls = (textarea.value || '')
+                .split('\n')
+                .map(s => s.trim())
+                .filter(Boolean);
+            const existingKeys = new Set(existingUrls.map(extractCourseKey).filter(Boolean));
             
             const coursesWithStatus = courses.map(c => {
                 const url = c.url || c.link || '';
@@ -388,10 +411,14 @@
             document.body.appendChild(overlay);
             window._courseSelectTextarea = textarea;
             window._courseSelectCourses = coursesWithStatus;
+            window._courseSelectExistingUrls = existingUrls;
         }
         function closeCourseSelectDialog() {
             const overlay = document.getElementById('course-select-overlay');
             if (overlay) overlay.remove();
+            window._courseSelectTextarea = null;
+            window._courseSelectCourses = null;
+            window._courseSelectExistingUrls = null;
         }
         function toggleCourseItem(el) {
             const cb = el.querySelector('input[type="checkbox"]');
@@ -411,6 +438,7 @@
         async function confirmCourseSelection(accountIndex) {
             const textarea = window._courseSelectTextarea;
             const courses = window._courseSelectCourses;
+            const existingUrls = window._courseSelectExistingUrls || [];
             if (!textarea || !courses) { closeCourseSelectDialog(); return; }
 
             const selected = [];
@@ -426,14 +454,14 @@
                 return;
             }
 
+            const merged = mergeCourseUrls(existingUrls, selected);
             closeCourseSelectDialog();
 
-            const newValue = selected.join('\n');
-            textarea.value = newValue;
+            textarea.value = merged.join('\n');
             if (state.settings?.autovisor?.accounts?.[accountIndex]) {
-                state.settings.autovisor.accounts[accountIndex].course_urls = selected;
+                state.settings.autovisor.accounts[accountIndex].course_urls = merged;
             }
-            showToast(`已选择 ${selected.length} 门课程`, 'success');
+            showToast(`已添加 ${selected.length} 门课程，共 ${merged.length} 门`, 'success');
             try {
                 await saveSettings(false);
             } catch (e) {}
@@ -492,10 +520,9 @@
             const existing = document.getElementById('xxt-course-select-overlay');
             if (existing) existing.remove();
             const card = document.querySelector(`.yatori-account-card[data-index="${accountIndex}"]`);
-            const existingNames = new Set(
-                (card ? (card.querySelector('[data-field="includeCourses"]')?.value || '') : '')
-                    .split('\n').map(s => s.trim()).filter(Boolean)
-            );
+            const existingCourseNames = (card ? (card.querySelector('[data-field="includeCourses"]')?.value || '') : '')
+                .split('\n').map(s => s.trim()).filter(Boolean);
+            const existingNames = new Set(existingCourseNames);
             const coursesWithStatus = courses.map(c => ({
                 ...c,
                 isDuplicate: existingNames.has(c.name) || existingNames.has(c.name?.trim())
@@ -508,11 +535,14 @@
             overlay.innerHTML = `<div class="course-modal"><div class="modal-header"><div><h3 class="modal-title">选择要刷的学习通课程 (账号 ${accountIndex + 1})</h3><div class="modal-subtitle">共 ${courses.length} 门课程，${newCount} 门新课程，${dupCount} 门已添加</div></div><button class="modal-close" onclick="closeXuexitongCourseDialog()">&times;</button></div><div class="modal-body"><div class="course-select-actions"><button class="btn btn-outline btn-sm" onclick="xxtSelectAllCourses()"><i class="fas fa-check-double"></i> 全选</button><button class="btn btn-outline btn-sm" onclick="xxtDeselectAllCourses()"><i class="fas fa-times"></i> 取消全选</button><button class="btn btn-outline btn-sm" onclick="xxtSelectNewCoursesOnly()"><i class="fas fa-plus"></i> 仅选新课程</button></div><div class="course-select-list">${coursesWithStatus.map((c, i) => `<div class="course-select-item${c.isDuplicate ? ' course-duplicate' : ''}" onclick="xxtToggleCourseItem(this)"><input type="checkbox" id="xxt-cb-${i}" ${c.isDuplicate ? '' : 'checked'} ${c.isDuplicate ? 'data-duplicate="true"' : ''}><div class="course-select-info"><div class="course-select-name">${escapeHtml(c.name)}${c.isretire ? '<span class="course-archived-badge">已归档</span>' : ''}${c.isDuplicate ? '<span class="course-duplicate-badge">已添加</span>' : ''}</div><div class="course-select-meta"><span>${escapeHtml(c.courseId || '')}</span>${c.teacher ? `<span>${escapeHtml(c.teacher)}</span>` : ''}${c.school ? `<span>${escapeHtml(c.school)}</span>` : ''}</div></div></div>`).join('')}</div></div><div class="modal-footer"><button class="btn btn-outline" onclick="closeXuexitongCourseDialog()">取消</button><button class="btn btn-primary" onclick="confirmXuexitongCourseSelection(${accountIndex})"><i class="fas fa-check"></i> 确认添加</button></div></div>`;
             document.body.appendChild(overlay);
             window._xxtSelectCourses = coursesWithStatus;
+            window._xxtExistingCourseNames = existingCourseNames;
         }
 
         function closeXuexitongCourseDialog() {
             const overlay = document.getElementById('xxt-course-select-overlay');
             if (overlay) overlay.remove();
+            window._xxtSelectCourses = null;
+            window._xxtExistingCourseNames = null;
         }
 
         function xxtToggleCourseItem(el) {
@@ -537,6 +567,7 @@
 
         async function confirmXuexitongCourseSelection(accountIndex) {
             const courses = window._xxtSelectCourses;
+            const existingCourseNames = window._xxtExistingCourseNames || [];
             if (!courses) { closeXuexitongCourseDialog(); return; }
             const checkboxes = document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]');
             const selected = [];
@@ -544,14 +575,15 @@
                 if (cb.checked && courses[i]) { selected.push(courses[i].name); }
             });
             if (!selected.length) { showToast('请至少选择一门课程', 'warning'); return; }
+            const merged = mergeCourseNames(existingCourseNames, selected);
             closeXuexitongCourseDialog();
             const card = document.querySelector(`.yatori-account-card[data-index="${accountIndex}"]`);
             if (!card) return;
             card.dataset.filterMode = 'include';
             updateYatoriCourseFilterUI(card);
             const ta = card.querySelector('[data-field="includeCourses"]');
-            if (ta) ta.value = selected.join('\n');
-            showToast(`已选择 ${selected.length} 门课程`, 'success');
+            if (ta) ta.value = merged.join('\n');
+            showToast(`已添加 ${selected.length} 门课程，共 ${merged.length} 门`, 'success');
         }
 
         function syncYatoriPlatformCard(card) { if (!card) return; const pc = card.querySelector('[data-field="accountType"]')?.value||'XUEXITONG', rule = getYatoriPlatformModeRule(pc); const b = card.querySelector('[data-role="platform-badge"]'); if(b)b.textContent=`(${getYatoriPlatformLabel(pc)})`; const uh = card.querySelector('[data-role="url-hint"]'); if(uh)uh.textContent=rule.urlHint; const eh = card.querySelector('[data-role="exam-hint"]'); if(eh)eh.textContent=rule.examHint; const vs = card.querySelector('[data-field="videoModel"]'); if(vs)vs.innerHTML=renderMappedOptions(rule.videoModes,getYatoriVideoModeLabels(pc),vs.value); const es = card.querySelector('[data-field="autoExam"]'); if(es)es.innerHTML=renderMappedOptions(rule.examModes,YATORI_EXAM_MODE_LABELS,es.value); const ss = card.querySelector('[data-field="examAutoSubmit"]'); if(ss)ss.innerHTML=renderMappedOptions(rule.submitModes,YATORI_SUBMIT_MODE_LABELS,ss.value); const sw = card.querySelector('[data-role="submit-wrap"]'); if(sw)sw.style.display=rule.examModes.some(v=>v!=='0')?'':'none'; const xxtb = card.querySelector('[id^="xxt-course-btn-"]'); if(xxtb)xxtb.style.display=pc==='XUEXITONG'?'':'none'; }

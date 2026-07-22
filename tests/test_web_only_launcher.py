@@ -433,6 +433,32 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("showToast('当前账号暂无可刷课程', 'info')", function_source)
         self.assertNotIn("未获取到课程数据", function_source)
 
+    def test_course_selection_dialogs_preserve_existing_entries(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        zhs_source = frontend.split(
+            "function showCourseSelectionDialog", 1
+        )[1].split("let xxtCourseFetchRunning", 1)[0]
+        xxt_source = frontend.split(
+            "function showXuexitongCourseDialog", 1
+        )[1].split("function syncYatoriPlatformCard", 1)[0]
+
+        self.assertIn("window._courseSelectExistingUrls = existingUrls", zhs_source)
+        self.assertIn("mergeCourseUrls(existingUrls, selected)", zhs_source)
+        self.assertIn("textarea.value = merged.join('\\n')", zhs_source)
+        self.assertIn("course_urls = merged", zhs_source)
+        self.assertNotIn("textarea.value = selected.join('\\n')", zhs_source)
+
+        self.assertIn(
+            "window._xxtExistingCourseNames = existingCourseNames", xxt_source
+        )
+        self.assertIn(
+            "mergeCourseNames(existingCourseNames, selected)", xxt_source
+        )
+        self.assertIn("ta.value = merged.join('\\n')", xxt_source)
+        self.assertNotIn("ta.value = selected.join('\\n')", xxt_source)
+
     def test_practice_mode_cancel_during_question_bank_start_skips_process(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.processes = {"practice": None}
