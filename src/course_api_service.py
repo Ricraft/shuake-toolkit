@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 
 from src.course_catalog import (
@@ -21,6 +22,34 @@ class CourseAPIService:
     def __init__(self, launcher, *, process_factory=None):
         self.launcher = launcher
         self.process_factory = process_factory or subprocess.Popen
+        self._fetch_lock = threading.Lock()
+        self._process_lock = threading.Lock()
+        self._active_process = None
+        self._fetch_cancelled = threading.Event()
+
+    def _set_active_process(self, process) -> None:
+        with self._process_lock:
+            self._active_process = process
+
+    def _clear_active_process(self, process) -> None:
+        with self._process_lock:
+            if self._active_process is process:
+                self._active_process = None
+
+    def stop_active_fetch(self) -> bool:
+        """Cancel an in-flight Zhihuishu fetch and close its browser process."""
+        self._fetch_cancelled.set()
+        with self._process_lock:
+            process = self._active_process
+        if process is None:
+            return False
+        try:
+            if process.poll() is None:
+                self.launcher._terminate_process_tree(process, "课程获取")
+                return True
+        except Exception as exc:
+            self.launcher.log_system(f"[课程获取] 停止进程失败: {exc}")
+        return False
 
     @staticmethod
     def _file_fingerprint(path: Path):
@@ -128,6 +157,8 @@ class CourseAPIService:
     ) -> dict | None:
         process = None
         try:
+            if self._fetch_cancelled.is_set():
+                return {"ok": False, "message": "课程获取已取消"}
             creationflags, startupinfo = (
                 self.launcher._get_subprocess_window_kwargs()
             )
@@ -145,8 +176,14 @@ class CourseAPIService:
                 startupinfo=startupinfo,
                 env=env,
             )
+            self._set_active_process(process)
+            if self._fetch_cancelled.is_set():
+                self.stop_active_fetch()
+                return {"ok": False, "message": "课程获取已取消"}
             output = self._collect_process_output(process)
             process.wait()
+            if self._fetch_cancelled.is_set():
+                return {"ok": False, "message": "课程获取已取消"}
             if process.returncode != 0:
                 error_lines = output[-10:]
                 error_detail = "\n".join(error_lines) if error_lines else "无输出"
@@ -167,9 +204,24 @@ class CourseAPIService:
                         f"[课程获取] 异常进程清理失败: {cleanup_exc}"
                     )
             return {"ok": False, "message": f"运行脚本失败: {exc}"}
+        finally:
+            if process is not None:
+                self._clear_active_process(process)
         return None
 
     def get_autovisor_courses(self, account_index=0) -> dict:
+        if not self._fetch_lock.acquire(blocking=False):
+            return {
+                "ok": False,
+                "message": "智慧树课程获取正在进行中，请稍候",
+            }
+        self._fetch_cancelled.clear()
+        try:
+            return self._get_autovisor_courses_locked(account_index)
+        finally:
+            self._fetch_lock.release()
+
+    def _get_autovisor_courses_locked(self, account_index=0) -> dict:
         try:
             account_index = normalize_account_index(account_index)
         except CourseCatalogError as exc:
@@ -213,6 +265,8 @@ class CourseAPIService:
         preparation_failure = self._prepare_playwright(python_exe, base_dir)
         if preparation_failure:
             return preparation_failure
+        if self._fetch_cancelled.is_set():
+            return {"ok": False, "message": "课程获取已取消"}
 
         course_file = Path(base_dir) / "data" / "zhs_course.json"
         try:

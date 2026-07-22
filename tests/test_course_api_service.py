@@ -105,16 +105,49 @@ def test_fresh_zhihuishu_result_is_parsed_cached_and_logs_unterminated_tail(tmp_
         )
         return FakeProcess(b"fetch finished without newline")
 
-    result = CourseAPIService(
+    service = CourseAPIService(
         launcher,
         process_factory=create_process,
-    ).get_autovisor_courses(0)
+    )
+    result = service.get_autovisor_courses(0)
 
     assert result["ok"] is True
     assert result["courses"][0]["name"] == "线性代数"
     assert catalog.cache_request == ("zhs", 1, "alice")
     assert catalog.saved[:3] == ("zhs", 1, "alice")
     assert any("fetch finished without newline" in line for line in launcher.logs)
+    assert service._active_process is None
+
+
+def test_concurrent_zhihuishu_fetch_is_rejected_before_launch(tmp_path):
+    launcher = make_launcher(tmp_path, FakeCatalog())
+    process_calls = []
+    service = CourseAPIService(
+        launcher,
+        process_factory=lambda *_args, **_kwargs: process_calls.append(True),
+    )
+    service._fetch_lock.acquire()
+    try:
+        result = service.get_autovisor_courses(0)
+    finally:
+        service._fetch_lock.release()
+
+    assert result == {
+        "ok": False,
+        "message": "智慧树课程获取正在进行中，请稍候",
+    }
+    assert process_calls == []
+
+
+def test_stop_active_fetch_terminates_process_and_is_idempotent(tmp_path):
+    launcher = make_launcher(tmp_path, FakeCatalog())
+    service = CourseAPIService(launcher)
+    process = FakeProcess()
+    service._set_active_process(process)
+
+    assert service.stop_active_fetch() is True
+    assert launcher.terminated == ["课程获取"]
+    assert service.stop_active_fetch() is False
 
 
 def test_unchanged_course_content_is_rejected_even_if_script_succeeds(tmp_path):
@@ -152,13 +185,15 @@ def test_output_pipe_failure_terminates_orphan_fetch_process(tmp_path):
     launcher = make_launcher(tmp_path, FakeCatalog())
     process = FakeProcess(read_error=BrokenOutput())
 
-    result = CourseAPIService(
+    service = CourseAPIService(
         launcher,
         process_factory=lambda *_args, **_kwargs: process,
-    ).get_autovisor_courses(0)
+    )
+    result = service.get_autovisor_courses(0)
 
     assert result == {"ok": False, "message": "运行脚本失败: pipe closed"}
     assert launcher.terminated == ["课程获取"]
+    assert service._active_process is None
 
 
 def test_mismatched_course_identity_is_rejected_without_caching(tmp_path):

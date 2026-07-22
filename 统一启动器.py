@@ -1614,6 +1614,9 @@ class UnifiedLauncher:
     def stop_all(self):
         """停止所有脚本"""
         self.log_system("正在停止所有运行中的脚本...")
+        course_service = getattr(self, '_course_api_service', None)
+        if course_service is not None:
+            course_service.stop_active_fetch()
         self.stop_yatori()
         self.stop_autovisor()
         self.stop_practice_mode()
@@ -1713,11 +1716,18 @@ class UnifiedLauncher:
             if self._request_web_exit_confirmation():
                 return
 
-        if any(self.running.get(name) for name in ('yatori', 'autovisor', 'practice')):
+        core_task_running = any(
+            self.running.get(name) for name in ('yatori', 'autovisor', 'practice')
+        )
+        if core_task_running:
             if not confirmed:
                 self.log_system("有核心任务正在运行，取消未确认的退出请求。")
                 return
             self.stop_all()
+        else:
+            course_service = getattr(self, '_course_api_service', None)
+            if course_service is not None:
+                course_service.stop_active_fetch()
         self.stop_question_bank()
         self._close_main_window()
 

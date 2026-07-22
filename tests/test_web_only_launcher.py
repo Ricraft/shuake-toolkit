@@ -116,6 +116,49 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertNotIn("close", events)
         self.assertTrue(any("取消未确认" in entry for entry in events))
 
+    def test_confirmed_exit_stops_active_course_fetch_without_core_task(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = None
+        launcher.running = {"yatori": False, "autovisor": False, "practice": False}
+        events = []
+        launcher._course_api_service = SimpleNamespace(
+            stop_active_fetch=lambda: events.append("stop_course_fetch")
+        )
+        launcher._preference_enabled = lambda *_args, **_kwargs: False
+        launcher.stop_question_bank = lambda: events.append("stop_question_bank")
+        launcher._close_main_window = lambda: events.append("close")
+
+        launcher.on_closing(confirmed=True)
+
+        self.assertEqual(
+            events,
+            ["stop_course_fetch", "stop_question_bank", "close"],
+        )
+
+    def test_stop_all_also_stops_active_course_fetch(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        events = []
+        launcher._course_api_service = SimpleNamespace(
+            stop_active_fetch=lambda: events.append("stop_course_fetch")
+        )
+        launcher.log_system = lambda _message: None
+        launcher.stop_yatori = lambda: events.append("stop_yatori")
+        launcher.stop_autovisor = lambda: events.append("stop_autovisor")
+        launcher.stop_practice_mode = lambda: events.append("stop_practice")
+
+        result = launcher.stop_all()
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(
+            events,
+            [
+                "stop_course_fetch",
+                "stop_yatori",
+                "stop_autovisor",
+                "stop_practice",
+            ],
+        )
+
     def test_web_start_action_returns_the_actual_launch_rejection(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher._last_start_error = {}
