@@ -38,6 +38,7 @@ EXIT_PORTAL = 4
 EXIT_COURSE_RESPONSE = 5
 EXIT_SAVE = 6
 COURSE_RESPONSE_TIMEOUT_SECONDS = 20
+COURSE_RESPONSE_SETTLE_SECONDS = 0.75
 
 
 class _ConsoleLogger:
@@ -132,12 +133,30 @@ def merge_share_courses(target, rows):
         target[key] = record
 
 
-async def wait_for_course_response(event, timeout=COURSE_RESPONSE_TIMEOUT_SECONDS):
-    """Wait for the portal API instead of relying on an arbitrary page delay."""
+async def wait_for_course_response(
+    event,
+    timeout=COURSE_RESPONSE_TIMEOUT_SECONDS,
+    settle_timeout=0,
+):
+    """Wait for a valid response and optionally for a quiet aggregation window."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
     except asyncio.TimeoutError:
         return False
+    while settle_timeout > 0:
+        event.clear()
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+        try:
+            await asyncio.wait_for(
+                event.wait(),
+                timeout=min(settle_timeout, remaining),
+            )
+        except asyncio.TimeoutError:
+            break
     return True
 
 
@@ -530,7 +549,10 @@ async def main():
             print("未能进入我的学堂，课程数据未更新", flush=True)
             await browser.close()
             return EXIT_PORTAL
-        if not await wait_for_course_response(courses_response_event):
+        if not await wait_for_course_response(
+            courses_response_event,
+            settle_timeout=COURSE_RESPONSE_SETTLE_SECONDS,
+        ):
             print(
                 "20 秒内未捕获到有效课程接口响应，可能是网络缓慢或页面接口已变化；"
                 "旧课程数据保持不变",

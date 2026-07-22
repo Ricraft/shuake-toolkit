@@ -302,6 +302,34 @@ print('COURSE_CATALOG_IMPORT_OK')
             )
         )
 
+    def test_zhs_fetch_waits_until_repeated_responses_settle(self):
+        class SequencedEvent:
+            def __init__(self):
+                self.wait_count = 0
+                self.clear_count = 0
+
+            async def wait(self):
+                self.wait_count += 1
+                if self.wait_count <= 2:
+                    return
+                await asyncio.sleep(1)
+
+            def clear(self):
+                self.clear_count += 1
+
+        event = SequencedEvent()
+        result = asyncio.run(
+            fetch_zhs_courses.wait_for_course_response(
+                event,
+                timeout=0.2,
+                settle_timeout=0.01,
+            )
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(event.wait_count, 3)
+        self.assertEqual(event.clear_count, 2)
+
     def test_zhs_fetch_save_failure_is_reported_to_the_caller(self):
         with patch.object(
             fetch_zhs_courses,
