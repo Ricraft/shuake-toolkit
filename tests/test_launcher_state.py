@@ -8,6 +8,42 @@ from 统一启动器 import UnifiedLauncher
 
 
 class LauncherStateTests(unittest.TestCase):
+    def test_failed_runtime_exit_is_visible_and_never_triggers_auto_shutdown(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.running = {"yatori": False, "autovisor": False}
+        failures = []
+        notifications = []
+        shutdowns = []
+        launcher._record_runtime_failure = lambda core, message: failures.append(
+            (core, message)
+        )
+        launcher._notify_runtime_event = (
+            lambda title, message, error=False: notifications.append(
+                (title, message, error)
+            )
+        )
+        launcher._maybe_shutdown_after_completion = lambda: shutdowns.append(True)
+
+        launcher._handle_runtime_exit("autovisor", 3, False)
+
+        self.assertEqual(
+            failures,
+            [("autovisor", "Autovisor 已退出，返回码: 3")],
+        )
+        self.assertEqual(
+            notifications,
+            [("Autovisor 运行异常", "Autovisor 已退出，返回码: 3", True)],
+        )
+        self.assertEqual(shutdowns, [])
+
+        failures.clear()
+        notifications.clear()
+        launcher._handle_runtime_exit("autovisor", 0, False)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(notifications), 1)
+        self.assertFalse(notifications[0][2])
+        self.assertEqual(shutdowns, [True])
+
     def test_runtime_state_exposes_active_practice_account(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.running = {

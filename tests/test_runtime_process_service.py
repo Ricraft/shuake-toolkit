@@ -37,6 +37,7 @@ class FakeLauncher:
         self.stopped = []
         self.exits = []
         self.notifications = []
+        self.failures = []
         self.terminated = []
         self.stream_error = None
 
@@ -59,6 +60,9 @@ class FakeLauncher:
 
     def _notify_runtime_event(self, title, message, error=False):
         self.notifications.append((title, message, error))
+
+    def _record_runtime_failure(self, core, message):
+        self.failures.append((core, message))
 
     def _terminate_process_tree(self, process, label):
         process.terminated = True
@@ -171,6 +175,10 @@ class RuntimeProcessServiceTests(unittest.TestCase):
             launcher.notifications,
             [("Core 启动失败", "pipe closed", True)],
         )
+        self.assertEqual(
+            launcher.failures,
+            [("core", "Core 启动失败: pipe closed")],
+        )
         self.assertIn("Core 启动失败: pipe closed", launcher.logs)
 
     def test_thread_start_failure_releases_claim_and_is_raised(self):
@@ -255,6 +263,10 @@ class RuntimeProcessServiceTests(unittest.TestCase):
         self.assertEqual(
             launcher.notifications,
             [("刷题模式 运行异常", message, True)],
+        )
+        self.assertEqual(
+            launcher.failures,
+            [("core", message)],
         )
 
     def test_monitor_thread_failure_terminates_process_and_clears_state(self):

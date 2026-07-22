@@ -801,23 +801,32 @@ class UnifiedLauncher:
         self._play_feedback_sound(error=error)
         self._after(0, lambda: self._show_error(title, message) if error else self._show_info(title, message))
 
+    def _record_runtime_failure(self, script_type, message):
+        """Persist a runtime failure in the matching Web-visible log stream."""
+        target = 'autovisor' if script_type == 'practice' else script_type
+        if target in getattr(self, 'log_history', {}):
+            self.log(target, f"[ERROR] {message}")
+
     def _handle_runtime_exit(self, script_type, return_code, stop_requested):
         if stop_requested:
             return
 
         label = "Yatori" if script_type == 'yatori' else "Autovisor"
         if return_code:
+            message = f"{label} 已退出，返回码: {return_code}"
+            self._record_runtime_failure(script_type, message)
             self._notify_runtime_event(
                 f"{label} 运行异常",
-                f"{label} 已退出，返回码: {return_code}",
+                message,
                 error=True,
             )
-        else:
-            self._notify_runtime_event(
-                f"{label} 任务结束",
-                f"{label} 已正常停止或完成任务。",
-                error=False,
-            )
+            return
+
+        self._notify_runtime_event(
+            f"{label} 任务结束",
+            f"{label} 已正常停止或完成任务。",
+            error=False,
+        )
 
         if not self.running.get('yatori') and not self.running.get('autovisor'):
             self._maybe_shutdown_after_completion()

@@ -84,3 +84,13 @@ def test_new_start_discards_previous_terminal_state():
     assert activity["phase"] == "starting"
     assert activity["last_error"] is None
     assert activity["course"] is None
+
+
+def test_nonzero_process_exit_is_rendered_as_failure():
+    activity = summarize_autovisor_activity(
+        ["[ERROR] Autovisor 已退出，返回码: 3"]
+    )
+
+    assert activity["phase"] == "failed"
+    assert activity["label"] == "运行失败"
+    assert activity["last_error"] == "Autovisor 已退出，返回码: 3"

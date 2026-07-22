@@ -84,6 +84,7 @@ class RuntimeProcessService:
                 self._cleanup_failed_process(process, label)
                 self.launcher.log_system(f"{label} 启动失败: {exc}")
                 self.launcher._mark_runtime_stopped(core, process)
+                self._record_failure(core, f"{label} 启动失败: {exc}")
                 self.launcher._notify_runtime_event(
                     f"{label} 启动失败",
                     str(exc),
@@ -128,6 +129,10 @@ class RuntimeProcessService:
                     message = f"{label} 已退出，返回码: {return_code}"
                     self.launcher.log_system(message)
                     if not stop_requested:
+                        self._record_failure(
+                            output_source or core,
+                            message,
+                        )
                         self.launcher._notify_runtime_event(
                             f"{label} 运行异常",
                             message,
@@ -141,6 +146,10 @@ class RuntimeProcessService:
                 self._cleanup_failed_process(process, label)
                 self.launcher._mark_runtime_stopped(core, process)
                 self.launcher.log_system(f"{label} 运行失败: {exc}")
+                self._record_failure(
+                    output_source or core,
+                    f"{label} 运行失败: {exc}",
+                )
                 self.launcher._notify_runtime_event(
                     f"{label} 运行失败",
                     str(exc),
@@ -155,6 +164,11 @@ class RuntimeProcessService:
             self.launcher._mark_runtime_stopped(core, process)
             raise
         return True
+
+    def _record_failure(self, core: str, message: str) -> None:
+        recorder = getattr(self.launcher, "_record_runtime_failure", None)
+        if callable(recorder):
+            recorder(core, message)
 
     def _cancelled(self, core: str, label: str) -> bool:
         if not self.launcher.stop_requested.get(core):
