@@ -22,7 +22,8 @@ if AUTOVISOR_DIR not in sys.path:
     sys.path.insert(0, AUTOVISOR_DIR)
 
 from src.atomic_io import atomic_dump_json
-from modules.course_portal import is_login_url
+from modules.course_portal import is_login_url, navigate_to_my_course
+from modules.login_flow import wait_for_login_completion
 from modules.login_selectors import (
     LOGIN_AGREEMENT_CHECKBOX,
     LOGIN_PANEL,
@@ -31,6 +32,22 @@ from modules.login_selectors import (
     PASSWORD_INPUT,
     USERNAME_INPUT,
 )
+
+
+class _ConsoleLogger:
+    """Adapt the shared course portal navigator to script output."""
+
+    @staticmethod
+    def info(message, **_kwargs):
+        print(message, flush=True)
+
+    @staticmethod
+    def warn(message, **_kwargs):
+        print(f"警告: {message}", flush=True)
+
+    @staticmethod
+    def error(message, **_kwargs):
+        print(f"错误: {message}", flush=True)
 
 
 def _detect_browser_path():
@@ -399,7 +416,7 @@ async def main():
                     print(f"自动填入失败: {e}", flush=True)
                     print("请手动登录...", flush=True)
                     try:
-                        await page.wait_for_selector(LOGIN_PANEL, state="hidden", timeout=60000)
+                        await wait_for_login_completion(page, 60_000)
                         print("手动登录完成", flush=True)
                     except Exception:
                         print("等待登录超时", flush=True)
@@ -408,7 +425,7 @@ async def main():
             else:
                 print("请手动登录...", flush=True)
                 try:
-                    await page.wait_for_selector(LOGIN_PANEL, state="hidden", timeout=60000)
+                    await wait_for_login_completion(page, 60_000)
                     print("手动登录完成", flush=True)
                 except Exception:
                     print("等待登录超时", flush=True)
@@ -416,27 +433,16 @@ async def main():
                     return
 
             try:
-                await page.wait_for_selector(LOGIN_PANEL, state="hidden", timeout=8000)
+                await wait_for_login_completion(page, 8_000)
                 print("登录成功", flush=True)
             except Exception:
                 print("等待登录表单消失超时，请检查是否需要手动操作", flush=True)
 
-        print("正在点击'我的学堂'...", flush=True)
-        try:
-            await page.click('text="我的学堂"')
-            print("已点击'我的学堂'", flush=True)
-        except Exception as e:
-            print(f"点击'我的学堂'失败: {e}", flush=True)
-        await page.wait_for_timeout(5000)
-
-        print("正在查找目标元素...", flush=True)
-        try:
-            await page.wait_for_selector('#sharingClassed > div:nth-child(2) > div > span.message', timeout=5000)
-            await page.click('#sharingClassed > div:nth-child(2) > div > span.message')
-            print("已点击目标元素", flush=True)
-        except Exception as e:
-            print(f"目标元素点击失败: {e}", flush=True)
-
+        print("正在进入我的学堂并等待课程列表...", flush=True)
+        if not await navigate_to_my_course(page, _ConsoleLogger()):
+            print("未能进入我的学堂，课程数据未更新", flush=True)
+            await browser.close()
+            return
         await page.wait_for_timeout(3000)
 
         print(f"\n{'='*60}", flush=True)

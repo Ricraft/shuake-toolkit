@@ -12,12 +12,32 @@ from modules.login_selectors import (
     LOGIN_AGREEMENT_CHECKBOX,
     LOGIN_FORM_TIMEOUT_MS,
     LOGIN_PANEL,
+    LOGIN_REDIRECT_TIMEOUT_MS,
     LOGIN_SUBMIT,
     MANUAL_LOGIN_TIMEOUT_MS,
     PASSWORD_INPUT,
     USERNAME_INPUT,
 )
 from modules.utils import save_cookies
+
+
+async def wait_for_login_completion(page, timeout: int) -> None:
+    """Wait until the login form and login host have both been left."""
+    await page.wait_for_selector(
+        LOGIN_PANEL,
+        state="hidden",
+        timeout=timeout,
+    )
+    if not is_login_url(page.url):
+        return
+
+    await page.wait_for_url(
+        lambda url: not is_login_url(str(url)),
+        wait_until="commit",
+        timeout=min(timeout, LOGIN_REDIRECT_TIMEOUT_MS),
+    )
+    if is_login_url(page.url):
+        raise RuntimeError("登录表单已隐藏，但页面仍停留在智慧树登录地址")
 
 
 async def login_to_zhihuishu(
@@ -92,11 +112,7 @@ async def login_to_zhihuishu(
             wait_timeout = MANUAL_LOGIN_TIMEOUT_MS
             logger.info("等待手动完成登录...")
 
-        await page.wait_for_selector(
-            LOGIN_PANEL,
-            state="hidden",
-            timeout=wait_timeout,
-        )
+        await wait_for_login_completion(page, wait_timeout)
         cookies = await context.cookies()
         cookie_saver(cookies, cookie_path)
         logger.info(f"登录成功,凭证已保存到: {cookie_path}")

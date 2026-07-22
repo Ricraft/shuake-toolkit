@@ -15,6 +15,7 @@ from modules.login_selectors import (
     LOGIN_AGREEMENT_CHECKBOX,
     LOGIN_FORM_TIMEOUT_MS,
     LOGIN_PANEL,
+    LOGIN_REDIRECT_TIMEOUT_MS,
     LOGIN_URL,
     MANUAL_LOGIN_TIMEOUT_MS,
 )
@@ -66,16 +67,19 @@ class _Page:
         fail_hidden=False,
         agreement_count=1,
         agreement_checked=False,
+        fail_redirect=False,
     ):
         self.url = url
         self.fail_hidden = fail_hidden
         self.agreement_count = agreement_count
         self.agreement_checked = agreement_checked
+        self.fail_redirect = fail_redirect
         self.goto_calls = []
         self.waits = []
         self.fills = []
         self.clicks = []
         self.checks = []
+        self.url_waits = []
 
     async def goto(self, url, **options):
         self.goto_calls.append((url, options))
@@ -84,6 +88,13 @@ class _Page:
         self.waits.append((selector, options))
         if self.fail_hidden and selector == LOGIN_PANEL and options.get("state") == "hidden":
             raise PlaywrightTimeoutError("login timeout")
+
+    async def wait_for_url(self, predicate, **options):
+        self.url_waits.append(options)
+        if self.fail_redirect:
+            raise PlaywrightTimeoutError("redirect timeout")
+        self.url = "https://onlineweb.zhihuishu.com/"
+        assert predicate(self.url)
 
     def locator(self, selector):
         return _Locator(selector, self)
@@ -131,6 +142,9 @@ def test_automatic_login_is_bounded_and_saves_cookies_after_success():
         )
     ]
     assert page.agreement_checked is True
+    assert page.url_waits == [
+        {"wait_until": "commit", "timeout": LOGIN_REDIRECT_TIMEOUT_MS}
+    ]
     assert saved == [([{"name": "session", "value": "token"}], "account-cookies.json")]
 
 
@@ -216,6 +230,48 @@ def test_automatic_login_timeout_returns_failure_and_does_not_save_cookies():
     assert result is False
     assert saved == []
     assert any("自动登录超时" in message for message in logger.errors)
+
+
+def test_hidden_form_without_leaving_login_host_is_not_reported_as_success():
+    page = _Page(fail_redirect=True)
+    saved = []
+
+    result = asyncio.run(
+        login_to_zhihuishu(
+            _Context(),
+            page,
+            _config(),
+            _Logger(),
+            cookie_path="cookies.json",
+            cookie_saver=lambda *args: saved.append(args),
+        )
+    )
+
+    assert result is False
+    assert saved == []
+    assert page.url_waits == [
+        {"wait_until": "commit", "timeout": LOGIN_REDIRECT_TIMEOUT_MS}
+    ]
+
+
+def test_existing_authenticated_redirect_skips_the_login_form():
+    page = _Page(url="https://onlineweb.zhihuishu.com/")
+
+    result = asyncio.run(
+        login_to_zhihuishu(
+            _Context(),
+            page,
+            _config(),
+            _Logger(),
+            cookie_path="cookies.json",
+            cookie_saver=lambda *_args: None,
+        )
+    )
+
+    assert result is True
+    assert page.waits == []
+    assert page.fills == []
+    assert page.clicks == []
 
 
 def test_captcha_handler_runs_only_for_configured_automatic_login():

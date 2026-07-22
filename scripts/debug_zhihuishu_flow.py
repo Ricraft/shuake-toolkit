@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Aut
 
 from playwright.async_api import async_playwright, Page, BrowserContext
 from modules.logger import Logger
+from modules.login_flow import wait_for_login_completion
 from modules.login_selectors import (
     LOGIN_AGREEMENT_CHECKBOX,
     LOGIN_PANEL,
@@ -155,7 +156,7 @@ async def test_login(page: Page, username: str, password: str):
     except:
         print_info("未检测到滑块验证码")
     
-    await page.wait_for_selector(LOGIN_PANEL, state='hidden', timeout=120000)
+    await wait_for_login_completion(page, 120_000)
     print_success("登录成功！")
     return True
 

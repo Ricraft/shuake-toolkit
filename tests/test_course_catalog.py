@@ -186,6 +186,14 @@ print('COURSE_CATALOG_IMPORT_OK')
             saved = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(saved["sixth"]["courses"][0]["courseName"], "课程")
 
+    def test_zhs_fetch_script_reuses_shared_portal_navigation_contract(self):
+        source = Path(fetch_zhs_courses.__file__).read_text(encoding="utf-8")
+
+        self.assertIn("navigate_to_my_course(page, _ConsoleLogger())", source)
+        self.assertIn("wait_for_login_completion", source)
+        self.assertNotIn("#sharingClassed > div:nth-child", source)
+        self.assertNotIn("page.click('text=\"我的学堂\"')", source)
+
 
 class _Response:
     def __init__(self, status_code, payload=None, headers=None):
