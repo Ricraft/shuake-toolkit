@@ -651,6 +651,7 @@ class WebOnlyLauncherTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["message"], "Yatori 配置缺失")
+        self.assertTrue(launcher._runtime_failure_since_batch)
         self.assertIn("state", result)
 
     def test_save_all_rolls_back_yatori_when_autovisor_write_fails(self):

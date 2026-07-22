@@ -803,6 +803,7 @@ class UnifiedLauncher:
 
     def _record_runtime_failure(self, script_type, message):
         """Persist a runtime failure in the matching Web-visible log stream."""
+        self._runtime_failure_since_batch = True
         target = 'autovisor' if script_type == 'practice' else script_type
         if target in getattr(self, 'log_history', {}):
             self.log(target, f"[ERROR] {message}")
@@ -829,6 +830,10 @@ class UnifiedLauncher:
         )
 
         if not self.running.get('yatori') and not self.running.get('autovisor'):
+            if getattr(self, '_runtime_failure_since_batch', False):
+                self.log_system("本轮任务存在异常退出，已跳过自动关机")
+                self._runtime_failure_since_batch = False
+                return
             self._maybe_shutdown_after_completion()
 
     def _maybe_shutdown_after_completion(self):
@@ -1164,7 +1169,15 @@ class UnifiedLauncher:
 
     def _claim_runtime_start(self, script_type):
         """Atomically reserve a runtime start so rapid clicks cannot fork twice."""
-        return self._get_process_supervisor().claim_start(script_type)
+        was_idle = not any(self.running.values()) and not any(self.starting.values())
+        claimed = self._get_process_supervisor().claim_start(script_type)
+        if (
+            claimed
+            and was_idle
+            and not getattr(self, '_runtime_batch_starting', False)
+        ):
+            self._runtime_failure_since_batch = False
+        return claimed
 
     def _mark_runtime_running(self, script_type, process):
         self._get_process_supervisor().mark_running(script_type, process)
@@ -1604,36 +1617,46 @@ class UnifiedLauncher:
     def start_all(self):
         """启动所有脚本"""
         self.log_system("正在一键启动所有脚本...")
-        failures = []
-        if not self.question_bank.available:
-            failures.append("题库服务器模块不可用")
-        elif not self.question_bank.running:
-            if not self.start_question_bank(silent=True):
-                failures.append("题库服务器启动失败")
-        if not self.running['yatori']:
-            if not self.start_yatori():
-                failures.append(
-                    getattr(self, '_last_start_error', {}).get(
-                        'yatori', 'Yatori 启动失败'
+        previous_batch_state = getattr(self, '_runtime_batch_starting', False)
+        self._runtime_batch_starting = True
+        running_state = getattr(self, 'running', {})
+        starting_state = getattr(self, 'starting', {})
+        if not any(running_state.values()) and not any(starting_state.values()):
+            self._runtime_failure_since_batch = False
+        try:
+            failures = []
+            if not self.question_bank.available:
+                failures.append("题库服务器模块不可用")
+            elif not self.question_bank.running:
+                if not self.start_question_bank(silent=True):
+                    failures.append("题库服务器启动失败")
+            if not self.running['yatori']:
+                if not self.start_yatori():
+                    failures.append(
+                        getattr(self, '_last_start_error', {}).get(
+                            'yatori', 'Yatori 启动失败'
+                        )
                     )
-                )
-        if not self.running['autovisor']:
-            if not self.start_autovisor():
-                failures.append(
-                    getattr(self, '_last_start_error', {}).get(
-                        'autovisor', 'Autovisor 启动失败'
+            if not self.running['autovisor']:
+                if not self.start_autovisor():
+                    failures.append(
+                        getattr(self, '_last_start_error', {}).get(
+                            'autovisor', 'Autovisor 启动失败'
+                        )
                     )
-                )
-        if failures:
-            message = '；'.join(dict.fromkeys(failures))
-            self.log_system(f"一键启动未全部成功: {message}")
-            return {'ok': False, 'message': message}
-        return {
-            'ok': True,
-            'message': '全部启动请求已提交',
-            'toast': '全部启动请求已提交',
-            'toastType': 'success',
-        }
+            if failures:
+                self._runtime_failure_since_batch = True
+                message = '；'.join(dict.fromkeys(failures))
+                self.log_system(f"一键启动未全部成功: {message}")
+                return {'ok': False, 'message': message}
+            return {
+                'ok': True,
+                'message': '全部启动请求已提交',
+                'toast': '全部启动请求已提交',
+                'toastType': 'success',
+            }
+        finally:
+            self._runtime_batch_starting = previous_batch_state
 
     def stop_all(self):
         """停止所有脚本"""

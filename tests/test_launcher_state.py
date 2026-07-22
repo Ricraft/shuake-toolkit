@@ -10,13 +10,14 @@ from 统一启动器 import UnifiedLauncher
 class LauncherStateTests(unittest.TestCase):
     def test_failed_runtime_exit_is_visible_and_never_triggers_auto_shutdown(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
-        launcher.running = {"yatori": False, "autovisor": False}
-        failures = []
+        launcher.running = {"yatori": False, "autovisor": True}
+        visible_failures = []
         notifications = []
         shutdowns = []
-        launcher._record_runtime_failure = lambda core, message: failures.append(
-            (core, message)
-        )
+        system_logs = []
+        launcher.log_history = {"yatori": [], "autovisor": [], "system": []}
+        launcher.log = lambda core, message: visible_failures.append((core, message))
+        launcher.log_system = system_logs.append
         launcher._notify_runtime_event = (
             lambda title, message, error=False: notifications.append(
                 (title, message, error)
@@ -27,8 +28,8 @@ class LauncherStateTests(unittest.TestCase):
         launcher._handle_runtime_exit("autovisor", 3, False)
 
         self.assertEqual(
-            failures,
-            [("autovisor", "Autovisor 已退出，返回码: 3")],
+            visible_failures,
+            [("autovisor", "[ERROR] Autovisor 已退出，返回码: 3")],
         )
         self.assertEqual(
             notifications,
@@ -36,12 +37,18 @@ class LauncherStateTests(unittest.TestCase):
         )
         self.assertEqual(shutdowns, [])
 
-        failures.clear()
+        visible_failures.clear()
         notifications.clear()
+        launcher.running["autovisor"] = False
         launcher._handle_runtime_exit("autovisor", 0, False)
-        self.assertEqual(failures, [])
+        self.assertEqual(visible_failures, [])
         self.assertEqual(len(notifications), 1)
         self.assertFalse(notifications[0][2])
+        self.assertEqual(shutdowns, [])
+        self.assertIn("本轮任务存在异常退出，已跳过自动关机", system_logs)
+
+        launcher._runtime_failure_since_batch = False
+        launcher._handle_runtime_exit("autovisor", 0, False)
         self.assertEqual(shutdowns, [True])
 
     def test_runtime_state_exposes_active_practice_account(self):
@@ -80,10 +87,12 @@ class LauncherStateTests(unittest.TestCase):
         launcher.running = {"yatori": False}
         launcher.starting = {"yatori": False}
         launcher.stop_requested = {"yatori": True}
+        launcher._runtime_failure_since_batch = True
         launcher._runtime_lock = threading.RLock()
         self.assertTrue(launcher._claim_runtime_start("yatori"))
         self.assertFalse(launcher._claim_runtime_start("yatori"))
         self.assertFalse(launcher.stop_requested["yatori"])
+        self.assertFalse(launcher._runtime_failure_since_batch)
 
     def test_autovisor_account_name_round_trip(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
