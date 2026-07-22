@@ -448,6 +448,9 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("mergeCourseUrls(existingUrls, selected)", zhs_source)
         self.assertIn("textarea.value = merged.join('\\n')", zhs_source)
         self.assertIn("course_urls = merged", zhs_source)
+        self.assertIn("const saveResult = await saveSettings(false)", zhs_source)
+        self.assertIn("if (!saveResult?.ok)", zhs_source)
+        self.assertIn("课程已添加到当前页面，但尚未保存，请重试", zhs_source)
         self.assertNotIn("textarea.value = selected.join('\\n')", zhs_source)
 
         self.assertIn(
@@ -457,6 +460,9 @@ class WebOnlyLauncherTests(unittest.TestCase):
             "mergeCourseNames(existingCourseNames, selected)", xxt_source
         )
         self.assertIn("ta.value = merged.join('\\n')", xxt_source)
+        self.assertIn("const saveResult = await saveSettings(false)", xxt_source)
+        self.assertIn("if (!saveResult?.ok)", xxt_source)
+        self.assertIn("课程已添加到当前页面，但尚未保存，请重试", xxt_source)
         self.assertNotIn("ta.value = selected.join('\\n')", xxt_source)
 
     def test_practice_mode_cancel_during_question_bank_start_skips_process(self):

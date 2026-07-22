@@ -461,10 +461,12 @@
             if (state.settings?.autovisor?.accounts?.[accountIndex]) {
                 state.settings.autovisor.accounts[accountIndex].course_urls = merged;
             }
+            const saveResult = await saveSettings(false);
+            if (!saveResult?.ok) {
+                showToast('课程已添加到当前页面，但尚未保存，请重试', 'warning');
+                return;
+            }
             showToast(`已添加 ${selected.length} 门课程，共 ${merged.length} 门`, 'success');
-            try {
-                await saveSettings(false);
-            } catch (e) {}
         }
 
         let xxtCourseFetchRunning = false;
@@ -583,6 +585,11 @@
             updateYatoriCourseFilterUI(card);
             const ta = card.querySelector('[data-field="includeCourses"]');
             if (ta) ta.value = merged.join('\n');
+            const saveResult = await saveSettings(false);
+            if (!saveResult?.ok) {
+                showToast('课程已添加到当前页面，但尚未保存，请重试', 'warning');
+                return;
+            }
             showToast(`已添加 ${selected.length} 门课程，共 ${merged.length} 门`, 'success');
         }
 
