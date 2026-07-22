@@ -143,6 +143,7 @@
             let btn = document.getElementById(`course-btn-${accountIndex}`);
             let textarea = document.getElementById(`course-urls-${accountIndex}`);
             if (!btn) return;
+            let keepResultState = false;
             courseFetchRunning = true;
             btn.disabled = true;
             btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> 保存配置...';
@@ -173,13 +174,15 @@
                     btn.classList.remove('btn-primary');
                     btn.classList.remove(hasCourses ? 'btn-outline' : 'btn-success');
                     btn.classList.add(hasCourses ? 'btn-success' : 'btn-outline');
+                    keepResultState = true;
+                    const resultBtn = btn;
                     setTimeout(() => {
-                        const btn2 = document.getElementById(`course-btn-${accountIndex}`);
-                        if (btn2) {
-                            btn2.innerHTML = '<i class="fas fa-download"></i> 获取课程';
-                            btn2.classList.remove('btn-success');
-                            btn2.classList.remove('btn-outline');
-                            btn2.classList.add('btn-primary');
+                        if (resultBtn.isConnected) {
+                            resultBtn.innerHTML = '<i class="fas fa-download"></i> 获取课程';
+                            resultBtn.classList.remove('btn-success');
+                            resultBtn.classList.remove('btn-outline');
+                            resultBtn.classList.add('btn-primary');
+                            resultBtn.disabled = false;
                         }
                     }, 3000);
                     if (hasCourses) {
@@ -200,7 +203,7 @@
             } finally {
                 courseFetchRunning = false;
                 btn = document.getElementById(`course-btn-${accountIndex}`);
-                if (btn) btn.disabled = false;
+                if (btn && !keepResultState) btn.disabled = false;
             }
         }
         function clearCourseUrls(accountIndex) {
@@ -508,9 +511,12 @@
                     btn.innerHTML = hasCourses
                         ? '<i class="fas fa-check"></i> 获取完成'
                         : '<i class="fas fa-info-circle"></i> 暂无课程';
+                    const resultBtn = btn;
                     setTimeout(() => {
-                        const btn2 = document.getElementById(`xxt-course-btn-${accountIndex}`);
-                        if (btn2) { btn2.innerHTML = '<i class="fas fa-download"></i> 获取课程'; btn2.disabled = false; }
+                        if (resultBtn.isConnected) {
+                            resultBtn.innerHTML = '<i class="fas fa-download"></i> 获取课程';
+                            resultBtn.disabled = false;
+                        }
                     }, 3000);
                     if (hasCourses) {
                         showXuexitongCourseDialog(accountIndex, courses);

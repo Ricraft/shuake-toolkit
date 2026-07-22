@@ -503,6 +503,28 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("showToast('当前账号暂无可刷课程', 'info')", function_source)
         self.assertNotIn("未获取到课程数据", function_source)
 
+    def test_course_fetch_result_timers_cannot_override_new_buttons(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        zhs_source = frontend.split(
+            "async function getAutovisorCourses", 1
+        )[1].split("function clearCourseUrls", 1)[0]
+        xxt_source = frontend.split(
+            "async function getXuexitongCourses", 1
+        )[1].split("function showXuexitongCourseDialog", 1)[0]
+
+        self.assertIn("let keepResultState = false", zhs_source)
+        self.assertIn("keepResultState = true", zhs_source)
+        self.assertIn("if (btn && !keepResultState)", zhs_source)
+        self.assertIn("const resultBtn = btn", zhs_source)
+        self.assertIn("if (resultBtn.isConnected)", zhs_source)
+        self.assertNotIn("const btn2 = document.getElementById", zhs_source)
+
+        self.assertIn("const resultBtn = btn", xxt_source)
+        self.assertIn("if (resultBtn.isConnected)", xxt_source)
+        self.assertNotIn("const btn2 = document.getElementById", xxt_source)
+
     def test_course_selection_dialogs_preserve_existing_entries(self):
         frontend = (
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
