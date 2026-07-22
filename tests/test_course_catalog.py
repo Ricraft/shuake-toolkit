@@ -221,6 +221,21 @@ print('COURSE_CATALOG_IMPORT_OK')
                 {"code": 500, "result": {"courseOpenDtos": []}}
             )
         )
+        self.assertIsNone(
+            fetch_zhs_courses.extract_share_course_rows(
+                {
+                    "code": 200,
+                    "result": {
+                        "courseOpenDtos": [{"courseName": "字段已变化"}]
+                    },
+                }
+            )
+        )
+        self.assertIsNone(
+            fetch_zhs_courses.extract_share_course_rows(
+                {"code": 200, "result": {"courseOpenDtos": ["invalid-row"]}}
+            )
+        )
 
         normalized = fetch_zhs_courses.normalize_share_course(
             {"recruitAndCourseId": "current-id", "courseName": "课程"}

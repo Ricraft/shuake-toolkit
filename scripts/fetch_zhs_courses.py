@@ -84,7 +84,11 @@ def extract_share_course_rows(payload):
     rows = result.get("courseOpenDtos")
     if not isinstance(rows, list):
         return None
-    return [row for row in rows if isinstance(row, dict)]
+    if any(not isinstance(row, dict) for row in rows):
+        return None
+    if rows and not any(get_zhs_course_access_id(row) for row in rows):
+        return None
+    return rows
 
 
 def is_course_api_candidate(url):
