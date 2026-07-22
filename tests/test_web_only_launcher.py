@@ -192,6 +192,46 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertIn("config.yaml", launcher._last_start_error["yatori"])
 
+    def test_start_autovisor_rejects_empty_courses_before_runtime_preparation(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._get_autovisor_dependency_manager = lambda: SimpleNamespace(
+            installing=False
+        )
+        launcher.running = {"autovisor": False}
+        launcher.starting = {"autovisor": False}
+        launcher._last_start_error = {}
+        launcher.log_system = lambda _message: None
+        launcher._show_error = lambda _title, _message: None
+        launcher._get_autovisor_multi_mode = lambda: False
+        launcher._load_autovisor_config_data = lambda: {
+            "accounts": [{"username": "alice", "course_urls": []}]
+        }
+        launcher._validate_autovisor_runtime = (
+            ConfigService.validate_autovisor_runtime
+        )
+        prepared = []
+        launcher._prepare_autovisor_config = lambda *_args: prepared.append(True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = Path(temp_dir, "Autovisor.py")
+            config = Path(temp_dir, "configs.ini")
+            entry.write_text("# fixture", encoding="utf-8")
+            config.write_text("[course-url]\nURL1 =\n", encoding="utf-8")
+            launcher.get_base_dir = lambda: temp_dir
+            launcher.find_autovisor_path = lambda _base_dir: temp_dir
+            launcher._get_autovisor_entry_path = lambda _multi: (
+                str(entry),
+                entry.name,
+                True,
+                False,
+            )
+
+            accepted = launcher.start_autovisor()
+
+        self.assertFalse(accepted)
+        self.assertIn("尚未配置课程链接", launcher._last_start_error["autovisor"])
+        self.assertEqual(prepared, [])
+
     def test_practice_mode_uses_shared_monitor_and_tracks_runtime_state(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.processes = {"yatori": None, "autovisor": None, "practice": None}

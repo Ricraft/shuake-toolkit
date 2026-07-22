@@ -189,6 +189,36 @@ class ConfigServiceTests(unittest.TestCase):
 
             self.assertEqual(saved_urls, [valid, live])
 
+    def test_autovisor_runtime_requires_courses_but_ignores_blank_multi_placeholders(self):
+        valid = "https://studyvideoh5.zhihuishu.com/stuStudy?recruitAndCourseId=one"
+
+        self.assertEqual(
+            ConfigService.validate_autovisor_runtime(
+                [{"username": "", "password": "", "course_urls": []}],
+                multi_mode=False,
+            ),
+            "Autovisor 账号 1 尚未配置课程链接",
+        )
+        self.assertIsNone(
+            ConfigService.validate_autovisor_runtime(
+                [
+                    {"username": "alice", "course_urls": [valid]},
+                    {"username": "", "password": "", "course_urls": []},
+                ],
+                multi_mode=True,
+            )
+        )
+        self.assertEqual(
+            ConfigService.validate_autovisor_runtime(
+                [
+                    {"username": "alice", "course_urls": [valid]},
+                    {"username": "bob", "course_urls": []},
+                ],
+                multi_mode=True,
+            ),
+            "Autovisor 账号 2 尚未配置课程链接",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

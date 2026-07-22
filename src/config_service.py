@@ -102,6 +102,8 @@ class ConfigService:
     @staticmethod
     def validate_autovisor_accounts(accounts) -> str | None:
         for index, account in enumerate(accounts or [], start=1):
+            if not isinstance(account, dict):
+                return f"Autovisor 账号 {index} 的配置格式无效"
             if account.get("enable_hide_window") and (
                 not str(account.get("username", "") or "").strip()
                 or not str(account.get("password", "") or "")
@@ -116,6 +118,35 @@ class ConfigService:
                         f"Autovisor 账号 {index} 的第 {url_index} 个课程链接无效："
                         "必须是智慧树官方 HTTPS 地址"
                     )
+        return None
+
+    @staticmethod
+    def validate_autovisor_runtime(accounts, multi_mode=False) -> str | None:
+        """Validate saved accounts before launching the Autovisor process."""
+        accounts = accounts or []
+        validation_error = ConfigService.validate_autovisor_accounts(accounts)
+        if validation_error:
+            return validation_error
+
+        configured = []
+        for index, account in enumerate(accounts, start=1):
+            if not isinstance(account, dict):
+                continue
+            course_urls = ConfigService.split_lines(account.get("course_urls", []))
+            has_identity = bool(
+                str(account.get("username", "") or "").strip()
+                or str(account.get("password", "") or "")
+            )
+            if course_urls or has_identity or not multi_mode:
+                configured.append((index, course_urls))
+
+        if not configured:
+            return "Autovisor 尚未配置可运行的账号和课程链接"
+        missing = [str(index) for index, course_urls in configured if not course_urls]
+        if missing:
+            if len(missing) == 1:
+                return f"Autovisor 账号 {missing[0]} 尚未配置课程链接"
+            return f"Autovisor 账号 {', '.join(missing)} 尚未配置课程链接"
         return None
 
     @staticmethod

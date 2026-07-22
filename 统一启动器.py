@@ -407,6 +407,9 @@ class UnifiedLauncher:
     def _validate_autovisor_accounts(self, accounts):
         return ConfigService.validate_autovisor_accounts(accounts)
 
+    def _validate_autovisor_runtime(self, accounts, multi_mode=False):
+        return ConfigService.validate_autovisor_runtime(accounts, multi_mode)
+
     def _split_lines(self, value):
         return ConfigService.split_lines(value)
 
@@ -1283,6 +1286,18 @@ class UnifiedLauncher:
             self.log_system(f"错误: 未找到配置文件 {config_path}")
             self._show_error("启动失败", "未找到 configs.ini 配置文件\n请使用配置生成器创建配置")
             return self._reject_runtime_start('autovisor', '未找到 Autovisor 的 configs.ini，请先保存配置')
+
+        saved_config = self._load_autovisor_config_data()
+        runtime_validation_error = self._validate_autovisor_runtime(
+            saved_config.get('accounts') or [],
+            multi_mode,
+        )
+        if runtime_validation_error:
+            self.log_system(f"Autovisor 启动已取消: {runtime_validation_error}")
+            return self._reject_runtime_start(
+                'autovisor',
+                runtime_validation_error,
+            )
 
         runtime_state = self._prepare_autovisor_config(config_path, multi_mode)
         for summary in runtime_state['browser_summaries']:
