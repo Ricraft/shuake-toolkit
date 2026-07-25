@@ -162,7 +162,7 @@ class QuestionBankController:
                     "ai_type": self.ai_type,
                     "ai_url": self.ai_url,
                     "ai_model": self.ai_model,
-                    # API keys stay in memory or QB_AI_API_KEY, never on disk.
+                    "ai_api_key": self.ai_api_key,
                     "auto_save": self.auto_save,
                     "port": self.port,
                 },

@@ -48,6 +48,9 @@ class WebLauncherAPI:
     def fetch_model_list(self, config):
         return self._launcher.fetch_model_list_from_web(config)
 
+    def chat_with_ai(self, payload):
+        return self._launcher.chat_with_ai_from_web(payload)
+
     def get_qb_settings(self):
         return self._launcher.get_qb_settings_from_web()
 

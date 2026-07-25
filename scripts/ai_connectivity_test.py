@@ -51,6 +51,36 @@ class AIConnectivityTester:
     }
 
     @classmethod
+    def _normalize_chat_endpoint(cls, provider: str, api_url: str) -> str:
+        """Return a usable chat-completions endpoint for OpenAI-compatible APIs."""
+        endpoint = (api_url or cls.ENDPOINTS.get(provider) or "").strip().rstrip("/")
+        if not endpoint:
+            return ""
+        if provider == 'TONGYI':
+            return endpoint
+        if endpoint.endswith('/chat/completions'):
+            return endpoint
+        if endpoint.endswith('/models'):
+            return endpoint[:-len('/models')] + '/chat/completions'
+        if endpoint.endswith('/v1'):
+            return endpoint + '/chat/completions'
+        return endpoint
+
+    @classmethod
+    def _build_models_endpoint(cls, api_url: str) -> str:
+        """Build the matching /models endpoint without duplicating /v1."""
+        endpoint = (api_url or "").strip().rstrip("/")
+        if not endpoint:
+            return ""
+        if endpoint.endswith('/models'):
+            return endpoint
+        if endpoint.endswith('/chat/completions'):
+            return endpoint[:-len('/chat/completions')] + '/models'
+        if endpoint.endswith('/v1'):
+            return endpoint + '/models'
+        return endpoint + '/v1/models'
+
+    @classmethod
     def test_connectivity(
         cls,
         provider: str,
@@ -76,7 +106,7 @@ class AIConnectivityTester:
             return False, "API Key 不能为空", {"error": "missing_api_key"}
 
         # 确定测试端点
-        endpoint = api_url if api_url else cls.ENDPOINTS.get(provider)
+        endpoint = cls._normalize_chat_endpoint(provider, api_url)
         if not endpoint:
             return False, "未提供有效的API地址", {"error": "missing_endpoint"}
 
@@ -231,6 +261,100 @@ class AIConnectivityTester:
             return str(data)[:100]
 
     @classmethod
+    def chat_completion(
+        cls,
+        provider: str,
+        api_url: str,
+        api_key: str,
+        model: str,
+        messages: list,
+        timeout: int = 60
+    ) -> Tuple[bool, str, str]:
+        """
+        多轮对话补全（供启动器内置 AI 助手使用）
+
+        Args:
+            provider: AI提供商代码
+            api_url: API接口地址
+            api_key: API密钥
+            model: 模型名称
+            messages: [{"role": "system|user|assistant", "content": "..."}]
+            timeout: 请求超时时间(秒)
+
+        Returns:
+            Tuple[success: bool, message: str, reply: str]
+        """
+        if not api_key or not api_key.strip():
+            return False, "API Key 不能为空", ""
+
+        endpoint = cls._normalize_chat_endpoint(provider, api_url)
+        if not endpoint:
+            return False, "未提供有效的API地址", ""
+
+        chat_model = model if model else cls.DEFAULT_MODELS.get(provider, 'gpt-3.5-turbo')
+
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        }
+
+        clean_messages = [
+            {
+                "role": str(m.get("role", "user")),
+                "content": str(m.get("content", "")),
+            }
+            for m in (messages or [])
+            if isinstance(m, dict) and str(m.get("content", "")).strip()
+        ]
+        if not clean_messages:
+            return False, "消息内容为空", ""
+
+        if provider == 'TONGYI':
+            payload = {
+                "model": chat_model,
+                "input": {"messages": clean_messages},
+                "parameters": {
+                    "result_format": "message",
+                    "max_tokens": 1200
+                }
+            }
+        else:
+            payload = {
+                "model": chat_model,
+                "messages": clean_messages,
+                "max_tokens": 1200,
+                "temperature": 0.7
+            }
+
+        try:
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=timeout
+            )
+        except requests.exceptions.Timeout:
+            return False, f"请求超时 ({timeout}秒)", ""
+        except requests.exceptions.ConnectionError:
+            return False, "网络连接失败，请检查网络", ""
+        except requests.exceptions.RequestException as e:
+            return False, f"请求异常: {str(e)}", ""
+        except Exception as e:
+            return False, f"对话失败: {str(e)}", ""
+
+        if response.status_code == 200:
+            try:
+                content = cls._extract_content(response.json(), provider)
+            except Exception:
+                return False, "响应解析失败，返回的不是有效JSON", ""
+            if not content or not str(content).strip():
+                return False, "AI 未返回有效内容", ""
+            return True, "OK", str(content)
+
+        _, error_msg, _ = cls._handle_response(response, provider)
+        return False, error_msg, ""
+
+    @classmethod
     def quick_test(cls, provider: str, api_key: str) -> Tuple[bool, str]:
         """快速测试（使用默认配置）"""
         endpoint = cls.ENDPOINTS.get(provider)
@@ -264,12 +388,9 @@ class AIConnectivityTester:
             return False, "API 地址不能为空", []
 
         # 构建模型列表端点
-        # 通常模型列表端点是 /v1/models 或类似
-        models_endpoint = api_url.replace('/chat/completions', '/models')
-        if not models_endpoint.endswith('/models'):
-            # 如果不是标准OpenAI格式，尝试构建
-            base_url = api_url.replace('/v1/chat/completions', '').replace('/chat/completions', '')
-            models_endpoint = f"{base_url}/v1/models"
+        # 标准 OpenAI 兼容接口通常是 /v1/models；若传入的是 /v1 或
+        # /v1/chat/completions，避免拼成 /v1/v1/models。
+        models_endpoint = cls._build_models_endpoint(api_url)
 
         headers = {
             'Authorization': f'Bearer {api_key}',

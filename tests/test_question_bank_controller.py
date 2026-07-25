@@ -66,7 +66,7 @@ class QuestionBankControllerTests(unittest.TestCase):
             self.assertEqual(controller.port, 8083)
             self.assertEqual(controller.ai_api_key, "from-env")
 
-    def test_saved_settings_do_not_persist_api_key(self):
+    def test_saved_settings_persist_ai_config_for_next_launch(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             controller, _logs = self.make_controller(temp_dir)
             result = controller.update_settings(
@@ -84,8 +84,17 @@ class QuestionBankControllerTests(unittest.TestCase):
 
             saved = json.loads(controller.config_path.read_text(encoding="utf-8"))
             self.assertTrue(result["ok"])
-            self.assertNotIn("ai_api_key", saved)
+            self.assertEqual(saved["ai_type"], "OPENAI")
+            self.assertEqual(saved["ai_url"], "https://example.invalid/v1")
+            self.assertEqual(saved["ai_model"], "model")
+            self.assertEqual(saved["ai_api_key"], "secret")
             self.assertEqual(controller.ai_api_key, "secret")
+
+            reloaded, _logs = self.make_controller(temp_dir)
+            self.assertEqual(reloaded.ai_type, "OPENAI")
+            self.assertEqual(reloaded.ai_url, "https://example.invalid/v1")
+            self.assertEqual(reloaded.ai_model, "model")
+            self.assertEqual(reloaded.ai_api_key, "secret")
 
     def test_invalid_port_is_rejected_without_mutating_state(self):
         with tempfile.TemporaryDirectory() as temp_dir:

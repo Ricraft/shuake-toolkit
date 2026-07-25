@@ -27,14 +27,39 @@ class AIConnectivityService:
     def _normalize_config(config) -> dict | None:
         if not isinstance(config, dict):
             return None
-        return {
-            "provider": str(config.get("provider", "SILICON") or "SILICON")
+        provider = (
+            str(config.get("provider", "SILICON") or "SILICON")
             .strip()
-            .upper(),
+            .upper()
+        )
+        if provider == "CUSTOM":
+            provider = "OTHER"
+        return {
+            "provider": provider,
             "api_url": str(config.get("api_url", "") or "").strip(),
             "api_key": str(config.get("api_key", "") or "").strip(),
             "model": str(config.get("model", "") or "").strip(),
         }
+
+    @staticmethod
+    def _normalize_messages(messages) -> list[dict]:
+        if not isinstance(messages, list):
+            return []
+        allowed_roles = {"system", "user", "assistant"}
+        normalized = []
+        for message in messages[-32:]:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role", "user") or "user").strip().lower()
+            if role not in allowed_roles:
+                role = "user"
+            content = str(message.get("content", "") or "").strip()
+            if not content:
+                continue
+            if len(content) > 4000:
+                content = content[:4000] + "…"
+            normalized.append({"role": role, "content": content})
+        return normalized
 
     @staticmethod
     def _failure(message: str, *, models: bool = False) -> dict:
@@ -94,6 +119,56 @@ class AIConnectivityService:
             "success": success,
             "message": str(message),
             "details": details if isinstance(details, dict) else {},
+        }
+
+    def chat(self, config, messages) -> dict:
+        normalized = self._normalize_config(config)
+        if normalized is None:
+            return self._failure("AI 聊天配置格式错误")
+        if not normalized["api_key"]:
+            return self._failure("API Key 不能为空，请先在右侧完成模型配置")
+        if normalized["provider"] == "OTHER" and not normalized["api_url"]:
+            return self._failure("API 地址不能为空")
+        clean_messages = self._normalize_messages(messages)
+        if not clean_messages:
+            return self._failure("聊天消息格式错误")
+
+        tester, failure = self._tester()
+        if failure:
+            return failure
+        chat_fn = getattr(tester, "chat_completion", None)
+        if chat_fn is None:
+            return self._failure("AI 聊天模块不可用")
+
+        provider = normalized["provider"]
+        model = normalized["model"] or getattr(tester, "DEFAULT_MODELS", {}).get(
+            provider, ""
+        )
+        try:
+            success, message, reply = chat_fn(
+                provider=provider,
+                api_url=normalized["api_url"],
+                api_key=normalized["api_key"],
+                model=model,
+                messages=clean_messages,
+                timeout=90,
+            )
+        except Exception as exc:
+            self.log(f"[AI聊天] 对话过程发生错误: {exc}")
+            return self._failure(f"对话过程发生错误: {exc}")
+
+        success = bool(success)
+        if not success:
+            self.log(f"[AI聊天] 对话失败: {message}")
+        reply_text = str(reply or "").strip()
+        if success and not reply_text:
+            self.log("[AI聊天] 对话失败: 模型返回空回复")
+            return self._failure("AI 模型返回了空回复")
+        return {
+            "ok": success,
+            "success": success,
+            "message": str(message),
+            "reply": reply_text,
         }
 
     def fetch_model_list(self, config) -> dict:

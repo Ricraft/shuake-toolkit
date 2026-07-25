@@ -953,6 +953,7 @@ class UnifiedLauncher:
     def get_web_initial_state(self):
         return {
             'runtime': self.get_web_runtime_state(),
+            'preferences': self.get_web_preferences(),
             'settings': {
                 'yatori': self._load_yatori_config_data(),
                 'autovisor': self._load_autovisor_config_data(),
@@ -1097,6 +1098,11 @@ class UnifiedLauncher:
 
     def fetch_model_list_from_web(self, config):
         return self._get_ai_service().fetch_model_list(config)
+
+    def chat_with_ai_from_web(self, payload):
+        config = payload.get('config') if isinstance(payload, dict) else None
+        messages = payload.get('messages') if isinstance(payload, dict) else None
+        return self._get_ai_service().chat(config, messages)
 
     def toggle_web_runtime(self, script_type):
         if not self.toggle_script(script_type):

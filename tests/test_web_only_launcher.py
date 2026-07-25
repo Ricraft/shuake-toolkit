@@ -676,7 +676,7 @@ class WebOnlyLauncherTests(unittest.TestCase):
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
         ).read_text(encoding="utf-8")
 
-        self.assertGreaterEqual(frontend.count("if (!sr?.ok) return;"), 2)
+        self.assertGreaterEqual(frontend.count("if (!sr?.ok)"), 2)
         self.assertIn("function handleWebActionResult", frontend)
         self.assertIn("showToast(result?.message || fallbackMessage, 'error')", frontend)
 

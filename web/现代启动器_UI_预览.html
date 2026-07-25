@@ -6,7 +6,7 @@
     <title>统一启动器 2026</title>
     <script>
         (function() {
-            // 在阻塞 CDN 脚本加载前，立即捕获 pywebview 桥接状态
+            // 在页面脚本加载前，立即捕获 pywebview 桥接状态
             var pv = window.pywebview;
             window._pvReady = !!(pv && pv.api);
             window.addEventListener('pywebviewready', function() {
@@ -24,14 +24,12 @@
             }
         })();
     </script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link href="styles.css" rel="stylesheet">
 </head>
 <body>
-    <!-- Sidebar -->
+    <!-- ============ 侧栏 ============ -->
     <aside class="sidebar">
+        <div class="sidebar-bg"></div>
         <div class="brand">
             <div class="brand-icon">
                 <i class="fas fa-rocket"></i>
@@ -42,11 +40,15 @@
             </div>
         </div>
 
-        <div class="nav-section">
-            <div class="nav-label">导航</div>
+        <nav class="nav-section">
+            <div class="nav-label">主导航</div>
             <div class="nav-item active" data-view="dashboard" onclick="switchView('dashboard', this)">
                 <i class="fas fa-border-all"></i>
                 <span>中控台</span>
+            </div>
+            <div class="nav-item" data-view="tianyi" onclick="switchView('tianyi', this)">
+                <img class="nav-tianyi-icon" src="assets/tianyi-avatar.png" alt="洛天依">
+                <span>洛天依</span>
             </div>
             <div class="nav-item" data-view="settings" onclick="switchView('settings', this)">
                 <i class="fas fa-sliders"></i>
@@ -64,7 +66,7 @@
                 <i class="fas fa-circle-info"></i>
                 <span>关于</span>
             </div>
-        </div>
+        </nav>
 
         <div class="sidebar-footer">
             <div class="status-line">
@@ -74,9 +76,8 @@
         </div>
     </aside>
 
-    <!-- Main Wrapper -->
+    <!-- ============ 主区域 ============ -->
     <div class="main-wrapper">
-        <!-- Top Header -->
         <header class="top-header">
             <div class="header-title" id="page-title">中控台</div>
             <div class="header-actions">
@@ -86,19 +87,19 @@
                 <button class="icon-btn" onclick="showBgModal()" title="自定义背景">
                     <i class="fas fa-image"></i>
                 </button>
-                <button class="icon-btn" onclick="showExitModal()" title="退出">
+                <div class="header-divider"></div>
+                <button class="icon-btn danger" onclick="showExitModal()" title="退出">
                     <i class="fas fa-power-off"></i>
                 </button>
             </div>
         </header>
 
-        <!-- Main Content -->
         <main class="main-content">
-            <!-- ===== DASHBOARD ===== -->
+            <!-- ===== 中控台 ===== -->
             <div id="view-dashboard" class="view-page active">
                 <div class="section-header">
                     <div>
-                        <h1 class="section-title"><i class="fas fa-border-all" style="margin-right: 12px;"></i>中控台</h1>
+                        <h1 class="section-title">中控台</h1>
                         <p class="section-subtitle">统一管理 Yatori 与 Autovisor 核心，实时监控运行状态</p>
                     </div>
                     <button id="btn-start-all" class="btn btn-primary btn-pill" onclick="saveAndPerform('start_all')">
@@ -108,12 +109,12 @@
                 </div>
 
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
-                    <!-- Yatori Card -->
+                    <!-- Yatori 核心卡 -->
                     <div class="glass-card core-card">
                         <div class="core-card-header">
                             <div class="flex items-center gap-3">
-                                <div class="core-icon yatori">
-                                    <i class="fas fa-cube"></i>
+                                <div class="core-icon logo-core-icon yatori">
+                                    <img class="core-logo-img" src="assets/yatori_logo.png" alt="Yatori Logo">
                                 </div>
                                 <div class="core-info">
                                     <h3>通用平台</h3>
@@ -141,12 +142,12 @@
                         </div>
                     </div>
 
-                    <!-- Autovisor Card -->
+                    <!-- Autovisor 核心卡 -->
                     <div class="glass-card core-card">
                         <div class="core-card-header">
                             <div class="flex items-center gap-3">
-                                <div class="core-icon autovisor">
-                                    <i class="fas fa-tree"></i>
+                                <div class="core-icon logo-core-icon autovisor">
+                                    <img class="core-logo-img" src="assets/autovisor_logo.png" alt="Autovisor Logo">
                                 </div>
                                 <div class="core-info">
                                     <h3>智慧树专区</h3>
@@ -198,7 +199,7 @@
                     </div>
                 </div>
 
-                <!-- Question Bank Card -->
+                <!-- 题库服务卡 -->
                 <div class="glass-card core-card mb-5" style="min-height: auto; cursor: pointer;" onclick="switchView('questionbank')">
                     <div class="core-card-header">
                         <div class="flex items-center gap-3">
@@ -233,14 +234,14 @@
                     </div>
                 </div>
 
-                <!-- Console -->
+                <!-- 控制台 -->
                 <div class="glass-card">
-                    <div class="flex justify-between items-center flex-wrap gap-3 mb-1">
-                        <div class="flex items-center gap-2">
-                            <i class="fas fa-terminal text-xs" style="color: var(--text-muted);"></i>
+                    <div class="flex justify-between items-center flex-wrap gap-3">
+                        <div class="flex items-center gap-3">
+                            <div class="card-icon"><i class="fas fa-terminal"></i></div>
                             <h3 class="font-bold text-sm">系统控制台</h3>
                         </div>
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2 flex-wrap">
                             <div class="pill-tabs">
                                 <div class="pill-tab active" data-log-tab="system" onclick="switchConsoleTab(this)">系统</div>
                                 <div class="pill-tab" data-log-tab="yatori" onclick="switchConsoleTab(this)">Yatori</div>
@@ -257,8 +258,153 @@
                     <div id="console-output" class="console-box">等待日志输出...</div>
                 </div>
             </div>
+            <!-- ===== 洛天依 AI 助手 ===== -->
+            <div id="view-tianyi" class="view-page">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">洛天依小助手</h1>
+                        <p class="section-subtitle">和天依聊天，也可以用对话或指令直接控制刷课程序</p>
+                    </div>
+                    <span class="status-badge ready" id="tianyi-status-badge" style="display:none;">已连接</span>
+                </div>
 
-            <!-- ===== SETTINGS ===== -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                    <!-- 左侧：聊天区 -->
+                    <div class="lg:col-span-8">
+                        <div class="glass-card tianyi-chat-card">
+                            <div class="tianyi-chat-header">
+                                <div class="tianyi-avatar"><img src="assets/tianyi-avatar.png" alt="洛天依"></div>
+                                <div class="tianyi-head-info">
+                                    <div class="tianyi-head-name">
+                                        洛天依
+                                        <span class="tianyi-online-dot"></span>
+                                    </div>
+                                    <div class="tianyi-head-sub" id="tianyi-head-sub">你的刷课小助手，试着说「一键刷课」或「现在什么状态」</div>
+                                </div>
+                                <button class="icon-btn" onclick="clearTianyiChat()" title="清空对话">
+                                    <i class="fas fa-broom"></i>
+                                </button>
+                            </div>
+
+                            <div id="tianyi-chat-box" class="tianyi-chat-box"></div>
+
+                            <div class="tianyi-quick-cmds">
+                                <button class="tianyi-chip" onclick="tianyiQuickSend('一键刷课')"><i class="fas fa-play"></i>一键刷课</button>
+                                <button class="tianyi-chip" onclick="tianyiQuickSend('停止全部')"><i class="fas fa-stop"></i>停止全部</button>
+                                <button class="tianyi-chip" onclick="tianyiQuickSend('现在什么状态')"><i class="fas fa-circle-info"></i>运行状态</button>
+                                <button class="tianyi-chip" onclick="tianyiQuickSend('启动题库')"><i class="fas fa-database"></i>启动题库</button>
+                                <button class="tianyi-chip" onclick="tianyiQuickSend('你能做什么')"><i class="fas fa-lightbulb"></i>你能做什么</button>
+                            </div>
+
+                            <div class="tianyi-input-row">
+                                <input id="tianyi-input" type="text" class="input-field" placeholder="和天依聊天，或输入指令，例如：启动智慧树 / 停止 yatori / 查看状态"
+                                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTianyiMessage();}">
+                                <button id="tianyi-send-btn" class="tianyi-send-btn" onclick="sendTianyiMessage()" title="发送">
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：模型配置 + 指令帮助 -->
+                    <div class="lg:col-span-4 flex flex-col gap-5">
+                        <div class="tianyi-hero-mini">
+                            <div class="tianyi-avatar" style="width:38px;height:38px;font-size:0.875rem;"><img src="assets/tianyi-avatar.png" alt="洛天依"></div>
+                            <div>
+                                <div class="text-sm font-semibold">对话 + 控制双模式</div>
+                                <p>普通聊天走 AI 大模型；识别到操作意图时天依会直接帮你执行程序动作</p>
+                            </div>
+                        </div>
+
+                        <!-- 模型配置 -->
+                        <div class="glass-card flex flex-col gap-4">
+                            <div class="card-title-row">
+                                <div class="card-icon"><i class="fas fa-brain"></i></div>
+                                <h3 class="font-bold text-sm">对话模型配置</h3>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">AI 提供商</span>
+                                <div class="select-wrapper">
+                                    <select id="tianyi-ai-type" class="input-field" onchange="syncTianyiAiField();autoSaveTianyiConfig()">
+                                        <option value="SILICON">硅基流动 (SiliconFlow)</option>
+                                        <option value="DEEPSEEK">DeepSeek</option>
+                                        <option value="CHATGLM">智谱 AI (ChatGLM)</option>
+                                        <option value="TONGYI">通义千问 (TONGYI)</option>
+                                        <option value="XINGHUO">讯飞星火 (XINGHUO)</option>
+                                        <option value="DOUBAO">豆包 (DOUBAO)</option>
+                                        <option value="METAAI">Meta AI</option>
+                                        <option value="OPENAI">OpenAI</option>
+                                        <option value="OTHER">其他模型</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">API 接口地址</span>
+                                <input id="tianyi-ai-url" type="text" class="input-field" placeholder="https://api.example.com/v1" oninput="onTianyiUrlInput();autoSaveTianyiConfig()">
+                                <p class="text-xs" id="tianyi-ai-url-hint" style="color: var(--text-muted);">选择提供商后自动填充默认地址</p>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label" style="display:flex;align-items:center;gap:0.5rem;">
+                                    模型名称
+                                    <button class="btn btn-outline btn-sm" id="tianyi-fetch-models-btn" onclick="fetchTianyiModelList()" style="margin-left:auto;">
+                                        <i class="fas fa-sync-alt" id="tianyi-fetch-icon"></i>
+                                        <i class="fas fa-spinner fa-spin" id="tianyi-fetch-loading" style="display:none;"></i>
+                                        获取模型
+                                    </button>
+                                </span>
+                                <input id="tianyi-ai-model" type="text" class="input-field" placeholder="输入或选择模型" list="tianyi-model-list" autocomplete="off" oninput="autoSaveTianyiConfig()">
+                                <datalist id="tianyi-model-list"></datalist>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">API Key</span>
+                                <div style="display:flex;gap:0.5rem;">
+                                    <input id="tianyi-ai-api-key" type="password" class="input-field" style="flex:1;" placeholder="sk-xxxxxxxxxxxxxxxx" oninput="autoSaveTianyiConfig()">
+                                    <button class="btn btn-outline btn-sm" onclick="toggleTianyiApiKeyVisibility()" title="显示/隐藏">
+                                        <i class="fas fa-eye" id="tianyi-ai-key-icon"></i>
+                                    </button>
+                                    <button class="btn btn-primary btn-sm" id="tianyi-test-ai-btn" onclick="testTianyiAIConnectivity()">
+                                        <i class="fas fa-plug"></i>
+                                        <i class="fas fa-spinner fa-spin" id="tianyi-test-loading" style="display:none;"></i>
+                                        测试
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="qb-test-result" id="tianyi-test-result" style="display:none;">
+                                <i class="fas" id="tianyi-test-icon"></i>
+                                <span id="tianyi-test-message"></span>
+                            </div>
+                            <div class="flex gap-2">
+                                <button class="btn btn-primary btn-sm flex-1" onclick="saveTianyiConfig(true)">
+                                    <i class="fas fa-floppy-disk"></i> 保存配置
+                                </button>
+                                <button class="btn btn-outline btn-sm flex-1" onclick="applyTianyiConfigToQb()" title="把这里的模型配置直接写入题库 AI 设置并保存">
+                                    <i class="fas fa-database"></i> 同步到题库 AI
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 指令帮助 -->
+                        <div class="glass-card">
+                            <div class="card-title-row mb-4">
+                                <div class="card-icon teal"><i class="fas fa-terminal"></i></div>
+                                <h3 class="font-bold text-sm">支持的控制指令</h3>
+                            </div>
+                            <div class="tianyi-cmd-list">
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('一键刷课')"><code>一键刷课</code>保存配置并启动全部核心</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('停止全部')"><code>停止全部</code>停止所有正在运行的核心</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('启动 yatori')"><code>启动/停止 yatori</code>控制通用平台核心</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('启动智慧树')"><code>启动/停止智慧树</code>控制 Autovisor 核心</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('启动题库')"><code>启动/停止题库</code>控制题库服务器</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('现在什么状态')"><code>状态</code>汇报各核心与题库运行情况</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('打开题库设置')"><code>打开 xx 页面</code>跳转中控台/设置/题库/软件设置</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== 核心设置 ===== -->
             <div id="view-settings" class="view-page">
                 <div class="section-header">
                     <div>
@@ -276,17 +422,18 @@
                 </div>
 
                 <div class="pill-tabs mb-5">
-                    <div class="pill-tab active" id="tab-btn-yatori" onclick="switchConfigTab('yatori')">Yatori 通用配置</div>
-                    <div class="pill-tab" id="tab-btn-autovisor" onclick="switchConfigTab('autovisor')">Autovisor 智慧树配置</div>
+                    <div class="pill-tab active" id="tab-btn-yatori" onclick="switchConfigTab('yatori')"><img class="tab-logo-img" src="assets/yatori_logo.png" alt="">Yatori 通用配置</div>
+                    <div class="pill-tab" id="tab-btn-autovisor" onclick="switchConfigTab('autovisor')"><img class="tab-logo-img" src="assets/autovisor_logo.png" alt="">Autovisor 智慧树配置</div>
                 </div>
 
-                <!-- Yatori Config -->
+                <!-- Yatori 配置 -->
                 <div id="config-yatori" class="flex flex-col gap-5">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                         <div class="glass-card flex flex-col gap-4">
-                            <h3 class="font-bold text-sm flex items-center gap-2">
-                                <i class="fas fa-sliders text-xs" style="color: var(--accent-primary);"></i> 常规全局设置
-                            </h3>
+                            <div class="card-title-row">
+                                <div class="card-icon logo-card-icon"><img src="assets/yatori_logo.png" alt="Yatori"></div>
+                                <h3 class="font-bold text-sm">常规全局设置</h3>
+                            </div>
                             <div class="flex justify-between items-center gap-4">
                                 <span class="text-sm" style="color: var(--text-secondary);">日志详细级别</span>
                                 <div class="select-wrapper w-40">
@@ -332,9 +479,10 @@
 
                         <div class="glass-card flex flex-col gap-4">
                             <div class="flex justify-between items-center">
-                                <h3 class="font-bold text-sm flex items-center gap-2">
-                                    <i class="fas fa-envelope text-xs" style="color: var(--accent-primary);"></i> SMTP 邮件通知
-                                </h3>
+                                <div class="card-title-row">
+                                    <div class="card-icon violet"><i class="fas fa-envelope"></i></div>
+                                    <h3 class="font-bold text-sm">SMTP 邮件通知</h3>
+                                </div>
                                 <label class="switch"><input id="y-email-sw" type="checkbox"><span class="slider"></span></label>
                             </div>
                             <div class="input-group">
@@ -357,9 +505,10 @@
                     </div>
 
                     <div class="glass-card flex flex-col gap-4">
-                        <h3 class="font-bold text-sm flex items-center gap-2">
-                            <i class="fas fa-brain text-xs" style="color: var(--accent-primary);"></i> AI 模型配置
-                        </h3>
+                        <div class="card-title-row">
+                            <div class="card-icon pink"><i class="fas fa-brain"></i></div>
+                            <h3 class="font-bold text-sm">AI 模型配置</h3>
+                        </div>
                         <p class="text-xs" style="color: var(--text-muted);">只有在账号选择自动考试时才会用到这里的模型配置</p>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="input-group">
@@ -387,7 +536,7 @@
                             <div class="input-group">
                                 <span class="input-label" style="display: flex; align-items: center; gap: 0.5rem;">
                                     模型名称
-                                    <button class="btn btn-outline btn-sm" id="y-fetch-models-btn" onclick="fetchYatoriModelList()" style="margin-left: auto; font-size: 0.75rem; padding: 0.25rem 0.5rem;">
+                                    <button class="btn btn-outline btn-sm" id="y-fetch-models-btn" onclick="fetchYatoriModelList()" style="margin-left: auto;">
                                         <i class="fas fa-sync-alt" id="y-fetch-icon"></i>
                                         <i class="fas fa-spinner fa-spin" id="y-fetch-loading" style="display: none;"></i>
                                         获取模型
@@ -411,7 +560,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="y-test-result" style="display: none; margin-top: 0.5rem; padding: 0.75rem 1rem; border-radius: var(--radius-md); font-size: 0.875rem;">
+                        <div id="y-test-result" style="display: none; margin-top: 0.25rem; padding: 0.75rem 1rem; border-radius: var(--radius-sm); font-size: 0.8125rem;">
                             <i class="fas" id="y-test-result-icon"></i>
                             <span id="y-test-result-message"></span>
                         </div>
@@ -419,9 +568,10 @@
 
                     <div class="glass-card flex flex-col gap-4">
                         <div class="flex justify-between items-center">
-                            <h3 class="font-bold text-sm flex items-center gap-2">
-                                <i class="fas fa-users text-xs" style="color: var(--accent-primary);"></i> 学习账号管理
-                            </h3>
+                            <div class="card-title-row">
+                                <div class="card-icon green"><i class="fas fa-users"></i></div>
+                                <h3 class="font-bold text-sm">学习账号管理</h3>
+                            </div>
                             <button class="btn btn-primary btn-sm" onclick="addYatoriAccount()">
                                 <i class="fas fa-plus"></i> 添加账号
                             </button>
@@ -431,12 +581,13 @@
                     </div>
                 </div>
 
-                <!-- Autovisor Config -->
+                <!-- Autovisor 配置 -->
                 <div id="config-autovisor" class="flex flex-col gap-5" style="display:none;">
                     <div class="glass-card flex flex-col gap-4">
-                        <h3 class="font-bold text-sm flex items-center gap-2">
-                            <i class="fas fa-desktop text-xs" style="color: var(--accent-tertiary);"></i> 运行环境设置
-                        </h3>
+                        <div class="card-title-row">
+                            <div class="card-icon logo-card-icon"><img src="assets/autovisor_logo.png" alt="Autovisor"></div>
+                            <h3 class="font-bold text-sm">运行环境设置</h3>
+                        </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="input-group">
                                 <span class="input-label">首选浏览器</span>
@@ -465,9 +616,10 @@
 
                     <div class="glass-card flex flex-col gap-4">
                         <div class="flex justify-between items-center">
-                            <h3 class="font-bold text-sm flex items-center gap-2">
-                                <i class="fas fa-users text-xs" style="color: var(--accent-tertiary);"></i> 智慧树账号管理
-                            </h3>
+                            <div class="card-title-row">
+                                <div class="card-icon teal"><i class="fas fa-users"></i></div>
+                                <h3 class="font-bold text-sm">智慧树账号管理</h3>
+                            </div>
                             <button class="btn btn-primary btn-sm" onclick="addAutovisorAccount()">
                                 <i class="fas fa-plus"></i> 添加账号
                             </button>
@@ -476,8 +628,7 @@
                     </div>
                 </div>
             </div>
-
-            <!-- ===== QUESTION BANK ===== -->
+            <!-- ===== 题库设置 ===== -->
             <div id="view-questionbank" class="view-page">
                 <div class="section-header">
                     <div>
@@ -624,7 +775,7 @@
                                             <i class="fas fa-spinner fa-spin qb-test-loading" id="qb-test-loading" style="display: none;"></i>
                                         </button>
                                     </div>
-                                    <div class="qb-test-result" id="qb-test-result" style="display: none;">
+                                    <div class="qb-test-result" id="qb-test-result" style="display: none; margin-top: 0.75rem;">
                                         <i class="fas" id="qb-test-icon"></i>
                                         <span id="qb-test-message"></span>
                                     </div>
@@ -637,7 +788,7 @@
                             <div class="qb-card-header">
                                 <i class="fas fa-chart-pie"></i>
                                 <span>数据概览</span>
-                                <span class="qb-stats-update" id="qb-last-update">刚刚更新</span>
+                                <span class="qb-stats-update" id="qb-last-update">实时同步</span>
                             </div>
                             <div class="qb-stats-grid">
                                 <div class="qb-stat-item">
@@ -725,6 +876,26 @@
                                         <span class="qb-toggle-label">
                                             <i class="fas fa-play-circle"></i>
                                             启动器打开时自动启动题库服务
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="qb-toggle-group qb-input-full">
+                                    <label class="qb-toggle-item">
+                                        <input type="checkbox" id="qb-ai-enabled" onchange="autoSaveQbSettings()">
+                                        <span class="qb-toggle-slider"></span>
+                                        <span class="qb-toggle-label">
+                                            <i class="fas fa-brain"></i>
+                                            启用 AI 智能答题（本地题库未命中时使用 AI 回答）
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="qb-toggle-group qb-input-full">
+                                    <label class="qb-toggle-item">
+                                        <input type="checkbox" id="qb-auto-save" checked onchange="autoSaveQbSettings()">
+                                        <span class="qb-toggle-slider"></span>
+                                        <span class="qb-toggle-label">
+                                            <i class="fas fa-save"></i>
+                                            自动保存 AI 答案到本地题库缓存
                                         </span>
                                     </label>
                                 </div>
@@ -838,8 +1009,7 @@
                     </div>
                 </div>
             </div>
-
-            <!-- ===== PREFERENCES ===== -->
+            <!-- ===== 软件设置 ===== -->
             <div id="view-preferences" class="view-page">
                 <div class="section-header">
                     <div>
@@ -850,44 +1020,68 @@
 
                 <div class="flex flex-col gap-5 max-w-3xl">
                     <div class="glass-card">
-                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                            <i class="fas fa-palette text-xs" style="color: var(--accent-primary);"></i> 外观主题
-                        </h3>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon"><i class="fas fa-palette"></i></div>
+                            <h3 class="font-bold text-sm">外观主题</h3>
+                        </div>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <div class="setting-title">界面主题</div>
-                                <div class="setting-desc">切换白天或黑夜模式，退出后会记住你的选择</div>
+                                <div class="setting-desc">切换界面主题，退出后会记住你的选择</div>
                             </div>
-                            <button id="theme-toggle-btn" class="btn btn-outline btn-sm" onclick="toggleTheme()">
-                                <i class="fas fa-moon" id="theme-icon-pref"></i>
-                                <span id="theme-label">黑夜模式</span>
-                            </button>
+                            <div class="theme-choice-group" id="theme-choice-group">
+                                <button type="button" class="theme-choice" data-theme-choice="dark" onclick="setTheme('dark')">
+                                    <i class="fas fa-moon"></i>
+                                    黑夜
+                                </button>
+                                <button type="button" class="theme-choice" data-theme-choice="light" onclick="setTheme('light')">
+                                    <i class="fas fa-sun"></i>
+                                    白天
+                                </button>
+                                <button type="button" class="theme-choice tianyi-theme-option" data-theme-choice="tianyi" onclick="setTheme('tianyi')" hidden>
+                                    <img src="assets/tianyi-avatar.png" alt="">
+                                    洛天依
+                                </button>
+                            </div>
                         </div>
                     </div>
 
                     <div class="glass-card" id="bg-settings-card">
-                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                            <i class="fas fa-image text-xs" style="color: var(--accent-secondary);"></i> 背景设置
-                        </h3>
-                        <p class="text-xs mb-3" style="color: var(--text-muted);">选择预设背景或上传自定义图片作为界面背景</p>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon violet"><i class="fas fa-image"></i></div>
+                            <h3 class="font-bold text-sm">背景设置</h3>
+                        </div>
+                        <p class="text-xs" style="color: var(--text-muted);">选择预设背景或上传自定义图片作为界面背景</p>
                         <div class="bg-preview-grid" id="bg-preview-grid">
                             <div class="bg-preview-item active" data-bg="none" onclick="setBackground('none', this)">
                                 <span>默认</span>
                                 <div class="check-icon"><i class="fas fa-check"></i></div>
                             </div>
-                            <div class="bg-preview-item" data-bg="gradient1" onclick="setBackground('gradient1', this)" style="background: linear-gradient(135deg, #0a0b0f 0%, #1a1a3e 50%, #0f2027 100%);">
+                            <div class="bg-preview-item" data-bg="gradient1" onclick="setBackground('gradient1', this)" title="薄雾紫藤" style="background: radial-gradient(at 18% 22%, rgba(165,180,252,0.85) 0px, transparent 55%), radial-gradient(at 82% 12%, rgba(125,211,252,0.8) 0px, transparent 55%), radial-gradient(at 55% 88%, rgba(249,168,212,0.75) 0px, transparent 55%), linear-gradient(135deg, #eef2ff 0%, #f5f3ff 55%, #fdf4ff 100%);">
                                 <div class="check-icon"><i class="fas fa-check"></i></div>
                             </div>
-                            <div class="bg-preview-item" data-bg="gradient2" onclick="setBackground('gradient2', this)" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);">
+                            <div class="bg-preview-item" data-bg="gradient2" onclick="setBackground('gradient2', this)" title="蜜桃晨曦" style="background: radial-gradient(at 15% 85%, rgba(253,186,116,0.85) 0px, transparent 55%), radial-gradient(at 85% 18%, rgba(249,168,212,0.8) 0px, transparent 55%), radial-gradient(at 55% 50%, rgba(254,215,170,0.55) 0px, transparent 60%), linear-gradient(135deg, #fff7ed 0%, #fff1f2 100%);">
                                 <div class="check-icon"><i class="fas fa-check"></i></div>
                             </div>
-                            <div class="bg-preview-item" data-bg="cyber-teal" onclick="setBackground('cyber-teal', this)" title="赛博青绿" style="background: repeating-linear-gradient(60deg, transparent, transparent 40px, rgba(0,229,160,0.04) 40px, rgba(0,229,160,0.04) 41px), repeating-linear-gradient(-60deg, transparent, transparent 80px, rgba(0,0,0,0.3) 80px, rgba(0,0,0,0.3) 81px), linear-gradient(135deg, #050f0c, #0d1a16, #020605);">
+                            <div class="bg-preview-item" data-bg="cyber-teal" onclick="setBackground('cyber-teal', this)" title="薄荷青提" style="background: radial-gradient(at 22% 26%, rgba(110,231,183,0.85) 0px, transparent 55%), radial-gradient(at 78% 74%, rgba(103,232,249,0.8) 0px, transparent 55%), radial-gradient(at 62% 12%, rgba(190,242,100,0.5) 0px, transparent 55%), linear-gradient(135deg, #ecfdf5 0%, #ecfeff 100%);">
                                 <div class="check-icon"><i class="fas fa-check"></i></div>
                             </div>
-                            <div class="bg-preview-item" data-bg="hacker-amber" onclick="setBackground('hacker-amber', this)" title="骇客琥珀" style="background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,176,32,0.04) 2px, rgba(255,176,32,0.04) 4px), linear-gradient(160deg, #0f0d08, #1a1610, #080604);">
+                            <div class="bg-preview-item" data-bg="hacker-amber" onclick="setBackground('hacker-amber', this)" title="暖阳杏野" style="background: radial-gradient(at 24% 20%, rgba(252,211,77,0.8) 0px, transparent 55%), radial-gradient(at 80% 80%, rgba(251,146,60,0.7) 0px, transparent 55%), radial-gradient(at 68% 24%, rgba(254,240,138,0.55) 0px, transparent 55%), linear-gradient(135deg, #fffbeb 0%, #fff7ed 100%);">
                                 <div class="check-icon"><i class="fas fa-check"></i></div>
                             </div>
-                            <div class="bg-preview-item" data-bg="midnight-aurora" onclick="setBackground('midnight-aurora', this)" title="午夜极光" style="background: radial-gradient(circle at center, rgba(79,195,247,0.06) 0px, rgba(79,195,247,0.06) 1px, transparent 1px, transparent 100%), linear-gradient(150deg, #060a12, #0c1420, #04060a); background-size: 24px 24px, 48px 48px; background-position: 0 0, 12px 12px;">
+                            <div class="bg-preview-item" data-bg="midnight-aurora" onclick="setBackground('midnight-aurora', this)" title="柔光极光" style="background: radial-gradient(at 15% 30%, rgba(125,211,252,0.8) 0px, transparent 55%), radial-gradient(at 85% 18%, rgba(196,181,253,0.8) 0px, transparent 55%), radial-gradient(at 50% 86%, rgba(134,239,172,0.65) 0px, transparent 55%), linear-gradient(150deg, #f0f9ff 0%, #f5f3ff 55%, #f0fdf4 100%);">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-luoshu" onclick="setBackground('tianyi-luoshu', this)" title="洛水天依" style="background-image: url('assets/tianyi_wallpaper_luoshu.jpg'); background-size: cover; background-position: center;">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-flower" onclick="setBackground('tianyi-flower', this)" title="花眠天依" style="background-image: url('assets/tianyi_wallpaper_flower.jpg'); background-size: cover; background-position: center;">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-girl" onclick="setBackground('tianyi-girl', this)" title="少女洛天依" style="background-image: url('assets/tianyi_wallpaper_girl.png'); background-size: cover; background-position: center;">
+                                <div class="check-icon"><i class="fas fa-check"></i></div>
+                            </div>
+                            <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-singer" onclick="setBackground('tianyi-singer', this)" title="歌姬洛天依" style="background-image: url('assets/tianyi_wallpaper_singer.png'); background-size: cover; background-position: center;">
                                 <div class="check-icon"><i class="fas fa-check"></i></div>
                             </div>
                             <div class="bg-preview-item" data-bg="custom" onclick="showCustomBgInput()">
@@ -896,14 +1090,14 @@
                             </div>
                         </div>
                         <div id="custom-bg-row" class="flex gap-2 mt-3" style="display:none;">
-                            <input id="custom-bg-url" type="text" class="input-field" placeholder="输入图片URL或点击右侧按钮选择本地文件">
+                            <input id="custom-bg-url" type="text" class="input-field" style="flex:1;min-width:0;" placeholder="输入图片URL或点击右侧按钮选择本地文件">
                             <button class="btn btn-primary btn-sm" onclick="applyCustomBackground()"><i class="fas fa-check"></i></button>
                             <button class="btn btn-outline btn-sm" onclick="triggerBgFileInput()"><i class="fas fa-folder-open"></i></button>
+                            <button class="btn btn-outline btn-sm" onclick="clearCustomBackground()" title="清空背景图片"><i class="fas fa-eraser"></i></button>
                         </div>
-                        <input type="file" id="bg-file-upload" accept="image/*" onchange="handleBgFileUpload(this)" style="display:none;">
 
                         <!-- 毛玻璃模糊度设置 -->
-                        <div class="setting-row mt-4 pt-4" style="border-top: 1px solid var(--border);">
+                        <div class="setting-row mt-4 pt-4" style="border-top: 1px solid var(--border-subtle);">
                             <div class="setting-info">
                                 <div class="setting-title">毛玻璃模糊度</div>
                                 <div class="setting-desc">调节界面卡片毛玻璃效果的模糊程度</div>
@@ -928,9 +1122,10 @@
                     </div>
 
                     <div class="glass-card">
-                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                            <i class="fas fa-bolt text-xs" style="color: #f59e0b;"></i> 自动化行为
-                        </h3>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon amber"><i class="fas fa-bolt"></i></div>
+                            <h3 class="font-bold text-sm">自动化行为</h3>
+                        </div>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <div class="setting-title">开机自动启动</div>
@@ -955,9 +1150,10 @@
                     </div>
 
                     <div class="glass-card">
-                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                            <i class="fas fa-window-restore text-xs" style="color: var(--accent-primary);"></i> 窗口行为
-                        </h3>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon teal"><i class="fas fa-window-restore"></i></div>
+                            <h3 class="font-bold text-sm">窗口行为</h3>
+                        </div>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <div class="setting-title">关闭时最小化</div>
@@ -982,9 +1178,10 @@
                     </div>
 
                     <div class="glass-card">
-                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                            <i class="fas fa-bell text-xs" style="color: #ec4899;"></i> 通知与提示
-                        </h3>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon pink"><i class="fas fa-bell"></i></div>
+                            <h3 class="font-bold text-sm">通知与提示</h3>
+                        </div>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <div class="setting-title">任务完成通知</div>
@@ -1009,9 +1206,10 @@
                     </div>
 
                     <div class="glass-card">
-                        <h3 class="font-bold text-sm mb-4 flex items-center gap-2">
-                            <i class="fas fa-shield-halved text-xs" style="color: var(--success);"></i> 隐私与安全
-                        </h3>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon green"><i class="fas fa-shield-halved"></i></div>
+                            <h3 class="font-bold text-sm">隐私与安全</h3>
+                        </div>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <div class="setting-title">记住窗口位置</div>
@@ -1029,16 +1227,15 @@
                     </div>
                 </div>
             </div>
-
-            <!-- ===== ABOUT ===== -->
+            <!-- ===== 关于 ===== -->
             <div id="view-about" class="view-page">
                 <div class="text-center py-6 stagger-item">
-                    <div class="core-icon animate-float" style="width:72px;height:72px;margin:0 auto 1.5rem;background:var(--accent-gradient);border-radius:var(--radius-lg);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.75rem;box-shadow:0 8px 32px -8px var(--accent-glow);">
+                    <div class="core-icon animate-float" style="width:72px;height:72px;margin:0 auto 1.5rem;background:var(--accent-gradient);border-radius:var(--radius-lg);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.75rem;box-shadow:0 12px 36px -10px var(--accent-glow);">
                         <i class="fas fa-rocket"></i>
                     </div>
                     <h1 class="text-3xl font-extrabold tracking-tight mb-1">统一启动器 <span id="about-title-version" class="text-xl font-mono text-transparent bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text"></span></h1>
                     <p id="about-version" class="font-mono text-sm mb-6" style="color: var(--text-muted);">正在读取版本信息...</p>
-                    <div class="flex gap-3 justify-center mb-8">
+                    <div class="flex gap-3 justify-center mb-8 flex-wrap">
                         <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="performAction('show_update_dialog')">
                             <i class="fas fa-download"></i> 安装 Yatori 更新
                         </button>
@@ -1053,9 +1250,10 @@
 
                 <div class="max-w-4xl mx-auto flex flex-col gap-5">
                     <div class="glass-card spotlight-card stagger-item">
-                        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
-                            <i class="fas fa-code-branch text-xs" style="color: var(--accent-primary);"></i> 更新日志
-                        </h2>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon"><i class="fas fa-code-branch"></i></div>
+                            <h2 class="font-bold text-lg">更新日志</h2>
+                        </div>
                         <div class="flex flex-col">
                             <div class="changelog-item">
                                 <span class="changelog-badge feature">新增</span>
@@ -1103,46 +1301,48 @@
                     </div>
 
                     <div class="glass-card spotlight-card stagger-item">
-                        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
-                            <i class="fas fa-heart text-xs" style="color: #ec4899;"></i> 感谢名单
-                        </h2>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon pink"><i class="fas fa-heart"></i></div>
+                            <h2 class="font-bold text-lg">感谢名单</h2>
+                        </div>
                         <p class="text-xs mb-4" style="color: var(--text-muted);">感谢以下开源项目与贡献者为统一启动器提供的支持</p>
                         <div class="contributor-grid">
                             <div class="contributor-card" data-tilt>
-                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);">Y</div>
+                                <div class="contributor-avatar logo-avatar"><img src="assets/yatori_logo.png" alt="Yatori"></div>
                                 <div><div class="text-sm font-semibold">Yatori</div><div class="text-xs" style="color:var(--text-muted);">通用刷课核心</div><div class="contributor-detail">开源刷课框架核心作者</div></div>
                             </div>
                             <div class="contributor-card" data-tilt>
-                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#06b6d4,#3b82f6);">A</div>
+                                <div class="contributor-avatar logo-avatar"><img src="assets/autovisor_logo.png" alt="Autovisor"></div>
                                 <div><div class="text-sm font-semibold">Autovisor</div><div class="text-xs" style="color:var(--text-muted);">智慧树核心</div><div class="contributor-detail">智慧树自动学习引擎</div></div>
                             </div>
                             <div class="contributor-card" data-tilt>
-                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#f97316,#ea580c);">Z</div>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#f59e0b,#f26d6d);">Z</div>
                                 <div><div class="text-sm font-semibold">ZError</div><div class="text-xs" style="color:var(--text-muted);">题库架构支持</div><div class="contributor-detail">题库API与数据架构设计</div></div>
                             </div>
                             <div class="contributor-card" data-tilt>
-                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#f59e0b,#ef4444);">P</div>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#5ea2ff,#7e6dff);">P</div>
                                 <div><div class="text-sm font-semibold">PyWebView</div><div class="text-xs" style="color:var(--text-muted);">桌面端框架</div><div class="contributor-detail">Python桌面端WebView框架</div></div>
                             </div>
                             <div class="contributor-card" data-tilt>
-                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#10b981,#059669);">T</div>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#3ac98b,#1fa874);">T</div>
                                 <div><div class="text-sm font-semibold">Tailwind CSS</div><div class="text-xs" style="color:var(--text-muted);">样式框架</div><div class="contributor-detail">Utility-first CSS框架</div></div>
                             </div>
                             <div class="contributor-card" data-tilt>
-                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);">F</div>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#b25dff,#7e6dff);">F</div>
                                 <div><div class="text-sm font-semibold">Font Awesome</div><div class="text-xs" style="color:var(--text-muted);">图标库</div><div class="contributor-detail">最流行的图标字体库</div></div>
                             </div>
                             <div class="contributor-card" data-tilt>
-                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#ec4899,#db2777);">U</div>
+                                <div class="contributor-avatar" style="background:linear-gradient(135deg,#ec6a9c,#db2777);">U</div>
                                 <div><div class="text-sm font-semibold">所有用户</div><div class="text-xs" style="color:var(--text-muted);">反馈与建议</div><div class="contributor-detail">感谢每一位用户的支持</div></div>
                             </div>
                         </div>
                     </div>
 
                     <div class="glass-card spotlight-card stagger-item">
-                        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
-                            <i class="fas fa-folder-tree text-xs" style="color: var(--success);"></i> 核心路径
-                        </h2>
+                        <div class="card-title-row mb-4">
+                            <div class="card-icon green"><i class="fas fa-folder-tree"></i></div>
+                            <h2 class="font-bold text-lg">核心路径</h2>
+                        </div>
                         <div id="about-paths" class="font-mono text-sm whitespace-pre-wrap" style="color: var(--text-secondary); line-height: 1.8;"></div>
                         <div class="flex gap-3 mt-5 flex-wrap">
                             <button class="btn btn-outline btn-sm" onclick="performAction('open_config_dir', 'yatori')">
@@ -1161,10 +1361,10 @@
         </main>
     </div>
 
-    <!-- Toast Container -->
+    <!-- Toast 容器 -->
     <div id="toast-wrap" class="toast-wrap"></div>
 
-    <!-- Exit Confirmation Modal -->
+    <!-- 退出确认弹窗 -->
     <div id="exit-modal" class="modal-overlay">
         <div class="modal-box">
             <div class="modal-icon"><i class="fas fa-door-open"></i></div>
@@ -1177,10 +1377,10 @@
         </div>
     </div>
 
-    <!-- Background Settings Modal -->
+    <!-- 背景设置弹窗 -->
     <div id="bg-modal" class="modal-overlay">
         <div class="modal-box" style="width:520px;">
-            <div class="modal-icon" style="background:linear-gradient(135deg,rgba(59,130,246,0.15),rgba(139,92,246,0.1));color:var(--accent-primary);">
+            <div class="modal-icon accent">
                 <i class="fas fa-image"></i>
             </div>
             <div class="modal-title">自定义背景</div>
@@ -1190,19 +1390,31 @@
                     <span>默认</span>
                     <div class="check-icon"><i class="fas fa-check"></i></div>
                 </div>
-                <div class="bg-preview-item" data-bg="gradient1" onclick="setBackgroundFromModal('gradient1', this)" style="background: linear-gradient(135deg, #0a0b0f 0%, #1a1a3e 50%, #0f2027 100%);">
+                <div class="bg-preview-item" data-bg="gradient1" onclick="setBackgroundFromModal('gradient1', this)" title="薄雾紫藤" style="background: radial-gradient(at 18% 22%, rgba(165,180,252,0.85) 0px, transparent 55%), radial-gradient(at 82% 12%, rgba(125,211,252,0.8) 0px, transparent 55%), radial-gradient(at 55% 88%, rgba(249,168,212,0.75) 0px, transparent 55%), linear-gradient(135deg, #eef2ff 0%, #f5f3ff 55%, #fdf4ff 100%);">
                     <div class="check-icon"><i class="fas fa-check"></i></div>
                 </div>
-                <div class="bg-preview-item" data-bg="gradient2" onclick="setBackgroundFromModal('gradient2', this)" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);">
+                <div class="bg-preview-item" data-bg="gradient2" onclick="setBackgroundFromModal('gradient2', this)" title="蜜桃晨曦" style="background: radial-gradient(at 15% 85%, rgba(253,186,116,0.85) 0px, transparent 55%), radial-gradient(at 85% 18%, rgba(249,168,212,0.8) 0px, transparent 55%), radial-gradient(at 55% 50%, rgba(254,215,170,0.55) 0px, transparent 60%), linear-gradient(135deg, #fff7ed 0%, #fff1f2 100%);">
                     <div class="check-icon"><i class="fas fa-check"></i></div>
                 </div>
-                <div class="bg-preview-item" data-bg="cyber-teal" onclick="setBackgroundFromModal('cyber-teal', this)" title="赛博青绿" style="background: repeating-linear-gradient(60deg, transparent, transparent 40px, rgba(0,229,160,0.04) 40px, rgba(0,229,160,0.04) 41px), repeating-linear-gradient(-60deg, transparent, transparent 80px, rgba(0,0,0,0.3) 80px, rgba(0,0,0,0.3) 81px), linear-gradient(135deg, #050f0c, #0d1a16, #020605);">
+                <div class="bg-preview-item" data-bg="cyber-teal" onclick="setBackgroundFromModal('cyber-teal', this)" title="薄荷青提" style="background: radial-gradient(at 22% 26%, rgba(110,231,183,0.85) 0px, transparent 55%), radial-gradient(at 78% 74%, rgba(103,232,249,0.8) 0px, transparent 55%), radial-gradient(at 62% 12%, rgba(190,242,100,0.5) 0px, transparent 55%), linear-gradient(135deg, #ecfdf5 0%, #ecfeff 100%);">
                     <div class="check-icon"><i class="fas fa-check"></i></div>
                 </div>
-                <div class="bg-preview-item" data-bg="hacker-amber" onclick="setBackgroundFromModal('hacker-amber', this)" title="骇客琥珀" style="background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,176,32,0.04) 2px, rgba(255,176,32,0.04) 4px), linear-gradient(160deg, #0f0d08, #1a1610, #080604);">
+                <div class="bg-preview-item" data-bg="hacker-amber" onclick="setBackgroundFromModal('hacker-amber', this)" title="暖阳杏野" style="background: radial-gradient(at 24% 20%, rgba(252,211,77,0.8) 0px, transparent 55%), radial-gradient(at 80% 80%, rgba(251,146,60,0.7) 0px, transparent 55%), radial-gradient(at 68% 24%, rgba(254,240,138,0.55) 0px, transparent 55%), linear-gradient(135deg, #fffbeb 0%, #fff7ed 100%);">
                     <div class="check-icon"><i class="fas fa-check"></i></div>
                 </div>
-                <div class="bg-preview-item" data-bg="midnight-aurora" onclick="setBackgroundFromModal('midnight-aurora', this)" title="午夜极光" style="background: radial-gradient(circle at center, rgba(79,195,247,0.06) 0px, rgba(79,195,247,0.06) 1px, transparent 1px, transparent 100%), linear-gradient(150deg, #060a12, #0c1420, #04060a); background-size: 24px 24px, 48px 48px; background-position: 0 0, 12px 12px;">
+                <div class="bg-preview-item" data-bg="midnight-aurora" onclick="setBackgroundFromModal('midnight-aurora', this)" title="柔光极光" style="background: radial-gradient(at 15% 30%, rgba(125,211,252,0.8) 0px, transparent 55%), radial-gradient(at 85% 18%, rgba(196,181,253,0.8) 0px, transparent 55%), radial-gradient(at 50% 86%, rgba(134,239,172,0.65) 0px, transparent 55%), linear-gradient(150deg, #f0f9ff 0%, #f5f3ff 55%, #f0fdf4 100%);">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-luoshu" onclick="setBackgroundFromModal('tianyi-luoshu', this)" title="洛水天依" style="background-image: url('assets/tianyi_wallpaper_luoshu.jpg'); background-size: cover; background-position: center;">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-flower" onclick="setBackgroundFromModal('tianyi-flower', this)" title="花眠天依" style="background-image: url('assets/tianyi_wallpaper_flower.jpg'); background-size: cover; background-position: center;">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-girl" onclick="setBackgroundFromModal('tianyi-girl', this)" title="少女洛天依" style="background-image: url('assets/tianyi_wallpaper_girl.png'); background-size: cover; background-position: center;">
+                    <div class="check-icon"><i class="fas fa-check"></i></div>
+                </div>
+                <div class="bg-preview-item tianyi-wallpaper-option" data-bg="tianyi-singer" onclick="setBackgroundFromModal('tianyi-singer', this)" title="歌姬洛天依" style="background-image: url('assets/tianyi_wallpaper_singer.png'); background-size: cover; background-position: center;">
                     <div class="check-icon"><i class="fas fa-check"></i></div>
                 </div>
                 <div class="bg-preview-item" data-bg="custom" onclick="triggerCustomBgInModal()">
@@ -1212,9 +1424,10 @@
             </div>
             <div id="modal-custom-bg-row" class="mt-3" style="display:none;">
                 <div class="flex gap-2">
-                    <input id="modal-custom-bg-url" type="text" class="input-field" placeholder="输入图片 URL 或点击浏览选择">
+                    <input id="modal-custom-bg-url" type="text" class="input-field" style="flex:1;min-width:0;" placeholder="输入图片 URL 或点击浏览选择">
                     <button class="btn btn-primary btn-sm" onclick="applyModalCustomBg()"><i class="fas fa-check"></i></button>
                     <button class="btn btn-outline btn-sm" onclick="triggerBgFileInput()"><i class="fas fa-folder-open"></i></button>
+                    <button class="btn btn-outline btn-sm" onclick="clearCustomBackground()" title="清空背景图片"><i class="fas fa-eraser"></i></button>
                 </div>
             </div>
             <div class="modal-actions mt-4">
@@ -1224,13 +1437,13 @@
         </div>
     </div>
 
-
+    <!-- 背景图片文件选择（隐藏） -->
     <input type="file" id="bg-file-input" accept="image/*" onchange="handleBgFileUpload(this)">
 
-    <!-- Shutdown Countdown Modal -->
+    <!-- 自动关机倒计时弹窗 -->
     <div id="shutdown-modal" class="modal-overlay">
         <div class="modal-box">
-            <div class="modal-icon" style="background:linear-gradient(135deg,rgba(255,69,58,0.2),rgba(200,30,30,0.1));color:#ff453a;">
+            <div class="modal-icon">
                 <i class="fas fa-power-off"></i>
             </div>
             <div class="modal-title">刷课任务已完成</div>

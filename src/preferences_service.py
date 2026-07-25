@@ -23,6 +23,9 @@ DEFAULT_PREFERENCES = {
     "rememberGeometry": False,
     "autoCleanLogs": False,
     "qb_external_url": "",
+    "tianyiThemeUnlocked": False,
+    "tianyiAchievementShown": False,
+    "tianyiChatHistory": [],
 }
 
 

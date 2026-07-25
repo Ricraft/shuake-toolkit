@@ -3,17 +3,22 @@ from src.ai_service import AIConnectivityService
 
 class FakeTester:
     PLATFORM_NAMES = {"SILICON": "硅基流动", "OTHER": "自定义"}
+    DEFAULT_MODELS = {"SILICON": "default-silicon"}
     connectivity_result = (True, "连接成功", {"latency_ms": 10})
     models_result = (True, "获取成功", [{"id": "model-a"}])
+    chat_result = (True, "OK", "你好呀")
     connectivity_calls = []
     model_calls = []
+    chat_calls = []
 
     @classmethod
     def reset(cls):
         cls.connectivity_result = (True, "连接成功", {"latency_ms": 10})
         cls.models_result = (True, "获取成功", [{"id": "model-a"}])
+        cls.chat_result = (True, "OK", "你好呀")
         cls.connectivity_calls = []
         cls.model_calls = []
+        cls.chat_calls = []
 
     @classmethod
     def test_connectivity(cls, **kwargs):
@@ -24,6 +29,11 @@ class FakeTester:
     def fetch_model_list(cls, **kwargs):
         cls.model_calls.append(kwargs)
         return cls.models_result
+
+    @classmethod
+    def chat_completion(cls, **kwargs):
+        cls.chat_calls.append(kwargs)
+        return cls.chat_result
 
 
 def make_service(log=None):
@@ -177,3 +187,77 @@ def test_tester_call_exceptions_return_stable_failure_shapes():
         "message": "获取模型列表时发生错误: service unavailable",
         "models": [],
     }
+
+
+def test_chat_normalizes_provider_messages_and_uses_default_model():
+    service = make_service()
+
+    result = service.chat(
+        {
+            "provider": " custom ",
+            "api_url": "https://example.invalid/v1",
+            "api_key": " secret ",
+            "model": "",
+        },
+        [
+            {"role": "system", "content": "系统提示"},
+            {"role": "tool", "content": "非法角色会降级"},
+            {"role": "user", "content": "你好"},
+            {"role": "assistant", "content": ""},
+        ],
+    )
+
+    assert result == {
+        "ok": True,
+        "success": True,
+        "message": "OK",
+        "reply": "你好呀",
+    }
+    assert FakeTester.chat_calls == [
+        {
+            "provider": "OTHER",
+            "api_url": "https://example.invalid/v1",
+            "api_key": "secret",
+            "model": "",
+            "messages": [
+                {"role": "system", "content": "系统提示"},
+                {"role": "user", "content": "非法角色会降级"},
+                {"role": "user", "content": "你好"},
+            ],
+            "timeout": 90,
+        }
+    ]
+
+
+def test_chat_rejects_empty_custom_endpoint_before_network_call():
+    service = make_service()
+
+    result = service.chat(
+        {"provider": "OTHER", "api_url": "", "api_key": "secret"},
+        [{"role": "user", "content": "你好"}],
+    )
+
+    assert result == {
+        "ok": False,
+        "success": False,
+        "message": "API 地址不能为空",
+    }
+    assert FakeTester.chat_calls == []
+
+
+def test_chat_rejects_successful_but_empty_model_reply():
+    logs = []
+    service = make_service(logs.append)
+    FakeTester.chat_result = (True, "OK", "   ")
+
+    result = service.chat(
+        {"provider": "SILICON", "api_key": "secret"},
+        [{"role": "user", "content": "你好"}],
+    )
+
+    assert result == {
+        "ok": False,
+        "success": False,
+        "message": "AI 模型返回了空回复",
+    }
+    assert any("模型返回空回复" in line for line in logs)
