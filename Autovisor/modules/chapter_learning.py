@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 
+from playwright._impl._errors import TargetClosedError
 from playwright.async_api import Page
 
 from modules.logger import Logger
@@ -17,43 +18,6 @@ VIDEO_ITEM_SELECTOR = (
 )
 
 
-async def _extract_test_questions_from_dom(page: Page):
-    """从 DOM 提取测试题目，作为接口抓取失败时的备用方案。"""
-    questions = []
-    try:
-        question_items = page.locator(
-            ".question-item, .exam-question, .topic-item"
-        )
-        for index in range(await question_items.count()):
-            item = question_items.nth(index)
-            name = await item.locator(
-                ".question-name, .topic-title, .stem"
-            ).first.text_content()
-            name = name.strip() if name else ""
-            options = []
-            option_items = item.locator(
-                ".option-item, .topic-item .option, li"
-            )
-            for option_index in range(await option_items.count()):
-                text = await option_items.nth(option_index).text_content()
-                if text:
-                    options.append((0, text.strip()))
-            if name:
-                questions.append(
-                    {
-                        "name": name,
-                        "type": "未知",
-                        "type_id": 0,
-                        "options": options,
-                        "score": "",
-                        "eid": "",
-                    }
-                )
-    except Exception:
-        pass
-    return questions
-
-
 async def get_chapter_videos_status(
     page: Page,
     *,
@@ -64,7 +28,19 @@ async def get_chapter_videos_status(
     videos = []
     try:
         video_items = page.locator(VIDEO_ITEM_SELECTOR)
-        for index in range(await video_items.count()):
+        item_count = await video_items.count()
+    except TargetClosedError:
+        raise
+    except Exception as exc:
+        active_logger.warn(
+            "[WARN] 获取章节视频列表失败: %s"
+            % repr(exc)[:100]
+        )
+        raise
+
+    item_errors = 0
+    for index in range(item_count):
+        try:
             item = video_items.nth(index)
             text = await item.text_content()
             if not text:
@@ -102,10 +78,18 @@ async def get_chapter_videos_status(
                     "index": index,
                 }
             )
-    except Exception as exc:
-        active_logger.warn(
-            "[WARN] 获取视频状态失败: %s" % str(exc)[:30]
-        )
+        except TargetClosedError:
+            raise
+        except Exception as exc:
+            item_errors += 1
+            if item_errors == 1 or item_errors % 5 == 0:
+                active_logger.warn(
+                    "[WARN] 读取章节条目失败（累计%d项，索引%d）: %s"
+                    % (item_errors, index, repr(exc)[:100])
+                )
+
+    if item_count and item_errors == item_count:
+        raise RuntimeError("所有章节条目均读取失败，无法确认视频完成状态")
     return videos
 
 

@@ -5,7 +5,6 @@ from playwright.async_api import Page
 from modules.logger import Logger
 from modules.floating_widget import inject_widget
 from modules.chapter_learning import (
-    _extract_test_questions_from_dom,
     chapter_learning_flow,
     get_chapter_videos_status,
     wait_for_video_completion,

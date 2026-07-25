@@ -254,12 +254,28 @@ async def learning_loop(
             await page.wait_for_timeout(500)
     
     await page.wait_for_timeout(1000)
-    cur_time = await get_course_progress(page, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class, completion_threshold)
+    cur_time = await get_course_progress(
+        page,
+        is_new_version,
+        is_hike_class,
+        is_national_wisdom,
+        is_meeting_class,
+        completion_threshold,
+        diagnostics=diagnostics,
+    )
     
     # 如果一开始就显示100%，对于智慧共享课和见面课需要额外等待和验证
     if cur_time == "100%" and (is_hike_class or is_national_wisdom or is_meeting_class):
         await page.wait_for_timeout(5000)
-        cur_time = await get_course_progress(page, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class, completion_threshold)
+        cur_time = await get_course_progress(
+            page,
+            is_new_version,
+            is_hike_class,
+            is_national_wisdom,
+            is_meeting_class,
+            completion_threshold,
+            diagnostics=diagnostics,
+        )
         
         # 再次检查，如果还是100%但视频时间很短，说明可能是误判，需要重置视频
         if cur_time == "100%":
@@ -367,7 +383,15 @@ async def learning_loop(
                         "视频播放期间被重定向到首页或登录页"
                     )
             
-            cur_time = await get_course_progress(page, is_new_version, is_hike_class, is_national_wisdom, is_meeting_class, completion_threshold)
+            cur_time = await get_course_progress(
+                page,
+                is_new_version,
+                is_hike_class,
+                is_national_wisdom,
+                is_meeting_class,
+                completion_threshold,
+                diagnostics=diagnostics,
+            )
             
             # 【修复】检测进度停滞：如果连续60秒进度没有变化，刷新页面
             if cur_time == last_progress:

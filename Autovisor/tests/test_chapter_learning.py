@@ -63,6 +63,11 @@ class _Item:
         self.clicks += 1
 
 
+class _BrokenItem(_Item):
+    async def text_content(self):
+        raise RuntimeError("lesson card changed")
+
+
 class _Collection:
     def __init__(self, items):
         self.items = items
@@ -102,6 +107,39 @@ def test_video_status_excludes_incomplete_non_video_lessons():
         {"name": "第三讲", "completed": False, "index": 3},
     ]
     assert page.selectors == [VIDEO_ITEM_SELECTOR]
+
+
+def test_video_status_skips_one_broken_item_without_losing_later_videos():
+    logger = _Logger()
+    page = _ListingPage(
+        [
+            _BrokenItem("broken"),
+            _Item("观看 第二讲", css_class="video-item"),
+        ]
+    )
+
+    videos = asyncio.run(
+        get_chapter_videos_status(page, logger_instance=logger)
+    )
+
+    assert videos == [
+        {"name": "观看 第二讲", "completed": False, "index": 1}
+    ]
+    assert len(logger.warnings) == 1
+    assert "索引0" in logger.warnings[0]
+    assert "RuntimeError('lesson card changed')" in logger.warnings[0]
+
+
+def test_chapter_flow_fails_when_every_lesson_item_is_unreadable():
+    logger = _Logger()
+    page = _ListingPage([_BrokenItem("broken")])
+
+    result = asyncio.run(
+        chapter_learning_flow(page, logger_instance=logger)
+    )
+
+    assert result is False
+    assert any("所有章节条目均读取失败" in line for line in logger.errors)
 
 
 class _PlaybackPage:
