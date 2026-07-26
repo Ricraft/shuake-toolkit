@@ -28,12 +28,25 @@ class _Events:
 
 
 class _Window:
-    def __init__(self, selection=None):
+    def __init__(self, selection=None, evaluate_result=True, evaluate_error=None):
         self.events = _Events()
         self.selection = selection
+        self.evaluate_result = evaluate_result
+        self.evaluate_error = evaluate_error
+        self.evaluate_calls = []
+        self.destroyed = False
 
     def create_file_dialog(self, *_args, **_kwargs):
         return self.selection
+
+    def evaluate_js(self, script):
+        self.evaluate_calls.append(script)
+        if self.evaluate_error:
+            raise self.evaluate_error
+        return self.evaluate_result
+
+    def destroy(self):
+        self.destroyed = True
 
 
 class WebOnlyLauncherTests(unittest.TestCase):
@@ -87,6 +100,106 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIs(launcher.web_window, window)
         self.assertEqual(window.events.closing.handlers, [launcher._handle_web_window_closing])
         self.assertEqual(calls, [True])
+
+    def test_exit_confirmation_requests_are_coalesced_until_modal_runs(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = _Window(evaluate_result=True)
+        launcher._exit_confirmation_pending = False
+        scheduled = []
+        launcher._after = lambda delay, callback: scheduled.append((delay, callback))
+        launcher.log_system = lambda _message: None
+        launcher.on_closing = lambda **_kwargs: self.fail(
+            "available modal must not trigger fallback exit"
+        )
+
+        self.assertTrue(launcher._request_web_exit_confirmation())
+        self.assertTrue(launcher._request_web_exit_confirmation())
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], 100)
+        self.assertTrue(launcher._exit_confirmation_pending)
+
+        self.assertTrue(scheduled[0][1]())
+        self.assertFalse(launcher._exit_confirmation_pending)
+        self.assertEqual(len(launcher.web_window.evaluate_calls), 1)
+
+    def test_missing_exit_modal_falls_back_to_confirmed_safe_exit(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = _Window(evaluate_result=False)
+        launcher._exit_confirmation_pending = True
+        logs = []
+        exits = []
+        launcher.log_system = logs.append
+        launcher.on_closing = lambda confirmed=False: exits.append(confirmed)
+
+        self.assertFalse(launcher._show_web_exit_confirmation())
+
+        self.assertEqual(exits, [True])
+        self.assertFalse(launcher._exit_confirmation_pending)
+        self.assertTrue(any("安全关闭" in message for message in logs))
+
+    def test_exit_modal_script_failure_is_visible_and_safely_exits(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = _Window(
+            evaluate_error=RuntimeError("web renderer unavailable")
+        )
+        launcher._exit_confirmation_pending = True
+        logs = []
+        exits = []
+        launcher.log_system = logs.append
+        launcher.on_closing = lambda confirmed=False: exits.append(confirmed)
+
+        self.assertFalse(launcher._show_web_exit_confirmation())
+
+        self.assertEqual(exits, [True])
+        self.assertTrue(
+            any("RuntimeError('web renderer unavailable')" in message for message in logs)
+        )
+
+    def test_exit_confirmation_schedule_failure_does_not_trap_window(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = _Window()
+        launcher._exit_confirmation_pending = False
+        logs = []
+        launcher.log_system = logs.append
+
+        def reject_schedule(_delay, _callback):
+            raise RuntimeError("timer unavailable")
+
+        launcher._after = reject_schedule
+
+        self.assertFalse(launcher._request_web_exit_confirmation())
+        self.assertFalse(launcher._exit_confirmation_pending)
+        self.assertTrue(any("timer unavailable" in message for message in logs))
+
+    def test_window_close_cleans_up_when_confirmation_cannot_be_scheduled(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._allow_webview_close = False
+        launcher._preference_enabled = lambda *_args, **_kwargs: False
+        launcher._request_web_exit_confirmation = lambda: False
+        exits = []
+        launcher.on_closing = lambda confirmed=False: exits.append(confirmed)
+
+        result = launcher._handle_web_window_closing()
+
+        self.assertFalse(result)
+        self.assertEqual(exits, [True])
+
+    def test_frontend_confirm_exit_waits_for_backend_and_restores_failure_ui(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        source = frontend.split("async function confirmExit()", 1)[1].split(
+            "function showBgModal", 1
+        )[0]
+
+        self.assertIn("await api.perform_action('exit_app')", source)
+        self.assertIn("if (result?.ok === false)", source)
+        self.assertIn("showToast(error?.message || '退出失败，请重试', 'error')", source)
+        self.assertIn("showExitModal()", source)
+        self.assertLess(
+            source.index("await api.perform_action('exit_app')"),
+            source.index("try { window.close(); }"),
+        )
 
     def test_browser_path_dialog_uses_webview_window(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)

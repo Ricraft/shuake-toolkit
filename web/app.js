@@ -1397,20 +1397,26 @@
 
         function showExitModal() { exitConfirmed = false; const modal = document.getElementById('exit-modal'); if (modal) modal.classList.add('active'); }
         function hideExitModal() { const modal = document.getElementById('exit-modal'); if (modal) modal.classList.remove('active'); }
-        function confirmExit() {
+        async function confirmExit() {
              exitConfirmed = true;
              hideExitModal();
-             // 通知后端执行退出（不等待响应）
              const api = bridge();
              if (api && typeof api.perform_action === 'function') {
                  try {
-                     // 使用同步方式调用，不等待Promise完成
-                     api.perform_action('exit_app');
-                 } catch (e) {
-                     // 忽略错误
+                     const result = await api.perform_action('exit_app');
+                     if (result?.ok === false) {
+                         throw new Error(result.message || '后端拒绝退出');
+                     }
+                     // WebView 由后端在完成清理后销毁，不再与 window.close() 竞态。
+                     return;
+                 } catch (error) {
+                     exitConfirmed = false;
+                     showToast(error?.message || '退出失败，请重试', 'error');
+                     showExitModal();
+                     return;
                  }
              }
-             // 立即尝试关闭窗口
+             // 浏览器预览环境没有 Python 后端，只能尝试浏览器原生关闭。
              try { window.close(); } catch (e) {}
          }
 

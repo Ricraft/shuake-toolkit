@@ -467,6 +467,7 @@ class UnifiedLauncher:
         """Initialize the WebView-backed launcher state."""
         self.web_window = None
         self._allow_webview_close = False
+        self._exit_confirmation_pending = False
 
         self.processes = {
             'yatori': None,
@@ -604,33 +605,58 @@ class UnifiedLauncher:
             self.web_window.events.closing += self._handle_web_window_closing
             self._apply_window_preferences(initial=True)
 
-    def _request_web_exit_confirmation(self):
-        """请求Web端显示退出确认对话框，使用非阻塞方式"""
-        if not self.web_window:
+    def _show_web_exit_confirmation(self):
+        """显示退出确认；前端不可用时完成用户已经发起的安全退出。"""
+        self._exit_confirmation_pending = False
+        window = self.web_window
+        if not window:
             return False
 
         try:
-            # 使用定时器延迟执行JS，避免在closing事件中阻塞
-            import threading
-            def show_modal():
-                try:
-                    if self.web_window:
-                        self.web_window.evaluate_js(
-                            """
-                            (function () {
-                                if (typeof showExitModal === 'function') {
-                                    showExitModal();
-                                    return true;
-                                }
-                                return false;
-                            })()
-                            """
-                        )
-                except Exception:
-                    pass
-            threading.Timer(0.1, show_modal).start()
+            shown = bool(
+                window.evaluate_js(
+                    """
+                    (function () {
+                        if (typeof showExitModal === 'function') {
+                            showExitModal();
+                            return true;
+                        }
+                        return false;
+                    })()
+                    """
+                )
+            )
+        except Exception as exc:
+            self.log_system(
+                "显示退出确认弹窗失败，将按本次退出请求安全关闭: "
+                f"{repr(exc)[:120]}"
+            )
+            shown = False
+
+        if shown:
             return True
-        except Exception:
+
+        self.log_system("退出确认弹窗不可用，将按本次退出请求安全关闭。")
+        self.on_closing(confirmed=True)
+        return False
+
+    def _request_web_exit_confirmation(self):
+        """请求 Web 端非阻塞显示退出确认对话框。"""
+        if not self.web_window:
+            return False
+        if getattr(self, '_exit_confirmation_pending', False):
+            return True
+
+        self._exit_confirmation_pending = True
+        try:
+            # 延迟执行 JS，避免在 pywebview closing 事件中阻塞。
+            self._after(100, self._show_web_exit_confirmation)
+            return True
+        except Exception as exc:
+            self._exit_confirmation_pending = False
+            self.log_system(
+                "退出确认任务创建失败: %s" % repr(exc)[:120]
+            )
             return False
 
     def _handle_web_window_closing(self):
@@ -644,6 +670,10 @@ class UnifiedLauncher:
 
         if self._request_web_exit_confirmation():
             return False
+
+        # 连弹窗任务都无法创建时，仍需先回收核心和题库再关闭。
+        self.on_closing(confirmed=True)
+        return False
 
     def _close_main_window(self):
         """安全关闭主窗口"""
