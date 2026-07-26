@@ -14,7 +14,54 @@
         let runtimeRequestSequence = 0;
         let runtimeAppliedSequence = 0;
         let currentBgType = 'none';
+        let lastObservedRuntimeEventKey = null;
+        let achievementSaveQueue = Promise.resolve();
         const PREFERENCES_STORAGE_KEY = 'launcher_preferences_v1';
+        const ACHIEVEMENTS = {
+            tianyi_theme: {
+                title: '洛水天依',
+                desc: '恭喜你解锁洛天依主题和相关壁纸，请到软件设置的界面设置开启！',
+                icon: 'fas fa-music',
+                image: 'assets/tianyi-avatar.png',
+                color: '#66ccff',
+            },
+            missing_config: {
+                title: '为什么会这样呢',
+                desc: '你连账号都不配置就刷课???',
+                icon: 'fas fa-circle-question',
+                color: '#f59e0b',
+            },
+            core_crash: {
+                title: '结束了？',
+                desc: '恭喜第一次触发课程核心崩溃',
+                icon: 'fas fa-heart-crack',
+                color: '#ef5b6b',
+            },
+            first_core_start: {
+                title: '点火成功',
+                desc: '第一次成功启动刷课核心，今天也要稳稳推进～',
+                icon: 'fas fa-rocket',
+                color: '#38bfc8',
+            },
+            dual_core: {
+                title: '双核驱动',
+                desc: 'Yatori 与 Autovisor 同时在线，效率加倍。',
+                icon: 'fas fa-gears',
+                color: '#7c83ff',
+            },
+            question_collector: {
+                title: '题海拾贝',
+                desc: '题库里终于有了第一道题。',
+                icon: 'fas fa-book-open',
+                color: '#3ac98b',
+            },
+            tianyi_commander: {
+                title: '天依的指挥官',
+                desc: '第一次通过洛天依下达并完成控制指令。',
+                icon: 'fas fa-wand-magic-sparkles',
+                color: '#ec6a9c',
+            },
+        };
         const TIANYI_WALLPAPERS = {
             'tianyi-luoshu': 'assets/tianyi_wallpaper_luoshu.jpg',
             'tianyi-flower': 'assets/tianyi_wallpaper_flower.jpg',
@@ -107,7 +154,7 @@
 
         function renderAutovisorActivity(activity) { const panel = document.getElementById('autovisor-activity'); if (!panel) return; if (!activity || activity.phase === 'idle') { panel.hidden = true; return; } panel.hidden = false; panel.dataset.phase = activity.phase||'idle'; const label = document.getElementById('autovisor-activity-label'); const detail = document.getElementById('autovisor-activity-detail'); const percent = document.getElementById('autovisor-activity-percent'); const track = document.getElementById('autovisor-progress-track'); const bar = document.getElementById('autovisor-progress-bar'); if (label) label.textContent = activity.label||'运行中'; const parts = []; if (activity.course_index && activity.course_total) parts.push(`第 ${activity.course_index}/${activity.course_total} 门`); if (activity.course) parts.push(activity.course); if (activity.phase === 'failed' && activity.last_error) parts.push(activity.last_error); if (detail) { detail.textContent = parts.join(' · ')||'等待更多运行信息'; detail.title = detail.textContent; } const raw = Number(activity.progress_percent); const hasProgress = activity.progress_percent !== null && activity.progress_percent !== '' && Number.isFinite(raw); const value = hasProgress?Math.max(0, Math.min(100, raw)):0; if (percent) percent.textContent = hasProgress?`${value}%`:''; if (track) track.hidden = !hasProgress; if (bar) bar.style.width = `${value}%`; }
 
-        function renderRuntime(runtime) { if (!runtime) return; const n = { ...runtime, yatori_running: runtime.yatori_running??!!runtime.running?.yatori, autovisor_running: runtime.autovisor_running??!!runtime.running?.autovisor, yatori_version: runtime.yatori_version||runtime.versions?.yatori||'Yatori Core', autovisor_version: runtime.autovisor_version||runtime.versions?.autovisor||'Autovisor Core', about_version: runtime.about_version||'', core_paths: runtime.core_paths||(runtime.paths?`Yatori: ${runtime.paths.yatori||''}\nAutovisor: ${runtime.paths.autovisor||''}`:''), shutdown_pending: !!runtime.shutdown_pending }; state.runtime = n; backendConnected = true; renderConsole(); document.getElementById('sidebar-status').textContent = 'Python 后端已连接'; setCoreStatus('yatori', n.yatori_running, n.yatori_version); setCoreStatus('autovisor', n.autovisor_running, n.autovisor_version); renderAutovisorActivity(n.autovisor_activity); if (n.about_version) { document.getElementById('about-version').textContent = n.about_version; const m = n.about_version.match(/统一启动器\s*([^|]+)/); if (m) document.getElementById('about-title-version').textContent = m[1].trim(); } if (n.core_paths) { document.getElementById('about-paths').textContent = n.core_paths; initTypewriterPaths(); } const qbR = !!runtime.qb_running, qbP = runtime.qb_port||8083, qbS = runtime.qb_stats||{total:0,ai_cached:0}; setQbStatus(qbR, qbP, qbS); const sm = document.getElementById('shutdown-modal'); if (sm) sm.classList.toggle('active', n.shutdown_pending); if (n.shutdown_pending && !window._shutdownTimer) { let sec = 60; const secEl = document.getElementById('shutdown-countdown-sec'); if (secEl) secEl.textContent = sec; window._shutdownTimer = setInterval(() => { const el = document.getElementById('shutdown-countdown-sec'); if (el) el.textContent = --sec; if (sec <= 0) { clearInterval(window._shutdownTimer); window._shutdownTimer = null; document.getElementById('shutdown-modal')?.classList.remove('active'); } }, 1000); } else if (!n.shutdown_pending && window._shutdownTimer) { clearInterval(window._shutdownTimer); window._shutdownTimer = null; } }
+        function renderRuntime(runtime) { if (!runtime) return; const n = { ...runtime, yatori_running: runtime.yatori_running??!!runtime.running?.yatori, autovisor_running: runtime.autovisor_running??!!runtime.running?.autovisor, yatori_version: runtime.yatori_version||runtime.versions?.yatori||'Yatori Core', autovisor_version: runtime.autovisor_version||runtime.versions?.autovisor||'Autovisor Core', about_version: runtime.about_version||'', core_paths: runtime.core_paths||(runtime.paths?`Yatori: ${runtime.paths.yatori||''}\nAutovisor: ${runtime.paths.autovisor||''}`:''), shutdown_pending: !!runtime.shutdown_pending }; state.runtime = n; observeRuntimeAchievements(n); backendConnected = true; renderConsole(); document.getElementById('sidebar-status').textContent = 'Python 后端已连接'; setCoreStatus('yatori', n.yatori_running, n.yatori_version); setCoreStatus('autovisor', n.autovisor_running, n.autovisor_version); renderAutovisorActivity(n.autovisor_activity); if (n.about_version) { document.getElementById('about-version').textContent = n.about_version; const m = n.about_version.match(/统一启动器\s*([^|]+)/); if (m) document.getElementById('about-title-version').textContent = m[1].trim(); } if (n.core_paths) { document.getElementById('about-paths').textContent = n.core_paths; initTypewriterPaths(); } const qbR = !!runtime.qb_running, qbP = runtime.qb_port||8083, qbS = runtime.qb_stats||{total:0,ai_cached:0}; setQbStatus(qbR, qbP, qbS); const sm = document.getElementById('shutdown-modal'); if (sm) sm.classList.toggle('active', n.shutdown_pending); if (n.shutdown_pending && !window._shutdownTimer) { let sec = 60; const secEl = document.getElementById('shutdown-countdown-sec'); if (secEl) secEl.textContent = sec; window._shutdownTimer = setInterval(() => { const el = document.getElementById('shutdown-countdown-sec'); if (el) el.textContent = --sec; if (sec <= 0) { clearInterval(window._shutdownTimer); window._shutdownTimer = null; document.getElementById('shutdown-modal')?.classList.remove('active'); } }, 1000); } else if (!n.shutdown_pending && window._shutdownTimer) { clearInterval(window._shutdownTimer); window._shutdownTimer = null; } }
 
         function setCoreStatus(core, running, version) { document.getElementById(`${core}-dot`).classList.toggle('running', running); document.getElementById(`${core}-status`).textContent = running?'运行中':'未启动'; document.getElementById(`${core}-ready`).textContent = running?'运行中':'待命'; document.getElementById(`${core}-ready`).className = 'status-badge '+(running?'ready':'idle'); document.getElementById(`${core}-version`).textContent = version||`${core} Core`; document.getElementById(`${core}-action-btn`).innerHTML = running?'<i class="fas fa-stop"></i> 停止核心':'<i class="fas fa-power-off"></i> 启动核心'; document.getElementById(`${core}-action-btn`).onclick = () => handleCoreAction(core); }
 
@@ -724,6 +771,12 @@
 
         function handleWebActionResult(result, fallbackMessage = '操作失败') {
             if (!result?.ok) {
+                if (
+                    result?.failureKind === 'configuration'
+                    || (Array.isArray(result?.failureKinds) && result.failureKinds.includes('configuration'))
+                ) {
+                    unlockAchievement('missing_config');
+                }
                 showToast(result?.message || fallbackMessage, 'error');
                 if (result?.state) applyRuntimeState(unwrapState(result));
                 return false;
@@ -1211,7 +1264,8 @@
         function persistStoredPreferences() { try { localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(state.preferences || {})); } catch (e) {} }
 
         function loadPreferences() {
-            state.preferences = { autoStart: false, autoShutdown: false, autoRun: false, minimizeToTray: false, startMinimized: false, alwaysOnTop: false, notifyOnComplete: true, notifyOnError: true, soundEnabled: true, rememberGeometry: false, autoCleanLogs: false, theme: 'dark', bgType: 'none', bgUrl: '', tianyiThemeUnlocked: false, tianyiAchievementShown: false, tianyiChatHistory: [], ...loadStoredPreferences() };
+            state.preferences = { autoStart: false, autoShutdown: false, autoRun: false, minimizeToTray: false, startMinimized: false, alwaysOnTop: false, notifyOnComplete: true, notifyOnError: true, soundEnabled: true, rememberGeometry: false, autoCleanLogs: false, theme: 'dark', bgType: 'none', bgUrl: '', tianyiThemeUnlocked: false, tianyiAchievementShown: false, tianyiChatHistory: [], achievements: {}, achievementResetToken: 0, ...loadStoredPreferences() };
+            normalizeAchievementStore();
             const set = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
             set('pref-auto-start', state.preferences.autoStart);
             set('pref-auto-shutdown', state.preferences.autoShutdown);
@@ -1225,12 +1279,13 @@
             set('pref-remember-geometry', state.preferences.rememberGeometry);
             set('pref-auto-clean-logs', state.preferences.autoCleanLogs);
             syncTianyiThemeUnlockUI();
+            updateAchievementSummary();
             applySavedTheme();
             applySavedBg();
-            try { apiCall('get_preferences').then(prefs => { if (prefs && typeof prefs === 'object') { state.preferences = { ...state.preferences, ...prefs }; preferencesHydrated = true; set('pref-auto-start', prefs.autoStart); set('pref-auto-shutdown', prefs.autoShutdown); set('pref-auto-run', prefs.autoRun); set('pref-minimize-tray', prefs.minimizeToTray); set('pref-start-minimized', prefs.startMinimized); set('pref-always-on-top', prefs.alwaysOnTop); set('pref-notify-complete', prefs.notifyOnComplete); set('pref-notify-error', prefs.notifyOnError); set('pref-sound-enabled', prefs.soundEnabled); set('pref-remember-geometry', prefs.rememberGeometry); set('pref-auto-clean-logs', prefs.autoCleanLogs); persistStoredPreferences(); syncTianyiThemeUnlockUI(); applySavedTheme(); applySavedBg(); if (document.getElementById('view-tianyi')?.classList.contains('active')) { tianyiState.chatLoaded = false; initTianyiPage(); } } }).catch(() => {}); } catch (e) {}
+            try { apiCall('get_preferences').then(prefs => { if (prefs && typeof prefs === 'object') { mergePreferencesWithAchievements(prefs); preferencesHydrated = true; set('pref-auto-start', prefs.autoStart); set('pref-auto-shutdown', prefs.autoShutdown); set('pref-auto-run', prefs.autoRun); set('pref-minimize-tray', prefs.minimizeToTray); set('pref-start-minimized', prefs.startMinimized); set('pref-always-on-top', prefs.alwaysOnTop); set('pref-notify-complete', prefs.notifyOnComplete); set('pref-notify-error', prefs.notifyOnError); set('pref-sound-enabled', prefs.soundEnabled); set('pref-remember-geometry', prefs.rememberGeometry); set('pref-auto-clean-logs', prefs.autoCleanLogs); persistStoredPreferences(); syncTianyiThemeUnlockUI(); updateAchievementSummary(); applySavedTheme(); applySavedBg(); if (document.getElementById('view-tianyi')?.classList.contains('active')) { tianyiState.chatLoaded = false; initTianyiPage(); } } }).catch(() => {}); } catch (e) {}
         }
 
-        async function savePreference(key, value) { const previous = state.preferences[key]; state.preferences[key] = value; persistStoredPreferences(); if (!bridge()) { showToast('后端未连接，偏好仅临时保存在当前页面', 'warning'); return { ok: false, localOnly: true }; } try { const result = await apiCall('save_preference', { [key]: value }); if (!result?.ok) throw new Error(result?.message||'偏好设置保存失败'); if (result.preferences) state.preferences = { ...state.preferences, ...result.preferences }; persistStoredPreferences(); return result; } catch (error) { state.preferences[key] = previous; persistStoredPreferences(); const ids = { autoStart:'pref-auto-start', autoShutdown:'pref-auto-shutdown', autoRun:'pref-auto-run', minimizeToTray:'pref-minimize-tray', startMinimized:'pref-start-minimized', alwaysOnTop:'pref-always-on-top', notifyOnComplete:'pref-notify-complete', notifyOnError:'pref-notify-error', soundEnabled:'pref-sound-enabled', rememberGeometry:'pref-remember-geometry', autoCleanLogs:'pref-auto-clean-logs' }; const input = document.getElementById(ids[key]); if (input) input.checked = !!previous; if (!error?.silent) showToast(error?.message||'偏好设置保存失败', 'error'); return { ok: false, message: error?.message||'偏好设置保存失败' }; } }
+        async function savePreference(key, value) { const previous = state.preferences[key]; state.preferences[key] = value; persistStoredPreferences(); if (!bridge()) { showToast('后端未连接，偏好仅临时保存在当前页面', 'warning'); return { ok: false, localOnly: true }; } try { const result = await apiCall('save_preference', { [key]: value }); if (!result?.ok) throw new Error(result?.message||'偏好设置保存失败'); if (result.preferences) mergePreferencesWithAchievements(result.preferences); persistStoredPreferences(); return result; } catch (error) { state.preferences[key] = previous; persistStoredPreferences(); const ids = { autoStart:'pref-auto-start', autoShutdown:'pref-auto-shutdown', autoRun:'pref-auto-run', minimizeToTray:'pref-minimize-tray', startMinimized:'pref-start-minimized', alwaysOnTop:'pref-always-on-top', notifyOnComplete:'pref-notify-complete', notifyOnError:'pref-notify-error', soundEnabled:'pref-sound-enabled', rememberGeometry:'pref-remember-geometry', autoCleanLogs:'pref-auto-clean-logs' }; const input = document.getElementById(ids[key]); if (input) input.checked = !!previous; if (!error?.silent) showToast(error?.message||'偏好设置保存失败', 'error'); return { ok: false, message: error?.message||'偏好设置保存失败' }; } }
 
         async function savePreferenceSilent(key, value) {
             state.preferences[key] = value;
@@ -1238,7 +1293,7 @@
             if (!bridge()) return { ok: false, localOnly: true };
             try {
                 const result = await apiCall('save_preference', { [key]: value });
-                if (result?.preferences) state.preferences = { ...state.preferences, ...result.preferences };
+                if (result?.preferences) mergePreferencesWithAchievements(result.preferences);
                 persistStoredPreferences();
                 return result || { ok: true };
             } catch (e) {
@@ -1262,27 +1317,196 @@
             syncBgModalState();
         }
 
-        function showTianyiAchievement() {
-            let card = document.getElementById('tianyi-achievement-toast');
-            if (!card) {
-                card = document.createElement('div');
-                card.id = 'tianyi-achievement-toast';
-                card.className = 'achievement-toast';
-                card.innerHTML = `
-                    <div class="achievement-confetti" aria-hidden="true">
-                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-                    </div>
-                    <img class="achievement-icon" src="assets/tianyi-avatar.png" alt="">
-                    <div class="achievement-content">
-                        <div class="achievement-title">洛水天依</div>
-                        <div class="achievement-desc">恭喜你解锁洛天依主题和相关壁纸，请到软件设置的界面设置开启！</div>
+        function parseAchievementStore(raw, includeLegacyTianyi = false) {
+            const normalized = {};
+            if (Array.isArray(raw)) {
+                raw.forEach(id => {
+                    if (ACHIEVEMENTS[id]) normalized[id] = { unlockedAt: '' };
+                });
+            } else if (raw && typeof raw === 'object') {
+                Object.entries(raw).forEach(([id, value]) => {
+                    if (!ACHIEVEMENTS[id]) return;
+                    if (typeof value === 'string') normalized[id] = { unlockedAt: value };
+                    else if (value && typeof value === 'object') {
+                        normalized[id] = { unlockedAt: String(value.unlockedAt || '') };
+                    } else if (value) normalized[id] = { unlockedAt: '' };
+                });
+            }
+            if (includeLegacyTianyi && !normalized.tianyi_theme) {
+                normalized.tianyi_theme = { unlockedAt: '' };
+            }
+            return normalized;
+        }
+
+        function normalizeAchievementStore(raw = state.preferences?.achievements) {
+            const normalized = parseAchievementStore(
+                raw,
+                !!state.preferences?.tianyiAchievementShown,
+            );
+            state.preferences.achievements = normalized;
+            return normalized;
+        }
+
+        function mergePreferencesWithAchievements(incoming = {}) {
+            const localAchievements = normalizeAchievementStore(state.preferences?.achievements);
+            const localResetToken = Number(state.preferences?.achievementResetToken || 0);
+            const remoteResetToken = Number(incoming?.achievementResetToken || 0);
+            const remoteAchievements = parseAchievementStore(
+                incoming?.achievements,
+                !!incoming?.tianyiAchievementShown,
+            );
+            state.preferences = {
+                ...state.preferences,
+                ...incoming,
+                achievements: remoteResetToken > localResetToken
+                    ? remoteAchievements
+                    : { ...remoteAchievements, ...localAchievements },
+                achievementResetToken: Math.max(localResetToken, remoteResetToken),
+            };
+            normalizeAchievementStore();
+            return state.preferences;
+        }
+
+        function achievementIconMarkup(def, className = 'achievement-list-icon') {
+            if (def.image) {
+                return `<div class="${className}"><img src="${escapeHtml(def.image)}" alt=""></div>`;
+            }
+            return `<div class="${className}"><i class="${escapeHtml(def.icon)}"></i></div>`;
+        }
+
+        function updateAchievementSummary() {
+            const store = normalizeAchievementStore();
+            const count = Object.keys(store).length;
+            const total = Object.keys(ACHIEVEMENTS).length;
+            const badge = document.getElementById('achievement-button-count');
+            const progress = document.getElementById('achievement-progress-text');
+            if (badge) badge.textContent = String(count);
+            if (progress) progress.textContent = `已获得 ${count} / ${total} 项`;
+        }
+
+        function renderAchievements() {
+            const list = document.getElementById('achievement-list');
+            if (!list) return;
+            const store = normalizeAchievementStore();
+            list.innerHTML = Object.entries(ACHIEVEMENTS).map(([id, def]) => {
+                const record = store[id];
+                const unlocked = !!record;
+                let dateText = '';
+                if (unlocked && record.unlockedAt) {
+                    const date = new Date(record.unlockedAt);
+                    if (!Number.isNaN(date.getTime())) {
+                        dateText = `获得于 ${date.toLocaleString('zh-CN', { hour12: false })}`;
+                    }
+                }
+                return `
+                    <div class="achievement-list-item ${unlocked ? 'unlocked' : 'locked'}" style="--achievement-accent:${escapeHtml(def.color)}">
+                        ${achievementIconMarkup(def)}
+                        <div>
+                            <div class="achievement-list-title">${escapeHtml(unlocked ? def.title : '尚未解锁')}</div>
+                            <div class="achievement-list-desc">${escapeHtml(unlocked ? def.desc : '继续探索启动器，也许会有意外收获。')}</div>
+                            <div class="achievement-list-date">${escapeHtml(unlocked ? (dateText || '已获得') : '隐藏成就')}</div>
+                        </div>
                     </div>
                 `;
+            }).join('');
+            updateAchievementSummary();
+        }
+
+        function showAchievementsModal() {
+            renderAchievements();
+            document.getElementById('achievements-modal')?.classList.add('active');
+        }
+
+        function hideAchievementsModal() {
+            document.getElementById('achievements-modal')?.classList.remove('active');
+        }
+
+        function handleAchievementModalBackdrop(event) {
+            if (event?.target?.id === 'achievements-modal') hideAchievementsModal();
+        }
+
+        function queueAchievementSave(extra = {}) {
+            const snapshot = JSON.parse(JSON.stringify(normalizeAchievementStore()));
+            persistStoredPreferences();
+            if (!bridge()) return;
+            achievementSaveQueue = achievementSaveQueue
+                .catch(() => {})
+                .then(() => apiCall('save_preference', {
+                    achievements: snapshot,
+                    ...extra,
+                }))
+                .catch(() => {});
+        }
+
+        function showAchievementToast(id) {
+            const def = ACHIEVEMENTS[id];
+            if (!def) return;
+            let card = document.getElementById('achievement-toast');
+            if (!card) {
+                card = document.createElement('div');
+                card.id = 'achievement-toast';
+                card.className = 'achievement-toast';
                 document.body.appendChild(card);
             }
-            requestAnimationFrame(() => card.classList.add('show'));
-            clearTimeout(window._tianyiAchievementTimer);
-            window._tianyiAchievementTimer = setTimeout(() => card.classList.remove('show'), 5600);
+            const iconMarkup = def.image
+                ? `<img class="achievement-icon" src="${escapeHtml(def.image)}" alt="">`
+                : `<div class="achievement-icon symbol"><i class="${escapeHtml(def.icon)}"></i></div>`;
+            card.style.setProperty('--achievement-accent', def.color);
+            card.innerHTML = `
+                <div class="achievement-confetti" aria-hidden="true">
+                    <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                </div>
+                ${iconMarkup}
+                <div class="achievement-content">
+                    <div class="achievement-title">成就达成 · ${escapeHtml(def.title)}</div>
+                    <div class="achievement-desc">${escapeHtml(def.desc)}</div>
+                </div>
+            `;
+            card.classList.remove('show');
+            requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add('show')));
+            clearTimeout(window._achievementToastTimer);
+            window._achievementToastTimer = setTimeout(() => card.classList.remove('show'), 5600);
+        }
+
+        function unlockAchievement(id, { silent = false } = {}) {
+            const def = ACHIEVEMENTS[id];
+            if (!def) return false;
+            const store = normalizeAchievementStore();
+            if (store[id]) return false;
+            store[id] = { unlockedAt: new Date().toISOString() };
+            state.preferences.achievements = store;
+            if (id === 'tianyi_theme') {
+                state.preferences.tianyiAchievementShown = true;
+            }
+            persistStoredPreferences();
+            updateAchievementSummary();
+            if (document.getElementById('achievements-modal')?.classList.contains('active')) {
+                renderAchievements();
+            }
+            queueAchievementSave();
+            if (!silent) showAchievementToast(id);
+            return true;
+        }
+
+        function observeRuntimeAchievements(runtime) {
+            if (!runtime) return;
+            if (runtime.yatori_running || runtime.autovisor_running) {
+                unlockAchievement('first_core_start');
+            }
+            if (runtime.yatori_running && runtime.autovisor_running) {
+                unlockAchievement('dual_core');
+            }
+            if (Number(runtime.qb_stats?.total || 0) > 0) {
+                unlockAchievement('question_collector');
+            }
+            const event = runtime.runtime_event;
+            if (event?.id !== undefined && event?.id !== null) {
+                const eventKey = `${event.id}:${event.occurred_at || ''}`;
+                if (eventKey !== lastObservedRuntimeEventKey) {
+                    lastObservedRuntimeEventKey = eventKey;
+                    if (event.kind === 'crash') unlockAchievement('core_crash');
+                }
+            }
         }
 
         async function hydratePreferencesBeforeTianyiUnlock() {
@@ -1290,10 +1514,11 @@
             try {
                 const prefs = await apiCall('get_preferences');
                 if (prefs && typeof prefs === 'object') {
-                    state.preferences = { ...state.preferences, ...prefs };
+                    mergePreferencesWithAchievements(prefs);
                     preferencesHydrated = true;
                     persistStoredPreferences();
                     syncTianyiThemeUnlockUI();
+                    updateAchievementSummary();
                     applySavedTheme();
                     applySavedBg();
                     if (document.getElementById('view-tianyi')?.classList.contains('active')) {
@@ -1307,20 +1532,27 @@
         async function unlockTianyiTheme() {
             await hydratePreferencesBeforeTianyiUnlock();
             if (isTianyiThemeUnlocked()) return;
-            const shouldShowAchievement = !state.preferences.tianyiAchievementShown;
             state.preferences.tianyiThemeUnlocked = true;
-            state.preferences.tianyiAchievementShown = true;
             persistStoredPreferences();
             syncTianyiThemeUnlockUI();
-            if (shouldShowAchievement) showTianyiAchievement();
+            unlockAchievement('tianyi_theme');
             if (bridge()) {
-                try { apiCall('save_preference', { tianyiThemeUnlocked: true, tianyiAchievementShown: true }); } catch (e) {}
+                try {
+                    apiCall('save_preference', {
+                        tianyiThemeUnlocked: true,
+                        tianyiAchievementShown: true,
+                        achievements: normalizeAchievementStore(),
+                    });
+                } catch (e) {}
             }
         }
 
         function resetTianyiThemeUnlockForTest() {
             state.preferences.tianyiThemeUnlocked = false;
             state.preferences.tianyiAchievementShown = false;
+            const achievements = normalizeAchievementStore();
+            delete achievements.tianyi_theme;
+            state.preferences.achievements = achievements;
             if (state.preferences.theme === 'tianyi' || getCurrentTheme() === 'tianyi') {
                 state.preferences.theme = 'light';
                 document.documentElement.setAttribute('data-theme', 'light');
@@ -1333,6 +1565,7 @@
             }
             persistStoredPreferences();
             syncTianyiThemeUnlockUI();
+            updateAchievementSummary();
             updatePreferencesBg(state.preferences.bgType || 'none');
             showToast('洛天依解锁状态已重置，可以重新点击左侧洛天依测试', 'success');
             if (bridge()) {
@@ -1340,6 +1573,7 @@
                     apiCall('save_preference', {
                         tianyiThemeUnlocked: false,
                         tianyiAchievementShown: false,
+                        achievements: state.preferences.achievements,
                         theme: state.preferences.theme,
                         bgType: state.preferences.bgType || 'none',
                         bgUrl: state.preferences.bgUrl || ''
@@ -1750,10 +1984,11 @@
             try {
                 const payload = await apiCall('get_initial_state');
                 if (payload.preferences && typeof payload.preferences === 'object') {
-                    state.preferences = { ...state.preferences, ...payload.preferences };
+                    mergePreferencesWithAchievements(payload.preferences);
                     preferencesHydrated = true;
                     persistStoredPreferences();
                     syncTianyiThemeUnlockUI();
+                    updateAchievementSummary();
                     applySavedTheme();
                     applySavedBg();
                 }
@@ -2346,6 +2581,7 @@
         async function runTianyiCommand(cmd) {
             appendTianyiMsg('sys', '⚡ 执行指令：' + cmd);
             let res;
+            const actionName = cmd.split(':')[0];
             try {
                 const [action, arg] = cmd.split(':');
                 res = await execTianyiAction(action, arg);
@@ -2355,6 +2591,12 @@
             const ok = res?.ok !== false;
             const text = res?.text || (ok ? '完成' : '失败');
             appendTianyiMsg(text.includes('\n') ? 'ai' : (ok ? 'cmd-ok' : 'cmd-fail'), text);
+            if (
+                ok
+                && ['start_all', 'stop_all', 'start_yatori', 'stop_yatori', 'start_autovisor', 'stop_autovisor', 'start_qb', 'stop_qb'].includes(actionName)
+            ) {
+                unlockAchievement('tianyi_commander');
+            }
             return res;
         }
 

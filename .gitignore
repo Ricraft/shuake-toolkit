@@ -22,6 +22,7 @@ zhs_course.json
 course_cache.json
 题库缓存.db
 *.db
+data/*.before-achievement-reset-*.json
 
 # 敏感配置（含账号/API Key 等）
 configs.ini

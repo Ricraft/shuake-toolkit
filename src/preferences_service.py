@@ -26,6 +26,8 @@ DEFAULT_PREFERENCES = {
     "tianyiThemeUnlocked": False,
     "tianyiAchievementShown": False,
     "tianyiChatHistory": [],
+    "achievements": {},
+    "achievementResetToken": 0,
 }
 
 

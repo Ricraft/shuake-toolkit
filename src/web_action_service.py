@@ -38,11 +38,19 @@ class WebActionService:
                         script_type,
                         f"未知核心类型: {script_type}",
                     )
-                    return {
+                    failure_kind = getattr(
+                        launcher,
+                        "_last_start_failure_kind",
+                        {},
+                    ).get(script_type)
+                    response = {
                         "ok": False,
                         "message": message,
                         "state": launcher.get_web_initial_state(),
                     }
+                    if failure_kind:
+                        response["failureKind"] = failure_kind
+                    return response
             elif action == "stop":
                 if not launcher.stop_script(script_type):
                     return {"ok": False, "message": f"未知核心类型: {script_type}"}

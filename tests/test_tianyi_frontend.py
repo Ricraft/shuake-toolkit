@@ -62,3 +62,24 @@ def test_tianyi_local_assets_referenced_by_ui_exist():
         if not (PROJECT_ROOT / "web" / "assets" / name).is_file()
     ]
     assert missing == []
+
+
+def test_achievement_merge_accepts_legacy_backend_formats():
+    frontend = (PROJECT_ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    parser = _function_source(
+        frontend,
+        "function parseAchievementStore",
+        "function normalizeAchievementStore",
+    )
+    merger = _function_source(
+        frontend,
+        "function mergePreferencesWithAchievements",
+        "function achievementIconMarkup",
+    )
+
+    assert "Array.isArray(raw)" in parser
+    assert "includeLegacyTianyi" in parser
+    assert "parseAchievementStore(" in merger
+    assert "incoming?.achievements" in merger
+    assert "!!incoming?.tianyiAchievementShown" in merger
+    assert "remoteResetToken > localResetToken" in merger

@@ -27,6 +27,9 @@ class LauncherStateTests(unittest.TestCase):
 
         launcher._handle_runtime_exit("autovisor", 3, False)
 
+        self.assertEqual(launcher._last_runtime_event["kind"], "crash")
+        self.assertEqual(launcher._last_runtime_event["core"], "autovisor")
+        self.assertEqual(launcher._last_runtime_event["return_code"], 3)
         self.assertEqual(
             visible_failures,
             [("autovisor", "[ERROR] Autovisor 已退出，返回码: 3")],

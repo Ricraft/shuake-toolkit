@@ -305,6 +305,34 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertIn("config.yaml", launcher._last_start_error["yatori"])
 
+    def test_start_yatori_rejects_blank_account_as_configuration_failure(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.running = {"yatori": False}
+        launcher.starting = {"yatori": False}
+        launcher._last_start_error = {}
+        launcher._last_start_failure_kind = {}
+        launcher.log_system = lambda _message: None
+        launcher._show_error = lambda _title, _message: None
+        launcher._load_yatori_config_data = lambda: {
+            "users": [{"account": "", "password": ""}]
+        }
+        launcher._validate_yatori_runtime = ConfigService.validate_yatori_runtime
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = Path(temp_dir, "config.yaml")
+            config.write_text("users: []\n", encoding="utf-8")
+            launcher.get_base_dir = lambda: temp_dir
+            launcher.find_yatori_path = lambda _base_dir: temp_dir
+
+            accepted = launcher.start_yatori()
+
+        self.assertFalse(accepted)
+        self.assertIn("尚未配置", launcher._last_start_error["yatori"])
+        self.assertEqual(
+            launcher._last_start_failure_kind["yatori"],
+            "configuration",
+        )
+
     def test_start_autovisor_rejects_empty_courses_before_runtime_preparation(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher._get_autovisor_dependency_manager = lambda: SimpleNamespace(

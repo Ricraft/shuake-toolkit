@@ -407,6 +407,9 @@ class UnifiedLauncher:
     def _validate_autovisor_accounts(self, accounts):
         return ConfigService.validate_autovisor_accounts(accounts)
 
+    def _validate_yatori_runtime(self, users):
+        return ConfigService.validate_yatori_runtime(users)
+
     def _validate_autovisor_runtime(self, accounts, multi_mode=False):
         return ConfigService.validate_autovisor_runtime(accounts, multi_mode)
 
@@ -496,6 +499,9 @@ class UnifiedLauncher:
             'practice': False,
         }
         self._last_start_error = {}
+        self._last_start_failure_kind = {}
+        self._runtime_event_sequence = 0
+        self._last_runtime_event = None
         self.practice_account_id = None
 
         base_dir = self.get_base_dir()
@@ -845,6 +851,18 @@ class UnifiedLauncher:
         label = "Yatori" if script_type == 'yatori' else "Autovisor"
         if return_code:
             message = f"{label} 已退出，返回码: {return_code}"
+            self._runtime_event_sequence = (
+                getattr(self, '_runtime_event_sequence', 0) + 1
+            )
+            self._last_runtime_event = {
+                'id': self._runtime_event_sequence,
+                'kind': 'crash',
+                'core': script_type,
+                'label': label,
+                'return_code': return_code,
+                'message': message,
+                'occurred_at': datetime.now().isoformat(timespec='seconds'),
+            }
             self._record_runtime_failure(script_type, message)
             self._notify_runtime_event(
                 f"{label} 运行异常",
@@ -978,6 +996,7 @@ class UnifiedLauncher:
             'autovisor_activity': autovisor_activity,
             'shutdown_pending': self._shutdown_pending,
             'autovisor_multi_mode': self._get_autovisor_multi_mode(),
+            'runtime_event': getattr(self, '_last_runtime_event', None),
         }
 
     def get_web_initial_state(self):
@@ -1186,7 +1205,10 @@ class UnifiedLauncher:
         """启动指定脚本"""
         if not hasattr(self, '_last_start_error'):
             self._last_start_error = {}
+        if not hasattr(self, '_last_start_failure_kind'):
+            self._last_start_failure_kind = {}
         self._last_start_error.pop(script_type, None)
+        self._last_start_failure_kind.pop(script_type, None)
         if script_type == 'yatori':
             return bool(self.start_yatori())
         elif script_type == 'autovisor':
@@ -1196,11 +1218,17 @@ class UnifiedLauncher:
         self.log_system(message)
         return False
 
-    def _reject_runtime_start(self, script_type, message):
+    def _reject_runtime_start(self, script_type, message, failure_kind=None):
         """Record an immediate launch rejection for Web action feedback."""
         if not hasattr(self, '_last_start_error'):
             self._last_start_error = {}
+        if not hasattr(self, '_last_start_failure_kind'):
+            self._last_start_failure_kind = {}
         self._last_start_error[script_type] = message
+        if failure_kind:
+            self._last_start_failure_kind[script_type] = failure_kind
+        else:
+            self._last_start_failure_kind.pop(script_type, None)
         return False
 
     def _claim_runtime_start(self, script_type):
@@ -1240,7 +1268,23 @@ class UnifiedLauncher:
         if not os.path.exists(config_path):
             self.log_system(f"错误: 未找到配置文件 {config_path}")
             self._show_error("启动失败", "未找到 config.yaml 配置文件\n请使用配置生成器创建配置")
-            return self._reject_runtime_start('yatori', '未找到 Yatori 的 config.yaml，请先保存配置')
+            return self._reject_runtime_start(
+                'yatori',
+                '未找到 Yatori 的 config.yaml，请先保存配置',
+                failure_kind='configuration',
+            )
+
+        saved_config = self._load_yatori_config_data()
+        runtime_validation_error = self._validate_yatori_runtime(
+            saved_config.get('users') or [],
+        )
+        if runtime_validation_error:
+            self.log_system(f"Yatori 启动已取消: {runtime_validation_error}")
+            return self._reject_runtime_start(
+                'yatori',
+                runtime_validation_error,
+                failure_kind='configuration',
+            )
 
         cmd, entry_path = self._get_yatori_command()
         if not cmd:
@@ -1343,7 +1387,11 @@ class UnifiedLauncher:
         if not os.path.exists(config_path):
             self.log_system(f"错误: 未找到配置文件 {config_path}")
             self._show_error("启动失败", "未找到 configs.ini 配置文件\n请使用配置生成器创建配置")
-            return self._reject_runtime_start('autovisor', '未找到 Autovisor 的 configs.ini，请先保存配置')
+            return self._reject_runtime_start(
+                'autovisor',
+                '未找到 Autovisor 的 configs.ini，请先保存配置',
+                failure_kind='configuration',
+            )
 
         saved_config = self._load_autovisor_config_data()
         runtime_validation_error = self._validate_autovisor_runtime(
@@ -1355,6 +1403,7 @@ class UnifiedLauncher:
             return self._reject_runtime_start(
                 'autovisor',
                 runtime_validation_error,
+                failure_kind='configuration',
             )
 
         runtime_state = self._prepare_autovisor_config(config_path, multi_mode)
@@ -1667,30 +1716,45 @@ class UnifiedLauncher:
             self._runtime_failure_since_batch = False
         try:
             failures = []
+            failure_kinds = []
+            if not hasattr(self, '_last_start_failure_kind'):
+                self._last_start_failure_kind = {}
             if not self.question_bank.available:
                 failures.append("题库服务器模块不可用")
             elif not self.question_bank.running:
                 if not self.start_question_bank(silent=True):
                     failures.append("题库服务器启动失败")
             if not self.running['yatori']:
+                self._last_start_failure_kind.pop('yatori', None)
                 if not self.start_yatori():
                     failures.append(
                         getattr(self, '_last_start_error', {}).get(
                             'yatori', 'Yatori 启动失败'
                         )
                     )
+                    kind = self._last_start_failure_kind.get('yatori')
+                    if kind:
+                        failure_kinds.append(kind)
             if not self.running['autovisor']:
+                self._last_start_failure_kind.pop('autovisor', None)
                 if not self.start_autovisor():
                     failures.append(
                         getattr(self, '_last_start_error', {}).get(
                             'autovisor', 'Autovisor 启动失败'
                         )
                     )
+                    kind = self._last_start_failure_kind.get('autovisor')
+                    if kind:
+                        failure_kinds.append(kind)
             if failures:
                 self._runtime_failure_since_batch = True
                 message = '；'.join(dict.fromkeys(failures))
                 self.log_system(f"一键启动未全部成功: {message}")
-                return {'ok': False, 'message': message}
+                return {
+                    'ok': False,
+                    'message': message,
+                    'failureKinds': list(dict.fromkeys(failure_kinds)),
+                }
             return {
                 'ok': True,
                 'message': '全部启动请求已提交',

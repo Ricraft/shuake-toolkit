@@ -29,6 +29,17 @@ def test_start_rejection_keeps_specific_runtime_error_and_state():
         "state": {"runtime": {"yatori": False}},
     }
 
+def test_start_rejection_exposes_configuration_failure_kind():
+    launcher = make_launcher(
+        start_script=lambda _script_type: False,
+        _last_start_error={"yatori": "Yatori 尚未配置可运行的账号"},
+        _last_start_failure_kind={"yatori": "configuration"},
+    )
+
+    result = WebActionService(launcher).perform("start", "yatori")
+
+    assert result["failureKind"] == "configuration"
+
 
 def test_structured_batch_result_gets_fresh_state_without_mutating_source():
     source = {"ok": False, "message": "部分启动失败"}

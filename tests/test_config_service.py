@@ -7,6 +7,25 @@ from src.config_service import ConfigService, read_ini_config
 
 
 class ConfigServiceTests(unittest.TestCase):
+    def test_yatori_runtime_requires_a_complete_account(self):
+        self.assertEqual(
+            ConfigService.validate_yatori_runtime(
+                [{"account": "", "password": ""}]
+            ),
+            "Yatori 尚未配置可运行的账号",
+        )
+        self.assertEqual(
+            ConfigService.validate_yatori_runtime(
+                [{"account": "student", "password": ""}]
+            ),
+            "Yatori 账号 1 尚未完整填写账号和密码",
+        )
+        self.assertIsNone(
+            ConfigService.validate_yatori_runtime(
+                [{"account": "student", "password": "secret"}]
+            )
+        )
+
     def make_service(self, root: Path, logs=None):
         return ConfigService(
             lambda: root / "config.yaml",

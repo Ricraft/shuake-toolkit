@@ -100,6 +100,32 @@ class ConfigService:
         return normalized if normalized in self.speed_options else default
 
     @staticmethod
+    def validate_yatori_runtime(users) -> str | None:
+        """Validate saved Yatori identities before creating the core process."""
+        configured = []
+        for index, user in enumerate(users or [], start=1):
+            if not isinstance(user, dict):
+                continue
+            account = str(user.get("account", "") or "").strip()
+            password = str(user.get("password", "") or "")
+            if account or password:
+                configured.append((index, account, password))
+
+        if not configured:
+            return "Yatori 尚未配置可运行的账号"
+
+        incomplete = [
+            str(index)
+            for index, account, password in configured
+            if not account or not password
+        ]
+        if incomplete:
+            if len(incomplete) == 1:
+                return f"Yatori 账号 {incomplete[0]} 尚未完整填写账号和密码"
+            return f"Yatori 账号 {', '.join(incomplete)} 尚未完整填写账号和密码"
+        return None
+
+    @staticmethod
     def validate_autovisor_accounts(accounts) -> str | None:
         for index, account in enumerate(accounts or [], start=1):
             if not isinstance(account, dict):

@@ -1245,6 +1245,10 @@
                         <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="performAction('install_autovisor_update')">
                             <i class="fas fa-download"></i> 安装更新
                         </button>
+                        <button class="btn btn-outline btn-pill btn-magnetic" onclick="showAchievementsModal()">
+                            <i class="fas fa-trophy"></i> 我的成就
+                            <span id="achievement-button-count" class="achievement-button-count">0</span>
+                        </button>
                     </div>
                 </div>
 
@@ -1363,6 +1367,25 @@
 
     <!-- Toast 容器 -->
     <div id="toast-wrap" class="toast-wrap"></div>
+
+    <!-- 我的成就弹窗 -->
+    <div id="achievements-modal" class="modal-overlay" onclick="handleAchievementModalBackdrop(event)">
+        <div class="achievement-modal-box">
+            <div class="modal-header achievement-modal-header">
+                <div class="card-title-row">
+                    <div class="card-icon amber"><i class="fas fa-trophy"></i></div>
+                    <div>
+                        <h3>我的成就</h3>
+                        <div id="achievement-progress-text" class="modal-subtitle">已获得 0 项</div>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="hideAchievementsModal()" aria-label="关闭成就">
+                    <i class="fas fa-xmark"></i>
+                </button>
+            </div>
+            <div id="achievement-list" class="achievement-list"></div>
+        </div>
+    </div>
 
     <!-- 退出确认弹窗 -->
     <div id="exit-modal" class="modal-overlay">
