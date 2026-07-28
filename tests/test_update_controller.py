@@ -179,6 +179,16 @@ class UpdateControllerTests(unittest.TestCase):
         self.assertFalse(controller.autovisor_checking)
         self.assertTrue(any(item[0] == "info" for item in notices))
 
+    def test_autovisor_update_log_marks_release_as_reference_only(self):
+        controller, _manager, logs, _notices, _installed = self.make_controller()
+
+        self.assertTrue(controller.check_autovisor_async())
+
+        joined_logs = "\n".join(item[0] for item in logs)
+        self.assertIn("本地适配版", joined_logs)
+        self.assertIn("不会用上游包覆盖安装", joined_logs)
+        self.assertNotIn("可通过 install_autovisor_update", joined_logs)
+
     def test_check_exception_resets_checking_state(self):
         class BrokenManager(_Manager):
             def check_yatori_update(self):

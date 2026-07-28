@@ -190,10 +190,10 @@
                                 <i class="fas fa-folder-open"></i> 配置
                             </button>
                             <button class="btn btn-outline" onclick="performAction('check_autovisor_update')">
-                                <i class="fas fa-cloud-arrow-down"></i> 更新
+                                <i class="fas fa-magnifying-glass"></i> 检查版本
                             </button>
-                            <button class="btn btn-outline" onclick="performAction('install_autovisor_update')">
-                                <i class="fas fa-download"></i> 安装
+                            <button class="btn btn-outline" disabled title="当前为本地适配版，不使用上游包覆盖安装">
+                                <i class="fas fa-shield-halved"></i> 本地适配版
                             </button>
                         </div>
                     </div>
@@ -1242,8 +1242,8 @@
                         <button class="btn btn-outline btn-pill" onclick="performAction('check_autovisor_update')">
                             <i class="fas fa-cloud-arrow-down"></i> 检查 Autovisor 更新
                         </button>
-                        <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="performAction('install_autovisor_update')">
-                            <i class="fas fa-download"></i> 安装更新
+                        <button class="btn btn-outline btn-pill" disabled title="当前为本地适配版，不使用上游包覆盖安装">
+                            <i class="fas fa-shield-halved"></i> Autovisor 本地适配版
                         </button>
                         <button class="btn btn-outline btn-pill btn-magnetic" onclick="showAchievementsModal()">
                             <i class="fas fa-trophy"></i> 我的成就

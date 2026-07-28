@@ -35,7 +35,10 @@ from src.runtime_activity import summarize_autovisor_activity
 from src.runtime_coordinator import RuntimeCoordinator
 from src.runtime_process_service import RuntimeProcessService
 from src.update_controller import UpdateController
-from src.web_action_service import WebActionService
+from src.web_action_service import (
+    AUTOVISOR_UPDATE_DISABLED_MESSAGE,
+    WebActionService,
+)
 from src.web_window_controller import WebWindowController
 
 try:
@@ -1501,7 +1504,12 @@ class UnifiedLauncher:
         return self.update_controller.handle_autovisor_result(result)
 
     def install_autovisor_update_async(self, release_info=None):
-        return self.update_controller.install_autovisor_async(release_info)
+        self.log_system(AUTOVISOR_UPDATE_DISABLED_MESSAGE)
+        self._show_warning(
+            "Autovisor 本地适配保护",
+            AUTOVISOR_UPDATE_DISABLED_MESSAGE,
+        )
+        return False
 
     def show_update_dialog(self):
         """Check Yatori updates and return Web confirmation dialog data."""

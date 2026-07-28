@@ -833,6 +833,39 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("self.check_yatori_update_async()", method)
         self.assertNotIn('self.log_system("正在检查 Yatori 更新...")', method)
 
+    def test_autovisor_upstream_install_is_guarded_in_backend_and_web(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        logs = []
+        warnings = []
+        launcher.log_system = logs.append
+        launcher._show_warning = (
+            lambda title, message: warnings.append((title, message))
+        )
+        launcher.update_controller = SimpleNamespace(
+            install_autovisor_async=lambda *_args: self.fail(
+                "本地适配版不应调用上游安装器"
+            )
+        )
+
+        self.assertFalse(launcher.install_autovisor_update_async())
+        self.assertIn("已禁用上游覆盖安装", logs[0])
+        self.assertIn("本地适配保护", warnings[0][0])
+
+        project_root = Path(launcher_module.__file__).resolve().parent
+        html = (
+            project_root / "web" / "现代启动器_UI_预览.html"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(
+            "performAction('install_autovisor_update')",
+            html,
+        )
+        self.assertGreaterEqual(html.count("Autovisor 本地适配版"), 1)
+        self.assertGreaterEqual(html.count("disabled title="), 2)
+        self.assertIn(
+            "fa-magnifying-glass\"></i> 检查版本",
+            html,
+        )
+
     def test_frontend_stops_after_save_failure_and_displays_action_errors(self):
         frontend = (
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"

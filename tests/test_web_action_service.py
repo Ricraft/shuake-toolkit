@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
-from src.web_action_service import WebActionService
+from src.web_action_service import (
+    AUTOVISOR_UPDATE_DISABLED_MESSAGE,
+    WebActionService,
+)
 
 
 def make_launcher(**overrides):
@@ -115,6 +118,35 @@ def test_yatori_update_confirm_action_starts_install():
     assert calls == ["install"]
 
 
+def test_autovisor_upstream_install_is_blocked_without_calling_installer():
+    calls = []
+    launcher = make_launcher(
+        install_autovisor_update_async=lambda: calls.append("install") or True
+    )
+
+    result = WebActionService(launcher).perform(
+        "install_autovisor_update"
+    )
+
+    assert result["ok"] is False
+    assert result["blockedByPolicy"] is True
+    assert result["message"] == AUTOVISOR_UPDATE_DISABLED_MESSAGE
+    assert result["state"] == {"runtime": {"yatori": False}}
+    assert calls == []
+
+
+def test_unknown_action_failure_also_carries_fresh_state():
+    launcher = make_launcher()
+
+    result = WebActionService(launcher).perform("does_not_exist")
+
+    assert result == {
+        "ok": False,
+        "message": "未知操作: does_not_exist",
+        "state": {"runtime": {"yatori": False}},
+    }
+
+
 def test_action_exception_is_shown_and_returned_to_web():
     def fail():
         raise OSError("disk unavailable")
@@ -123,5 +155,25 @@ def test_action_exception_is_shown_and_returned_to_web():
 
     result = WebActionService(launcher).perform("start_all")
 
-    assert result == {"ok": False, "message": "disk unavailable"}
+    assert result == {
+        "ok": False,
+        "message": "disk unavailable",
+        "state": {"runtime": {"yatori": False}},
+    }
     assert launcher.errors == [("操作失败", "disk unavailable")]
+
+
+def test_state_refresh_failure_does_not_change_action_success():
+    logs = []
+    launcher = make_launcher(
+        clear_all_logs=lambda: None,
+        get_web_initial_state=lambda: (_ for _ in ()).throw(
+            RuntimeError("state unavailable")
+        ),
+        log_system=logs.append,
+    )
+
+    result = WebActionService(launcher).perform("clear_logs")
+
+    assert result == {"ok": True}
+    assert logs == ["Web 状态刷新失败: state unavailable"]

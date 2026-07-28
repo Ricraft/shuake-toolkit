@@ -57,6 +57,10 @@ py Autovisor\download_runtime_deps.py
 GitHub 页面探测得到的回退链接、源码 `zipball` 或摘要格式异常的资源仍可用于
 显示版本信息，但默认禁止自动安装。
 
+项目内的 Autovisor 包含本地适配修改，因此 Web 界面只允许检查上游版本信息，
+不会直接覆盖安装上游发行包。需要同步 Autovisor 时，应人工合并上游改动并完成
+全量回归；Yatori 未作本地魔改，仍使用确认式更新流程。
+
 开发调试时可以显式设置 `LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES=1` 跳过摘要
 要求；这会降低更新安全性，不建议在日常使用环境启用。
 

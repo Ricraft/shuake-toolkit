@@ -281,7 +281,10 @@ class UpdateController:
             f"当前版本: {current_version if installed else '未安装'}"
         )
         self.log(message.replace("\n", " "))
-        self.log("Web UI 已记录更新信息，可通过 install_autovisor_update 动作触发安装。")
+        self.log(
+            "Autovisor 当前为项目本地适配版；版本信息仅供参考，"
+            "Web UI 不会用上游包覆盖安装。"
+        )
 
     def install_autovisor_async(self, release_info=None) -> bool:
         return self._install_async("autovisor", release_info)
