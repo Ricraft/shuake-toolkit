@@ -1573,7 +1573,9 @@
                 const eventKey = `${event.id}:${event.occurred_at || ''}`;
                 if (eventKey !== lastObservedRuntimeEventKey) {
                     lastObservedRuntimeEventKey = eventKey;
-                    if (event.kind === 'crash') unlockAchievement('core_crash');
+                    if (event.kind === 'crash' || event.kind === 'runtime_failure') {
+                        unlockAchievement('core_crash');
+                    }
                 }
             }
         }

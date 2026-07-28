@@ -104,3 +104,18 @@ def test_achievement_merge_accepts_legacy_backend_formats():
     assert "incoming?.achievements" in merger
     assert "!!incoming?.tianyiAchievementShown" in merger
     assert "remoteResetToken > localResetToken" in merger
+
+
+def test_runtime_start_failure_unlocks_core_failure_achievement():
+    frontend = (PROJECT_ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    observer = frontend.split(
+        "function observeRuntimeAchievements",
+        1,
+    )[1].split(
+        "async function hydratePreferencesBeforeTianyiUnlock",
+        1,
+    )[0]
+
+    assert "event.kind === 'crash'" in observer
+    assert "event.kind === 'runtime_failure'" in observer
+    assert "unlockAchievement('core_crash')" in observer

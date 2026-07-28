@@ -79,6 +79,16 @@ class PracticeModeService:
         if existing:
             launcher._mark_runtime_stopped("practice", existing)
 
+        coordinator = launcher._get_runtime_coordinator()
+        if not coordinator.prepare_start("practice"):
+            return {
+                "ok": False,
+                "message": getattr(launcher, "_last_start_error", {}).get(
+                    "practice",
+                    "无法取消待执行的自动关机，未启动刷题模式",
+                ),
+            }
+
         script_path = os.path.join(launcher.autovisor_path, "Practice_Mode.py")
         if not os.path.exists(script_path):
             launcher.log_system(f"[刷题模式] 未找到 {script_path}")
@@ -96,6 +106,16 @@ class PracticeModeService:
             return {"ok": False, "message": error}
 
         if not launcher._claim_runtime_start("practice"):
+            if getattr(launcher, "_last_start_failure_kind", {}).get(
+                "practice"
+            ) == "system":
+                return {
+                    "ok": False,
+                    "message": getattr(launcher, "_last_start_error", {}).get(
+                        "practice",
+                        "无法取消待执行的自动关机，未启动刷题模式",
+                    ),
+                }
             return {"ok": False, "message": "刷题模式已经在运行或启动中"}
         launcher.practice_account_id = account_id
 

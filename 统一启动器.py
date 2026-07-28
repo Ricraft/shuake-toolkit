@@ -32,6 +32,7 @@ from src.practice_mode_service import PracticeModeService
 from src.python_runtime import find_python_executable
 from src.question_bank_controller import QuestionBankController
 from src.runtime_activity import summarize_autovisor_activity
+from src.runtime_coordinator import RuntimeCoordinator
 from src.runtime_process_service import RuntimeProcessService
 from src.update_controller import UpdateController
 from src.web_action_service import WebActionService
@@ -208,6 +209,13 @@ class UnifiedLauncher:
             service = RuntimeProcessService(self)
             self._runtime_process_service = service
         return service
+
+    def _get_runtime_coordinator(self):
+        coordinator = getattr(self, '_runtime_coordinator', None)
+        if coordinator is None:
+            coordinator = RuntimeCoordinator(self)
+            self._runtime_coordinator = coordinator
+        return coordinator
 
     def _get_practice_mode_service(self):
         service = getattr(self, '_practice_mode_service', None)
@@ -762,58 +770,40 @@ class UnifiedLauncher:
         )
 
     def _notify_runtime_event(self, title, message, error=False):
-        pref_key = 'notifyOnError' if error else 'notifyOnComplete'
-        if not self._preference_enabled(pref_key, True):
-            return
-        self._play_feedback_sound(error=error)
-        self._after(0, lambda: self._show_error(title, message) if error else self._show_info(title, message))
-
-    def _record_runtime_failure(self, script_type, message):
-        """Persist a runtime failure in the matching Web-visible log stream."""
-        self._runtime_failure_since_batch = True
-        target = 'autovisor' if script_type == 'practice' else script_type
-        if target in getattr(self, 'log_history', {}):
-            self.log(target, f"[ERROR] {message}")
-
-    def _handle_runtime_exit(self, script_type, return_code, stop_requested):
-        if stop_requested:
-            return
-
-        label = "Yatori" if script_type == 'yatori' else "Autovisor"
-        if return_code:
-            message = f"{label} 已退出，返回码: {return_code}"
-            self._runtime_event_sequence = (
-                getattr(self, '_runtime_event_sequence', 0) + 1
-            )
-            self._last_runtime_event = {
-                'id': self._runtime_event_sequence,
-                'kind': 'crash',
-                'core': script_type,
-                'label': label,
-                'return_code': return_code,
-                'message': message,
-                'occurred_at': datetime.now().isoformat(timespec='seconds'),
-            }
-            self._record_runtime_failure(script_type, message)
-            self._notify_runtime_event(
-                f"{label} 运行异常",
-                message,
-                error=True,
-            )
-            return
-
-        self._notify_runtime_event(
-            f"{label} 任务结束",
-            f"{label} 已正常停止或完成任务。",
-            error=False,
+        return self._get_runtime_coordinator().notify_runtime_event(
+            title,
+            message,
+            error=error,
         )
 
-        if not self.running.get('yatori') and not self.running.get('autovisor'):
-            if getattr(self, '_runtime_failure_since_batch', False):
-                self.log_system("本轮任务存在异常退出，已跳过自动关机")
-                self._runtime_failure_since_batch = False
-                return
-            self._maybe_shutdown_after_completion()
+    def _record_runtime_failure(self, script_type, message):
+        return self._get_runtime_coordinator().record_runtime_failure(
+            script_type,
+            message,
+        )
+
+    def _handle_runtime_exit(self, script_type, return_code, stop_requested):
+        return self._get_runtime_coordinator().handle_runtime_exit(
+            script_type,
+            return_code,
+            stop_requested,
+        )
+
+    def _handle_runtime_failure(
+        self,
+        script_type,
+        title,
+        message,
+        *,
+        notification_message=None,
+    ):
+        return self._get_runtime_coordinator().handle_runtime_failure(
+            script_type,
+            title,
+            message,
+            notification_message=notification_message,
+            allow_shutdown=script_type != 'practice',
+        )
 
     def _maybe_shutdown_after_completion(self):
         if not self._preference_enabled('autoShutdown'):
@@ -836,7 +826,7 @@ class UnifiedLauncher:
             self._desktop_platform_service.shutdown_pending
         )
         if result.get('ok'):
-            self.log_system("已取消自动关机")
+            self.log_system(result.get('message') or "已取消自动关机")
         else:
             self.log_system(result.get('message') or "取消自动关机失败")
         return result
@@ -1157,16 +1147,7 @@ class UnifiedLauncher:
         return False
 
     def _claim_runtime_start(self, script_type):
-        """Atomically reserve a runtime start so rapid clicks cannot fork twice."""
-        was_idle = not any(self.running.values()) and not any(self.starting.values())
-        claimed = self._get_process_supervisor().claim_start(script_type)
-        if (
-            claimed
-            and was_idle
-            and not getattr(self, '_runtime_batch_starting', False)
-        ):
-            self._runtime_failure_since_batch = False
-        return claimed
+        return self._get_runtime_coordinator().claim_runtime_start(script_type)
 
     def _mark_runtime_running(self, script_type, process):
         self._get_process_supervisor().mark_running(script_type, process)
@@ -1185,6 +1166,8 @@ class UnifiedLauncher:
         if self.running['yatori'] or self.starting['yatori']:
             self.log_system("Yatori 已经在运行或启动中")
             return True
+        if not self._get_runtime_coordinator().prepare_start('yatori'):
+            return False
 
         self.yatori_path = self.find_yatori_path(self.get_base_dir())
 
@@ -1221,6 +1204,8 @@ class UnifiedLauncher:
         self._sync_yatori_question_bank_url()
 
         if not self._claim_runtime_start('yatori'):
+            if self._last_start_failure_kind.get('yatori') == 'system':
+                return False
             self.log_system("Yatori 已经在运行或启动中")
             return True
 
@@ -1290,6 +1275,8 @@ class UnifiedLauncher:
 
     def start_autovisor(self):
         """启动 Autovisor"""
+        if not self._get_runtime_coordinator().prepare_start('autovisor'):
+            return False
         if self.autovisor_installing:
             self.log_system("Autovisor 依赖安装中，请等待安装完成后自动启动。")
             return True
@@ -1369,6 +1356,8 @@ class UnifiedLauncher:
                 return self._reject_runtime_start('autovisor', 'Autovisor 依赖安装任务未能启动')
 
         if not self._claim_runtime_start('autovisor'):
+            if self._last_start_failure_kind.get('autovisor') == 'system':
+                return False
             self.log_system("Autovisor 已经在运行或启动中")
             return True
 
@@ -1631,63 +1620,7 @@ class UnifiedLauncher:
         return self.question_bank.get_query_url()
 
     def start_all(self):
-        """启动所有脚本"""
-        self.log_system("正在一键启动所有脚本...")
-        previous_batch_state = getattr(self, '_runtime_batch_starting', False)
-        self._runtime_batch_starting = True
-        running_state = getattr(self, 'running', {})
-        starting_state = getattr(self, 'starting', {})
-        if not any(running_state.values()) and not any(starting_state.values()):
-            self._runtime_failure_since_batch = False
-        try:
-            failures = []
-            failure_kinds = []
-            if not hasattr(self, '_last_start_failure_kind'):
-                self._last_start_failure_kind = {}
-            if not self.question_bank.available:
-                failures.append("题库服务器模块不可用")
-            elif not self.question_bank.running:
-                if not self.start_question_bank(silent=True):
-                    failures.append("题库服务器启动失败")
-            if not self.running['yatori']:
-                self._last_start_failure_kind.pop('yatori', None)
-                if not self.start_yatori():
-                    failures.append(
-                        getattr(self, '_last_start_error', {}).get(
-                            'yatori', 'Yatori 启动失败'
-                        )
-                    )
-                    kind = self._last_start_failure_kind.get('yatori')
-                    if kind:
-                        failure_kinds.append(kind)
-            if not self.running['autovisor']:
-                self._last_start_failure_kind.pop('autovisor', None)
-                if not self.start_autovisor():
-                    failures.append(
-                        getattr(self, '_last_start_error', {}).get(
-                            'autovisor', 'Autovisor 启动失败'
-                        )
-                    )
-                    kind = self._last_start_failure_kind.get('autovisor')
-                    if kind:
-                        failure_kinds.append(kind)
-            if failures:
-                self._runtime_failure_since_batch = True
-                message = '；'.join(dict.fromkeys(failures))
-                self.log_system(f"一键启动未全部成功: {message}")
-                return {
-                    'ok': False,
-                    'message': message,
-                    'failureKinds': list(dict.fromkeys(failure_kinds)),
-                }
-            return {
-                'ok': True,
-                'message': '全部启动请求已提交',
-                'toast': '全部启动请求已提交',
-                'toastType': 'success',
-            }
-        finally:
-            self._runtime_batch_starting = previous_batch_state
+        return self._get_runtime_coordinator().start_all()
 
     def stop_all(self):
         """停止所有脚本"""

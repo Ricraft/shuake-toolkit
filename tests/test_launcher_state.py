@@ -88,7 +88,7 @@ class LauncherStateTests(unittest.TestCase):
             shutdown_pending=True,
             cancel_shutdown=lambda: {
                 "ok": False,
-                "message": "取消关机失败，系统返回码: 1116",
+                "message": "取消关机失败，系统返回码: 5",
             },
         )
         launcher._desktop_platform_service = platform
@@ -97,7 +97,7 @@ class LauncherStateTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertTrue(launcher._shutdown_pending)
-        self.assertEqual(logs, ["取消关机失败，系统返回码: 1116"])
+        self.assertEqual(logs, ["取消关机失败，系统返回码: 5"])
 
     def test_runtime_state_exposes_active_practice_account(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)

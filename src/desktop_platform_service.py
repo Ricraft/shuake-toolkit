@@ -204,6 +204,13 @@ class DesktopPlatformService:
             return {"ok": False, "message": f"取消失败: {exc}"}
 
         return_code = int(getattr(completed, "returncode", 0) or 0)
+        if return_code == 1116:
+            self.shutdown_pending = False
+            return {
+                "ok": True,
+                "message": "当前没有等待中的自动关机",
+                "alreadyCancelled": True,
+            }
         if return_code:
             return {
                 "ok": False,

@@ -84,18 +84,26 @@ class RuntimeProcessService:
                 self._cleanup_failed_process(process, label)
                 self.launcher.log_system(f"{label} 启动失败: {exc}")
                 self.launcher._mark_runtime_stopped(core, process)
-                self._record_failure(core, f"{label} 启动失败: {exc}")
-                self.launcher._notify_runtime_event(
+                self._report_runtime_failure(
+                    core,
                     f"{label} 启动失败",
-                    str(exc),
-                    error=True,
+                    f"{label} 启动失败: {exc}",
+                    notification_message=str(exc),
                 )
 
         try:
             thread = self.thread_factory(target=worker, daemon=True)
             thread.start()
-        except Exception:
+        except Exception as exc:
             self.launcher._mark_runtime_stopped(core)
+            message = f"{label} 启动失败: {exc}"
+            self.launcher.log_system(message)
+            self._report_runtime_failure(
+                core,
+                f"{label} 启动失败",
+                message,
+                notification_message=str(exc),
+            )
             raise
         return True
 
@@ -169,6 +177,30 @@ class RuntimeProcessService:
         recorder = getattr(self.launcher, "_record_runtime_failure", None)
         if callable(recorder):
             recorder(core, message)
+
+    def _report_runtime_failure(
+        self,
+        core: str,
+        title: str,
+        message: str,
+        *,
+        notification_message: str | None = None,
+    ) -> None:
+        handler = getattr(self.launcher, "_handle_runtime_failure", None)
+        if callable(handler):
+            handler(
+                core,
+                title,
+                message,
+                notification_message=notification_message,
+            )
+            return
+        self._record_failure(core, message)
+        self.launcher._notify_runtime_event(
+            title,
+            notification_message or message,
+            error=True,
+        )
 
     def _cancelled(self, core: str, label: str) -> bool:
         if not self.launcher.stop_requested.get(core):

@@ -133,6 +133,26 @@ def test_cancel_shutdown_only_clears_pending_after_system_accepts(tmp_path):
     assert service.shutdown_pending is False
 
 
+def test_cancel_shutdown_clears_stale_state_when_nothing_is_pending(tmp_path):
+    def no_shutdown_pending(_command, **_kwargs):
+        return SimpleNamespace(returncode=1116)
+
+    service, _logs = build_service(
+        tmp_path,
+        command_runner=no_shutdown_pending,
+    )
+    service.shutdown_pending = True
+
+    result = service.cancel_shutdown()
+
+    assert result == {
+        "ok": True,
+        "message": "当前没有等待中的自动关机",
+        "alreadyCancelled": True,
+    }
+    assert service.shutdown_pending is False
+
+
 def test_feedback_sound_failure_is_logged_once(tmp_path):
     class BrokenSound:
         MB_ICONHAND = 1

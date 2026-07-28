@@ -852,12 +852,15 @@ class WebOnlyLauncherTests(unittest.TestCase):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.question_bank = SimpleNamespace(running=True, available=True)
         launcher.running = {"yatori": False, "autovisor": False}
+        launcher.starting = {"yatori": False, "autovisor": False}
         launcher._last_start_error = {}
         launcher.log_system = lambda _message: None
         launcher.start_yatori = lambda: launcher._reject_runtime_start(
             "yatori", "Yatori 配置缺失"
         )
-        launcher.start_autovisor = lambda: True
+        launcher.start_autovisor = lambda: (
+            launcher.starting.update(autovisor=True) or True
+        )
         launcher.get_web_initial_state = lambda: {"runtime": {}}
 
         result = launcher.perform_web_action("start_all")

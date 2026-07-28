@@ -38,6 +38,7 @@ class FakeLauncher:
         self.exits = []
         self.notifications = []
         self.failures = []
+        self.runtime_failures = []
         self.terminated = []
         self.stream_error = None
 
@@ -63,6 +64,22 @@ class FakeLauncher:
 
     def _record_runtime_failure(self, core, message):
         self.failures.append((core, message))
+
+    def _handle_runtime_failure(
+        self,
+        core,
+        title,
+        message,
+        *,
+        notification_message=None,
+    ):
+        self.runtime_failures.append((core, title, message))
+        self._record_runtime_failure(core, message)
+        self._notify_runtime_event(
+            title,
+            notification_message or message,
+            error=True,
+        )
 
     def _terminate_process_tree(self, process, label):
         process.terminated = True
@@ -180,6 +197,16 @@ class RuntimeProcessServiceTests(unittest.TestCase):
             [("core", "Core 启动失败: pipe closed")],
         )
         self.assertIn("Core 启动失败: pipe closed", launcher.logs)
+        self.assertEqual(
+            launcher.runtime_failures,
+            [
+                (
+                    "core",
+                    "Core 启动失败",
+                    "Core 启动失败: pipe closed",
+                )
+            ],
+        )
 
     def test_thread_start_failure_releases_claim_and_is_raised(self):
         launcher = FakeLauncher()
@@ -199,6 +226,7 @@ class RuntimeProcessServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(launcher.stopped, [("core", None)])
+        self.assertEqual(len(launcher.runtime_failures), 1)
 
     def test_thread_construction_failure_releases_claim_and_is_raised(self):
         launcher = FakeLauncher()
@@ -222,6 +250,7 @@ class RuntimeProcessServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(launcher.stopped, [("core", None)])
+        self.assertEqual(len(launcher.runtime_failures), 1)
 
     def test_monitor_uses_requested_output_channel_and_clears_state(self):
         launcher = FakeLauncher()
