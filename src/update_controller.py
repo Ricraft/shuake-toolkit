@@ -95,9 +95,46 @@ class UpdateController:
         self.yatori_update_info = result
         if result.get("has_update") and result.get("installed"):
             version = (result.get("info") or {}).get("version", "未知")
-            self.log(f"检测到 Yatori 新版本: {version}")
+            current_version = result.get("version", "未知")
+            self.log(f"检测到 Yatori 新版本: {version}（当前版本: {current_version}）")
+            self._log_yatori_release_notes(result.get("info"))
         elif not result.get("installed", False):
             self.log("未安装 Yatori，可在 Web 界面点击“安装 Yatori 更新”。")
+            self._log_yatori_release_notes(result.get("info"))
+
+    def _format_yatori_release_notes(self, release_info, *, max_chars: int = 900) -> str:
+        body = str((release_info or {}).get("body") or "").strip()
+        if not body or body == "通过备用方式获取":
+            return ""
+
+        lines = []
+        for raw_line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("<!--") and line.endswith("-->"):
+                continue
+            lines.append(line)
+            if len(lines) >= 14:
+                break
+
+        summary = "\n".join(lines).strip()
+        if len(summary) > max_chars:
+            summary = summary[:max_chars].rstrip() + "..."
+        return summary
+
+    def _log_yatori_release_notes(self, release_info) -> None:
+        notes = self._format_yatori_release_notes(release_info)
+        if notes:
+            self.log(f"Yatori 最新版本介绍:\n{notes}")
+
+    def _build_yatori_current_message(self, result) -> str:
+        version = result.get("version", "未知")
+        message = f"当前已是最新版本 ({version})"
+        notes = self._format_yatori_release_notes(result.get("info"))
+        if notes:
+            message = f"{message}\n\n最新版本介绍:\n{notes}"
+        return message
 
     def handle_explicit_yatori_result(self, result) -> None:
         if not result:
@@ -108,15 +145,21 @@ class UpdateController:
         has_update = result.get("has_update", False)
         if not installed or has_update:
             self.yatori_update_info = result
+            release_info = result.get("info")
+            version = (release_info or {}).get("version", "未知")
             if installed:
-                version = (result.get("info") or {}).get("version", "未知")
-                self.log(f"检测到 Yatori 新版本 {version}，开始更新。")
-            self.install_yatori_async(result.get("info"))
+                current_version = result.get("version", "未知")
+                self.log(
+                    f"检测到 Yatori 新版本 {version}（当前版本: {current_version}），开始更新。"
+                )
+            else:
+                self.log(f"准备安装 Yatori 最新版本 {version}。")
+            self._log_yatori_release_notes(release_info)
+            self.install_yatori_async(release_info)
             return
 
-        version = result.get("version", "未知")
         self.yatori_update_info = None
-        self.show_info("管理中心", f"当前已是最新版本 ({version})")
+        self.show_info("管理中心", self._build_yatori_current_message(result))
 
     def install_yatori_async(self, release_info=None) -> bool:
         return self._install_async("yatori", release_info)

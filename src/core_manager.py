@@ -1063,20 +1063,27 @@ class CoreManager:
             return {'has_update': True, 'installed': False, 'info': release_info}
 
         if local_version is None:
-            self._log("已检测到本地 Yatori 文件，但暂无版本记录，跳过缺失提示")
+            local_version = self.YATORI_FALLBACK_LOCAL_VERSION
+            self._log(
+                "已检测到本地 Yatori 文件但暂无版本记录，"
+                f"将按内置版本 {local_version} 比较"
+            )
+
+        # 简单的字符串比较，如果需要更复杂的可以用 packaging.version
+        if latest_version != local_version:
             return {
-                'has_update': False,
+                'has_update': True,
                 'installed': True,
-                'version': self.YATORI_FALLBACK_LOCAL_VERSION,
-                'version_unknown': False,
+                'version': local_version,
                 'info': release_info,
             }
         
-        # 简单的字符串比较，如果需要更复杂的可以用 packaging.version
-        if latest_version != local_version:
-            return {'has_update': True, 'installed': True, 'info': release_info}
-        
-        return {'has_update': False, 'installed': True, 'version': local_version}
+        return {
+            'has_update': False,
+            'installed': True,
+            'version': local_version,
+            'info': release_info,
+        }
 
     def check_autovisor_update(self):
         """检查 Autovisor 更新"""

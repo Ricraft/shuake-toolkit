@@ -75,6 +75,44 @@ class UpdateControllerTests(unittest.TestCase):
         self.assertFalse(controller.installing)
         self.assertTrue(any(item[0] == "info" for item in notices))
 
+    def test_explicit_yatori_update_logs_current_version_and_release_notes(self):
+        manager = _Manager()
+        manager.yatori_result = {
+            "installed": True,
+            "has_update": True,
+            "version": "v2.6.2-beta.8",
+            "info": {
+                "version": "v2.6.2-beta.11",
+                "body": "新增：修复智慧树登录适配\n修复：提升更新检测稳定性",
+            },
+        }
+        controller, _manager, logs, _notices, _installed = self.make_controller(manager)
+
+        self.assertTrue(controller.check_yatori_async(explicit=True))
+
+        joined_logs = "\n".join(item[0] for item in logs)
+        self.assertIn("当前版本: v2.6.2-beta.8", joined_logs)
+        self.assertIn("Yatori 最新版本介绍", joined_logs)
+        self.assertIn("修复智慧树登录适配", joined_logs)
+
+    def test_explicit_yatori_current_version_dialog_includes_release_notes(self):
+        manager = _Manager()
+        manager.yatori_result = {
+            "installed": True,
+            "has_update": False,
+            "version": "v2.6.2-beta.11",
+            "info": {
+                "version": "v2.6.2-beta.11",
+                "body": "版本介绍第一行\n版本介绍第二行",
+            },
+        }
+        controller, _manager, _logs, notices, _installed = self.make_controller(manager)
+
+        self.assertTrue(controller.check_yatori_async(explicit=True))
+
+        self.assertTrue(any("最新版本介绍" in item[2] for item in notices))
+        self.assertTrue(any("版本介绍第一行" in item[2] for item in notices))
+
     def test_duplicate_yatori_check_is_rejected_while_first_is_pending(self):
         tasks = []
         controller, _manager, _logs, notices, _installed = self.make_controller(

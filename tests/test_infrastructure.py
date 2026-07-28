@@ -355,6 +355,26 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(requested, [manager.YATORI_RELEASES_API_URL])
         self.assertEqual(result["version"], "v2.6.1-beta.11")
 
+    def test_yatori_update_uses_fallback_local_version_when_record_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            manager.local_versions["yatori"] = None
+            manager.check_yatori_installed = lambda: True
+            manager.get_yatori_latest_release = lambda: {
+                "version": "v2.6.2-beta.11",
+                "download_url": "https://example.test/yatori.zip",
+                "body": "beta.11 release notes",
+            }
+
+            result = manager.check_yatori_update()
+
+        self.assertTrue(result["installed"])
+        self.assertTrue(result["has_update"])
+        self.assertEqual(result["version"], manager.YATORI_FALLBACK_LOCAL_VERSION)
+        self.assertEqual(result["info"]["version"], "v2.6.2-beta.11")
+        self.assertTrue(any("内置版本" in item for item in logs))
+
     def test_release_archive_requires_matching_sha256_and_size(self):
         payload = b"verified core archive"
         with tempfile.TemporaryDirectory() as temp_dir:
