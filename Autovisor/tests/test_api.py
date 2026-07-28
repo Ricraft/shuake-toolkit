@@ -351,6 +351,32 @@ class TestLogsEndpoint(unittest.TestCase):
             ["ERROR child line"],
         )
 
+    def test_get_logs_uses_latest_task_session_boundary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_log = Path(temp_dir) / "DashboardTask.log"
+            task_log.write_text(
+                "[DASHBOARD_SESSION_START] session_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa mode=single task_id=old started_at=1\n"
+                "old child line\n"
+                "[DASHBOARD_SESSION_START] session_id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb mode=single task_id=new started_at=2\n"
+                "new child line\n",
+                encoding="utf-8",
+            )
+            self._use_task_log(task_log)
+
+            response = self.client.get("/api/logs?limit=10")
+
+        logs = response.json()["data"]["logs"]
+        messages = [log["message"] for log in logs]
+        self.assertNotIn("old child line", messages)
+        self.assertIn("new child line", messages)
+        self.assertTrue(
+            all(
+                log.get("session_id") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                for log in logs
+                if log.get("source") == "task"
+            )
+        )
+
 
 class TestStatsEndpoint(unittest.TestCase):
     def setUp(self):
@@ -444,6 +470,25 @@ class TestStatsEndpoint(unittest.TestCase):
         self.assertEqual(data["total_videos"], 1)
         self.assertEqual(data["total_tests"], 1)
         self.assertEqual(data["success_rate"], 1.0)
+
+    def test_stats_ignore_previous_dashboard_task_session(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_log = Path(temp_dir) / "DashboardTask.log"
+            task_log.write_text(
+                "[DASHBOARD_SESSION_START] session_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa mode=single task_id=old started_at=1\n"
+                "程序启动中...\n"
+                "所有课程已学习完毕!\n"
+                "[DASHBOARD_SESSION_START] session_id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb mode=single task_id=new started_at=2\n"
+                "程序启动中...\n",
+                encoding="utf-8",
+            )
+            self._use_task_log(task_log)
+
+            response = self.client.get("/api/stats")
+
+        data = response.json()["data"]
+        self.assertEqual(data["total_sessions"], 1)
+        self.assertIsNone(data["success_rate"])
 
     def test_dashboard_unknown_success_rate_renders_dash_placeholder(self):
         dashboard = (Path(_AUTOVISOR_ROOT) / "web" / "dashboard.html").read_text(
@@ -547,6 +592,22 @@ class TestCoursesEndpoint(unittest.TestCase):
         self.assertNotEqual(courses[0]["status"], "completed")
         self.assertEqual(courses[1]["progress"], 10)
         self.assertEqual(courses[1]["status"], "running")
+
+    def test_get_courses_ignore_previous_dashboard_task_session(self):
+        self._use_task_log(
+            "[DASHBOARD_SESSION_START] session_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa mode=single task_id=old started_at=1\n"
+            "所有课程已学习完毕!\n"
+            "[DASHBOARD_SESSION_START] session_id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb mode=single task_id=new started_at=2\n"
+            "开始处理第 1/2 门课程（one.example）\n"
+            "完成进度: 20%\n"
+        )
+
+        response = self.client.get("/api/courses")
+
+        courses = response.json()["data"]["courses"]
+        self.assertEqual(courses[0]["progress"], 20)
+        self.assertEqual(courses[0]["status"], "running")
+        self.assertEqual(courses[1]["status"], "pending")
 
 
 class TestErrorHandling(unittest.TestCase):

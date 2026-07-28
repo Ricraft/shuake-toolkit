@@ -153,7 +153,13 @@ class DashboardLogger:
 dashboard_logger = DashboardLogger()
 
 
+_TASK_SESSION_MARKER = "[DASHBOARD_SESSION_START]"
+_TASK_SESSION_RE = re.compile(r"^\[DASHBOARD_SESSION_START\]\s+session_id=(?P<id>[0-9a-f]+)\b")
+
+
 def _classify_task_log_line(message: str) -> str:
+    if message.startswith(_TASK_SESSION_MARKER):
+        return "INFO"
     upper = message.upper()
     if (
         "ERROR" in upper
@@ -183,22 +189,37 @@ def _read_task_log_entries(log_path: Path, max_lines: int) -> list[dict]:
         lines = text.splitlines()
         if start and lines:
             lines = lines[1:]
-        lines = [line for line in lines if line.strip()][-max_lines:]
+        lines = [line for line in lines if line.strip()]
+        session_start_indexes = [
+            index
+            for index, line in enumerate(lines)
+            if line.startswith(_TASK_SESSION_MARKER)
+        ]
+        if session_start_indexes:
+            lines = lines[session_start_indexes[-1]:]
+        lines = lines[-max_lines:]
         timestamp = datetime.fromtimestamp(log_path.stat().st_mtime).isoformat()
     except OSError as exc:
         dashboard_logger.warn(f"Read task log warning: {exc}")
         return []
 
-    return [
-        {
+    entries = []
+    session_id = None
+    for line in lines:
+        marker = _TASK_SESSION_RE.search(line)
+        if marker:
+            session_id = marker.group("id")
+        entry = {
             "level": _classify_task_log_line(line),
             "message": line,
             "timestamp": timestamp,
             "shift": False,
             "source": "task",
         }
-        for line in lines
-    ]
+        if session_id:
+            entry["session_id"] = session_id
+        entries.append(entry)
+    return entries
 
 
 def _get_dashboard_logs(limit: int, level: Optional[str] = None) -> tuple[list[dict], int]:
@@ -576,6 +597,7 @@ async def get_status():
     return ApiResponse(data={
         "is_running": snapshot.is_running,
         "current_task": snapshot.task_id,
+        "session_id": snapshot.session_id,
         "mode": snapshot.mode,
         "pid": snapshot.pid,
         "exit_code": snapshot.exit_code,
@@ -614,6 +636,7 @@ async def start_task(request: TaskStartRequest):
     return ApiResponse(
         data={
             "task_id": snapshot.task_id,
+            "session_id": snapshot.session_id,
             "mode": snapshot.mode,
             "pid": snapshot.pid,
         },

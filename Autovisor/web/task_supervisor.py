@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Literal
@@ -25,6 +26,7 @@ class TaskAlreadyRunning(RuntimeError):
 class TaskSnapshot:
     is_running: bool = False
     task_id: str | None = None
+    session_id: str | None = None
     mode: TaskMode | None = None
     pid: int | None = None
     start_time: float | None = None
@@ -57,6 +59,7 @@ class TaskSupervisor:
         self._process = None
         self._log_handle = None
         self._task_id: str | None = None
+        self._session_id: str | None = None
         self._mode: TaskMode | None = None
         self._start_time: float | None = None
         self._last_exit_code: int | None = None
@@ -66,6 +69,7 @@ class TaskSupervisor:
         return TaskSnapshot(
             is_running=process is not None,
             task_id=self._task_id if process is not None else None,
+            session_id=self._session_id if process is not None else None,
             mode=self._mode if process is not None else None,
             pid=getattr(process, "pid", None) if process is not None else None,
             start_time=self._start_time if process is not None else None,
@@ -84,6 +88,7 @@ class TaskSupervisor:
         self._last_exit_code = exit_code
         self._process = None
         self._task_id = None
+        self._session_id = None
         self._mode = None
         self._start_time = None
         self._close_log_locked()
@@ -142,6 +147,18 @@ class TaskSupervisor:
             command = self._build_command(mode, resolved_config, normalized_url)
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             log_handle = self.log_path.open("a", encoding="utf-8")
+            log_start_position = log_handle.tell()
+            task_id = normalized_url or (
+                "all_accounts" if mode == "multi" else "all_courses"
+            )
+            session_id = uuid.uuid4().hex
+            start_time = self.clock()
+            log_handle.write(
+                "[DASHBOARD_SESSION_START] "
+                f"session_id={session_id} mode={mode} "
+                f"task_id={task_id} started_at={start_time}\n"
+            )
+            log_handle.flush()
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             kwargs = {
@@ -159,16 +176,19 @@ class TaskSupervisor:
             try:
                 process = self.process_factory(command, **kwargs)
             except Exception:
-                log_handle.close()
+                try:
+                    log_handle.seek(log_start_position)
+                    log_handle.truncate()
+                finally:
+                    log_handle.close()
                 raise
 
             self._process = process
             self._log_handle = log_handle
-            self._task_id = normalized_url or (
-                "all_accounts" if mode == "multi" else "all_courses"
-            )
+            self._task_id = task_id
+            self._session_id = session_id
             self._mode = mode
-            self._start_time = self.clock()
+            self._start_time = start_time
             self._last_exit_code = None
             return self._snapshot_locked()
 

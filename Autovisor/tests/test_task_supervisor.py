@@ -91,9 +91,17 @@ def test_launch_single_course_builds_real_cli_command(tmp_path):
     assert kwargs["env"]["PYTHONUNBUFFERED"] == "1"
     assert snapshot.is_running is True
     assert snapshot.task_id == "https://example.test/course/1"
+    assert snapshot.session_id
     assert snapshot.mode == "single"
     assert snapshot.pid == 4321
     assert snapshot.start_time == 123.5
+    log_text = (tmp_path / "runtime" / "logs" / "DashboardTask.log").read_text(
+        encoding="utf-8"
+    )
+    assert "[DASHBOARD_SESSION_START]" in log_text
+    assert f"session_id={snapshot.session_id}" in log_text
+    assert "mode=single" in log_text
+    assert "task_id=https://example.test/course/1" in log_text
 
     with pytest.raises(TaskAlreadyRunning):
         supervisor.launch(mode="single", config_path=config_path)
@@ -103,6 +111,30 @@ def test_launch_single_course_builds_real_cli_command(tmp_path):
     assert finished.is_running is False
     assert finished.exit_code == 0
     assert kwargs["stdout"].closed is True
+
+
+def test_launch_failure_does_not_leave_session_boundary(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "Autovisor.py").write_text("", encoding="utf-8")
+    config_path = tmp_path / "configs.ini"
+    config_path.write_text("[user-account]\n", encoding="utf-8")
+    log_path = tmp_path / "launch.log"
+
+    def fail_launch(_command, **_kwargs):
+        raise OSError("launch failed")
+
+    supervisor = TaskSupervisor(
+        runtime_dir,
+        python_executable="python-test",
+        process_factory=fail_launch,
+        log_path=log_path,
+    )
+
+    with pytest.raises(OSError):
+        supervisor.launch(mode="single", config_path=config_path)
+
+    assert log_path.read_text(encoding="utf-8") == ""
 
 
 def test_stop_terminates_owned_process_tree(tmp_path):
