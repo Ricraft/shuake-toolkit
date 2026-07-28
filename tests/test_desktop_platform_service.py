@@ -1,5 +1,7 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.desktop_platform_service import DesktopPlatformService
@@ -147,3 +149,102 @@ def test_feedback_sound_failure_is_logged_once(tmp_path):
 
     assert len(logs) == 1
     assert "audio unavailable" in logs[0]
+
+
+def test_log_export_rejects_unknown_tab_before_writing(tmp_path):
+    service, _logs = build_service(
+        tmp_path,
+        process_launcher=lambda *_args, **_kwargs: None,
+    )
+
+    result = service.export_logs(r"..\outside", "secret")
+
+    assert result["ok"] is False
+    assert "未知日志类型" in result["message"]
+    assert not (tmp_path / "logs").exists()
+
+
+def test_repeated_log_exports_never_overwrite_same_timestamp(tmp_path):
+    opened = []
+    fixed_now = datetime(2026, 7, 28, 15, 0, 0, 123456)
+    service, _logs = build_service(
+        tmp_path,
+        now=lambda: fixed_now,
+        process_launcher=lambda command, **_kwargs: opened.append(command),
+    )
+
+    first = service.export_logs("system", "first")
+    second = service.export_logs("system", "second")
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert first["path"] != second["path"]
+    assert Path(first["path"]).read_text(encoding="utf-8") == "first"
+    assert Path(second["path"]).read_text(encoding="utf-8") == "second"
+    assert len(opened) == 2
+
+
+def test_concurrent_log_exports_get_unique_files(tmp_path):
+    service, _logs = build_service(
+        tmp_path,
+        now=lambda: datetime(2026, 7, 28, 15, 0, 0, 123456),
+        process_launcher=lambda *_args, **_kwargs: None,
+    )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(
+            executor.map(
+                lambda index: service.export_logs("yatori", f"log-{index}"),
+                range(4),
+            )
+        )
+
+    paths = [result["path"] for result in results]
+    contents = {
+        Path(path).read_text(encoding="utf-8")
+        for path in paths
+    }
+    assert all(result["ok"] for result in results)
+    assert len(set(paths)) == 4
+    assert contents == {"log-0", "log-1", "log-2", "log-3"}
+
+
+def test_log_export_remains_successful_when_explorer_cannot_open(tmp_path):
+    def fail_open(_command, **_kwargs):
+        raise OSError("explorer unavailable")
+
+    service, logs = build_service(tmp_path, process_launcher=fail_open)
+
+    result = service.export_logs("autovisor", "runtime output")
+
+    assert result["ok"] is True
+    assert result["revealed"] is False
+    assert os.path.exists(result["path"])
+    assert "explorer unavailable" in result["message"]
+    assert logs[-1] == result["message"]
+
+
+def test_open_path_reports_shell_failure_without_throwing(tmp_path):
+    target = tmp_path / "Autovisor"
+    target.mkdir()
+
+    def fail_open(_path):
+        raise OSError("shell unavailable")
+
+    service, _logs = build_service(tmp_path, path_opener=fail_open)
+
+    result = service.open_path(str(target))
+
+    assert result["ok"] is False
+    assert "shell unavailable" in result["message"]
+
+
+def test_open_path_rejects_empty_value(tmp_path):
+    service, _logs = build_service(
+        tmp_path,
+        path_opener=lambda _path: None,
+    )
+
+    result = service.open_path("")
+
+    assert result == {"ok": False, "message": "本地路径为空"}

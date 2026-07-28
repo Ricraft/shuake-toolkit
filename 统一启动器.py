@@ -35,6 +35,7 @@ from src.runtime_activity import summarize_autovisor_activity
 from src.runtime_process_service import RuntimeProcessService
 from src.update_controller import UpdateController
 from src.web_action_service import WebActionService
+from src.web_window_controller import WebWindowController
 
 try:
     import webview
@@ -227,6 +228,40 @@ class UnifiedLauncher:
             )
             self._desktop_platform_service = service
         return service
+
+    def _get_web_window_controller(self):
+        controller = getattr(self, '_web_window_controller', None)
+        if controller is None:
+            controller = WebWindowController(
+                get_window=lambda: getattr(self, 'web_window', None),
+                set_window=lambda window: setattr(self, 'web_window', window),
+                schedule=lambda delay, callback: self._after(delay, callback),
+                log=lambda message: self.log_system(message),
+                should_minimize_to_tray=lambda: self._preference_enabled(
+                    'minimizeToTray'
+                ),
+                minimize_window=lambda: self._minimize_main_window(),
+                confirmed_exit=lambda: self.on_closing(confirmed=True),
+                save_geometry=lambda: self._save_window_geometry_preference(),
+            )
+            self._web_window_controller = controller
+        return controller
+
+    @property
+    def _allow_webview_close(self):
+        return self._get_web_window_controller().allow_close
+
+    @_allow_webview_close.setter
+    def _allow_webview_close(self, value):
+        self._get_web_window_controller().allow_close = bool(value)
+
+    @property
+    def _exit_confirmation_pending(self):
+        return self._get_web_window_controller().confirmation_pending
+
+    @_exit_confirmation_pending.setter
+    def _exit_confirmation_pending(self, value):
+        self._get_web_window_controller().confirmation_pending = bool(value)
 
     def _build_encoding_candidates(self, *preferred):
         return self._get_process_supervisor().build_encoding_candidates(*preferred)
@@ -625,88 +660,25 @@ class UnifiedLauncher:
         self.autovisor_multi_mode = bool(value)
 
     def attach_web_window(self, window):
-        self.web_window = window
-
-        if self.web_window:
-            self.web_window.events.closing += self._handle_web_window_closing
-            self._apply_window_preferences(initial=True)
+        self._get_web_window_controller().attach(
+            window,
+            closing_handler=self._handle_web_window_closing,
+            apply_preferences=self._apply_window_preferences,
+        )
 
     def _show_web_exit_confirmation(self):
-        """显示退出确认；前端不可用时完成用户已经发起的安全退出。"""
-        self._exit_confirmation_pending = False
-        window = self.web_window
-        if not window:
-            return False
-
-        try:
-            shown = bool(
-                window.evaluate_js(
-                    """
-                    (function () {
-                        if (typeof showExitModal === 'function') {
-                            showExitModal();
-                            return true;
-                        }
-                        return false;
-                    })()
-                    """
-                )
-            )
-        except Exception as exc:
-            self.log_system(
-                "显示退出确认弹窗失败，将按本次退出请求安全关闭: "
-                f"{repr(exc)[:120]}"
-            )
-            shown = False
-
-        if shown:
-            return True
-
-        self.log_system("退出确认弹窗不可用，将按本次退出请求安全关闭。")
-        self.on_closing(confirmed=True)
-        return False
+        return self._get_web_window_controller().show_exit_confirmation()
 
     def _request_web_exit_confirmation(self):
-        """请求 Web 端非阻塞显示退出确认对话框。"""
-        if not self.web_window:
-            return False
-        if getattr(self, '_exit_confirmation_pending', False):
-            return True
-
-        self._exit_confirmation_pending = True
-        try:
-            # 延迟执行 JS，避免在 pywebview closing 事件中阻塞。
-            self._after(100, self._show_web_exit_confirmation)
-            return True
-        except Exception as exc:
-            self._exit_confirmation_pending = False
-            self.log_system(
-                "退出确认任务创建失败: %s" % repr(exc)[:120]
-            )
-            return False
+        return self._get_web_window_controller().request_exit_confirmation()
 
     def _handle_web_window_closing(self):
-        if self._allow_webview_close:
-            return
-
-        if self._preference_enabled('minimizeToTray'):
-            self.log_system("已按偏好设置最小化窗口，核心任务继续运行。")
-            self._minimize_main_window()
-            return False
-
-        if self._request_web_exit_confirmation():
-            return False
-
-        # 连弹窗任务都无法创建时，仍需先回收核心和题库再关闭。
-        self.on_closing(confirmed=True)
-        return False
+        return self._get_web_window_controller().handle_window_closing(
+            request_confirmation=self._request_web_exit_confirmation,
+        )
 
     def _close_main_window(self):
-        """安全关闭主窗口"""
-        self._save_window_geometry_preference()
-        if self.web_window:
-            self._allow_webview_close = True
-            self.web_window.destroy()
+        return self._get_web_window_controller().close_window()
 
     def _show_error(self, title, message):
         self.log_system(f"[{title}] {str(message).replace(chr(10), ' | ')}")
@@ -1735,22 +1707,12 @@ class UnifiedLauncher:
         self.log_system("日志面板已清空")
 
     def export_logs_to_file(self, tab, text):
-        """导出日志到文件并打开所在文件夹"""
-        try:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"logs_{tab}_{ts}.txt"
-            export_dir = os.path.join(self.get_base_dir(), "logs")
-            os.makedirs(export_dir, exist_ok=True)
-            filepath = os.path.join(export_dir, filename)
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(text)
-            subprocess.Popen(['explorer', '/select,', os.path.normpath(filepath)])
-            self.log_system(f"日志已导出: {filename}")
-            return {"ok": True, "path": filepath, "message": f"日志已导出: {filename}"}
-        except Exception as exc:
-            self.log_system(f"导出日志失败: {exc}")
-            return {"ok": False, "message": f"导出失败: {exc}"}
-
+        result = self._get_desktop_platform_service().export_logs(tab, text)
+        if result.get('ok') and result.get('revealed'):
+            self.log_system(result.get('message') or "日志已导出")
+        elif not result.get('ok'):
+            self.log_system(result.get('message') or "导出日志失败")
+        return result
 
     def open_config_dir(self, script_type):
         """打开配置目录"""
@@ -1761,13 +1723,12 @@ class UnifiedLauncher:
         else:
             return {'ok': False, 'message': f'未知核心类型: {script_type}'}
 
-        if os.path.exists(path):
-            os.startfile(path)
-            return {'ok': True}
-        else:
-            message = f"目录不存在: {path}"
+        result = self._get_desktop_platform_service().open_path(path)
+        if not result.get('ok'):
+            message = result.get('message') or f"目录不存在: {path}"
             self._show_error("错误", message)
             return {'ok': False, 'message': message}
+        return result
 
     def open_config_generator(self):
         """打开配置生成器"""
@@ -1775,14 +1736,20 @@ class UnifiedLauncher:
             "配置文件生成器.html",
             "统一配置生成器.html",
         ]
-        for file_name in candidate_names:
-            generator_path = os.path.join(self.get_base_dir(), "web", file_name)
-            if os.path.exists(generator_path):
-                os.startfile(generator_path)
-                return {'ok': True}
-        message = "未找到配置生成器页面"
-        self._show_error("错误", message)
-        return {'ok': False, 'message': message}
+        candidates = [
+            os.path.join(self.get_base_dir(), "web", file_name)
+            for file_name in candidate_names
+        ]
+        result = self._get_desktop_platform_service().open_first_existing(
+            candidates,
+            missing_message="未找到配置生成器页面",
+        )
+        if not result.get('ok'):
+            self._show_error(
+                "错误",
+                result.get('message') or "未找到配置生成器页面",
+            )
+        return result
 
     # ==================== 核心管理功能 ====================
 

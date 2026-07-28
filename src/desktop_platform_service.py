@@ -5,14 +5,17 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime
-from typing import Callable, Mapping, Optional
+from typing import Callable, Iterable, Mapping, Optional
 
 from src.atomic_io import atomic_write_text
 
 
 class DesktopPlatformService:
     """Keep platform-specific side effects out of the launcher coordinator."""
+
+    LOG_TABS = frozenset(("system", "yatori", "autovisor"))
 
     def __init__(
         self,
@@ -27,6 +30,8 @@ class DesktopPlatformService:
         executable: Optional[str] = None,
         frozen: Optional[bool] = None,
         command_runner=None,
+        process_launcher=None,
+        path_opener=None,
         now: Optional[Callable[[], datetime]] = None,
     ):
         self.base_dir = os.path.abspath(base_dir)
@@ -43,9 +48,14 @@ class DesktopPlatformService:
             else bool(frozen)
         )
         self.command_runner = command_runner or subprocess.run
+        self.process_launcher = process_launcher or subprocess.Popen
+        self.path_opener = (
+            getattr(os, "startfile", None) if path_opener is None else path_opener
+        )
         self.now = now or datetime.now
         self.shutdown_pending = False
         self._sound_error_logged = False
+        self._export_lock = threading.Lock()
 
     def startup_command(self) -> str:
         if self.frozen:
@@ -202,3 +212,85 @@ class DesktopPlatformService:
 
         self.shutdown_pending = False
         return {"ok": True, "message": "已取消关机"}
+
+    def _next_export_path(self, export_dir: str, tab: str) -> tuple[str, str]:
+        timestamp = self.now().strftime("%Y%m%d_%H%M%S_%f")
+        stem = f"logs_{tab}_{timestamp}"
+        filename = f"{stem}.txt"
+        filepath = os.path.join(export_dir, filename)
+        sequence = 2
+        while os.path.exists(filepath):
+            filename = f"{stem}_{sequence}.txt"
+            filepath = os.path.join(export_dir, filename)
+            sequence += 1
+        return filename, filepath
+
+    def reveal_file(self, filepath: str) -> dict:
+        if self.platform_name != "nt":
+            return {"ok": False, "message": "当前系统不支持打开文件所在位置"}
+        try:
+            self.process_launcher(
+                ["explorer", "/select,", os.path.normpath(filepath)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "message": f"无法打开文件所在位置: {exc}"}
+
+    def export_logs(self, tab: str, text: str) -> dict:
+        normalized_tab = str(tab or "").strip().lower()
+        if normalized_tab not in self.LOG_TABS:
+            return {"ok": False, "message": f"未知日志类型: {tab}"}
+
+        export_dir = os.path.join(self.base_dir, "logs")
+        try:
+            with self._export_lock:
+                os.makedirs(export_dir, exist_ok=True)
+                filename, filepath = self._next_export_path(
+                    export_dir,
+                    normalized_tab,
+                )
+                atomic_write_text(filepath, str(text or ""))
+        except Exception as exc:
+            self.log(f"导出日志失败: {exc}")
+            return {"ok": False, "message": f"导出失败: {exc}"}
+
+        reveal_result = self.reveal_file(filepath)
+        if reveal_result.get("ok"):
+            message = f"日志已导出: {filename}"
+        else:
+            detail = reveal_result.get("message") or "无法打开文件所在位置"
+            message = f"日志已导出: {filename}；{detail}"
+            self.log(message)
+        return {
+            "ok": True,
+            "path": filepath,
+            "message": message,
+            "revealed": bool(reveal_result.get("ok")),
+        }
+
+    def open_path(self, path: str) -> dict:
+        if not str(path or "").strip():
+            return {"ok": False, "message": "本地路径为空"}
+        normalized = os.path.abspath(path)
+        if not os.path.exists(normalized):
+            return {"ok": False, "message": f"目录或文件不存在: {normalized}"}
+        if self.path_opener is None:
+            return {"ok": False, "message": "当前系统不支持打开本地路径"}
+        try:
+            self.path_opener(normalized)
+            return {"ok": True, "path": normalized}
+        except Exception as exc:
+            return {"ok": False, "message": f"打开本地路径失败: {exc}"}
+
+    def open_first_existing(
+        self,
+        candidates: Iterable[str],
+        *,
+        missing_message: str,
+    ) -> dict:
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return self.open_path(candidate)
+        return {"ok": False, "message": missing_message}
