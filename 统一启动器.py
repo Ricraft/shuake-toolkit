@@ -15,7 +15,6 @@ import re
 from datetime import datetime
 
 from src.atomic_io import (
-    atomic_write_text,
     capture_file_state,
     restore_file_state,
 )
@@ -24,6 +23,7 @@ from src.autovisor_dependency_manager import AutovisorDependencyManager
 from src.config_service import ConfigService
 from src.course_api_service import CourseAPIService
 from src.course_catalog import CourseCatalogService
+from src.desktop_platform_service import DesktopPlatformService
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.process_supervisor import ProcessSupervisor
@@ -213,6 +213,19 @@ class UnifiedLauncher:
         if service is None:
             service = PracticeModeService(self)
             self._practice_mode_service = service
+        return service
+
+    def _get_desktop_platform_service(self):
+        service = getattr(self, '_desktop_platform_service', None)
+        if service is None:
+            service = DesktopPlatformService(
+                self.get_base_dir(),
+                __file__,
+                log=self.log_system,
+                get_window=lambda: getattr(self, 'web_window', None),
+                sound_module=winsound,
+            )
+            self._desktop_platform_service = service
         return service
 
     def _build_encoding_candidates(self, *preferred):
@@ -505,6 +518,13 @@ class UnifiedLauncher:
         self.practice_account_id = None
 
         base_dir = self.get_base_dir()
+        self._desktop_platform_service = DesktopPlatformService(
+            base_dir,
+            __file__,
+            log=self.log_system,
+            get_window=lambda: self.web_window,
+            sound_module=winsound,
+        )
         self.preferences_path = self.get_preferences_file_path(base_dir)
         self._preferences_service = PreferencesService(
             self.preferences_path,
@@ -730,64 +750,16 @@ class UnifiedLauncher:
         return self._get_preferences_service().enabled(key, default)
 
     def _startup_command(self):
-        if getattr(sys, 'frozen', False):
-            return f'"{sys.executable}"'
-        return f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+        return self._get_desktop_platform_service().startup_command()
 
     def _set_windows_auto_start(self, enabled):
-        if os.name != 'nt':
-            self.log_system("当前系统不支持自动创建开机启动项。")
-            return False
-
-        startup_dir = os.path.join(
-            os.environ.get('APPDATA', ''),
-            r'Microsoft\Windows\Start Menu\Programs\Startup',
-        )
-        if not startup_dir.strip("\\") or not os.path.isdir(startup_dir):
-            self.log_system("未找到 Windows 启动目录，开机自动启动未生效。")
-            return False
-
-        shortcut_path = os.path.join(startup_dir, "统一刷课启动器.bat")
-        if enabled:
-            work_dir = os.path.dirname(os.path.abspath(__file__))
-            shortcut = "".join(
-                (
-                    "@echo off\n",
-                    f"cd /d \"{work_dir}\"\n",
-                    f"start \"\" {self._startup_command()}\n",
-                )
-            )
-            atomic_write_text(shortcut_path, shortcut)
-            self.log_system("已启用开机自动启动")
-        else:
-            if os.path.exists(shortcut_path):
-                os.remove(shortcut_path)
-            self.log_system("已关闭开机自动启动")
-        return True
+        return self._get_desktop_platform_service().set_windows_auto_start(enabled)
 
     def _clean_old_runtime_logs(self, base_dir=None, days=7):
-        base_dir = base_dir or self.get_base_dir()
-        cutoff = datetime.now().timestamp() - days * 24 * 60 * 60
-        log_dirs = (
-            os.path.join(base_dir, "Autovisor", "logs"),
-            os.path.join(base_dir, "Yatori", "assets", "log"),
+        return self._get_desktop_platform_service().clean_old_runtime_logs(
+            base_dir=base_dir,
+            days=days,
         )
-        removed = 0
-        for log_dir in log_dirs:
-            if not os.path.isdir(log_dir):
-                continue
-            for entry in os.listdir(log_dir):
-                path = os.path.join(log_dir, entry)
-                if not os.path.isfile(path):
-                    continue
-                try:
-                    if os.path.getmtime(path) < cutoff:
-                        os.remove(path)
-                        removed += 1
-                except Exception as exc:
-                    self.log_system(f"清理日志失败: {path} ({exc})")
-        if removed:
-            self.log_system(f"已自动清理 {removed} 个 7 天前的日志文件")
 
     def _apply_window_preferences(self, initial=False):
         always_on_top = self._preference_enabled('alwaysOnTop')
@@ -805,32 +777,17 @@ class UnifiedLauncher:
             self.start_all()
 
     def _minimize_main_window(self):
-        try:
-            if self.web_window and hasattr(self.web_window, 'minimize'):
-                self.web_window.minimize()
-            elif self.web_window and hasattr(self.web_window, 'hide'):
-                self.web_window.hide()
-            else:
-                self.log_system("当前窗口后端不支持自动最小化。")
-        except Exception as exc:
-            self.log_system(f"最小化窗口失败: {exc}")
+        return self._get_desktop_platform_service().minimize_window()
 
     def _save_window_geometry_preference(self):
         # pywebview does not expose a portable read API for current geometry.
         return
 
     def _play_feedback_sound(self, error=False):
-        if not self._preference_enabled('soundEnabled', True):
-            return
-        try:
-            if winsound:
-                winsound.MessageBeep(winsound.MB_ICONHAND if error else winsound.MB_OK)
-            else:
-                print('\a', end='')
-        except Exception as exc:
-            if not getattr(self, '_feedback_sound_error_logged', False):
-                self._feedback_sound_error_logged = True
-                self.log_system(f"播放提示音失败: {exc}")
+        return self._get_desktop_platform_service().play_feedback_sound(
+            enabled=self._preference_enabled('soundEnabled', True),
+            error=error,
+        )
 
     def _notify_runtime_event(self, title, message, error=False):
         pref_key = 'notifyOnError' if error else 'notifyOnComplete'
@@ -889,34 +846,28 @@ class UnifiedLauncher:
     def _maybe_shutdown_after_completion(self):
         if not self._preference_enabled('autoShutdown'):
             return
-        self.log_system("已启用刷完自动关机，将在 60 秒后关闭计算机。")
-        self._shutdown_pending = True
-        try:
-            subprocess.Popen(
-                ["shutdown", "/s", "/t", "60", "/c", "刷课任务已结束，统一启动器按偏好设置自动关机。"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception as exc:
-            self.log_system(f"自动关机指令执行失败: {exc}")
+        result = self._get_desktop_platform_service().schedule_shutdown(
+            delay_seconds=60,
+        )
+        self._shutdown_pending = bool(
+            self._desktop_platform_service.shutdown_pending
+        )
+        if result.get('ok'):
+            self.log_system("已启用刷完自动关机，将在 60 秒后关闭计算机。")
+        else:
+            self.log_system(result.get('message') or "自动关机指令执行失败")
 
     def _cancel_shutdown(self):
         """取消正在进行的自动关机"""
-        try:
-            subprocess.run(
-                ["shutdown", "/a"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
+        result = self._get_desktop_platform_service().cancel_shutdown()
+        self._shutdown_pending = bool(
+            self._desktop_platform_service.shutdown_pending
+        )
+        if result.get('ok'):
             self.log_system("已取消自动关机")
-            self._shutdown_pending = False
-            return {"ok": True, "message": "已取消关机"}
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "message": "取消关机超时"}
-        except Exception as exc:
-            self.log_system(f"取消自动关机失败: {exc}")
-            return {"ok": False, "message": f"取消失败: {exc}"}
+        else:
+            self.log_system(result.get('message') or "取消自动关机失败")
+        return result
 
     def _handle_preference_side_effects(self, payload):
         failures = []

@@ -54,6 +54,51 @@ class LauncherStateTests(unittest.TestCase):
         launcher._handle_runtime_exit("autovisor", 0, False)
         self.assertEqual(shutdowns, [True])
 
+    def test_shutdown_failure_is_visible_and_not_marked_pending(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._preference_enabled = lambda key, default=False: (
+            key == "autoShutdown"
+        )
+        logs = []
+        launcher.log_system = logs.append
+        launcher._shutdown_pending = False
+        platform = SimpleNamespace(
+            shutdown_pending=False,
+            schedule_shutdown=lambda **_kwargs: {
+                "ok": False,
+                "message": "自动关机指令被系统拒绝，返回码: 5",
+            },
+        )
+        launcher._desktop_platform_service = platform
+
+        launcher._maybe_shutdown_after_completion()
+
+        self.assertFalse(launcher._shutdown_pending)
+        self.assertEqual(
+            logs,
+            ["自动关机指令被系统拒绝，返回码: 5"],
+        )
+
+    def test_cancel_shutdown_keeps_pending_state_when_system_rejects(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        logs = []
+        launcher.log_system = logs.append
+        launcher._shutdown_pending = True
+        platform = SimpleNamespace(
+            shutdown_pending=True,
+            cancel_shutdown=lambda: {
+                "ok": False,
+                "message": "取消关机失败，系统返回码: 1116",
+            },
+        )
+        launcher._desktop_platform_service = platform
+
+        result = launcher._cancel_shutdown()
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(launcher._shutdown_pending)
+        self.assertEqual(logs, ["取消关机失败，系统返回码: 1116"])
+
     def test_runtime_state_exposes_active_practice_account(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.running = {
