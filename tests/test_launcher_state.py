@@ -124,11 +124,15 @@ class LauncherStateTests(unittest.TestCase):
         launcher._get_yatori_display_version = lambda: "y"
         launcher._get_autovisor_display_version = lambda: "a"
         launcher._get_autovisor_multi_mode = lambda: True
+        launcher.autovisor_dependencies = SimpleNamespace(installing=True)
 
         runtime = launcher.get_web_runtime_state()
 
         self.assertTrue(runtime["running"]["practice"])
         self.assertEqual(runtime["practice_account_id"], 7)
+        self.assertTrue(
+            runtime["dependency_installing"]["autovisor"]
+        )
 
     def test_runtime_start_claim_is_exclusive_and_resets_stop_request(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)

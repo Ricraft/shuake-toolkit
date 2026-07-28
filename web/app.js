@@ -154,9 +154,94 @@
 
         function renderAutovisorActivity(activity) { const panel = document.getElementById('autovisor-activity'); if (!panel) return; if (!activity || activity.phase === 'idle') { panel.hidden = true; return; } panel.hidden = false; panel.dataset.phase = activity.phase||'idle'; const label = document.getElementById('autovisor-activity-label'); const detail = document.getElementById('autovisor-activity-detail'); const percent = document.getElementById('autovisor-activity-percent'); const track = document.getElementById('autovisor-progress-track'); const bar = document.getElementById('autovisor-progress-bar'); if (label) label.textContent = activity.label||'运行中'; const parts = []; if (activity.course_index && activity.course_total) parts.push(`第 ${activity.course_index}/${activity.course_total} 门`); if (activity.course) parts.push(activity.course); if (activity.phase === 'failed' && activity.last_error) parts.push(activity.last_error); if (detail) { detail.textContent = parts.join(' · ')||'等待更多运行信息'; detail.title = detail.textContent; } const raw = Number(activity.progress_percent); const hasProgress = activity.progress_percent !== null && activity.progress_percent !== '' && Number.isFinite(raw); const value = hasProgress?Math.max(0, Math.min(100, raw)):0; if (percent) percent.textContent = hasProgress?`${value}%`:''; if (track) track.hidden = !hasProgress; if (bar) bar.style.width = `${value}%`; }
 
-        function renderRuntime(runtime) { if (!runtime) return; const n = { ...runtime, yatori_running: runtime.yatori_running??!!runtime.running?.yatori, autovisor_running: runtime.autovisor_running??!!runtime.running?.autovisor, yatori_version: runtime.yatori_version||runtime.versions?.yatori||'Yatori Core', autovisor_version: runtime.autovisor_version||runtime.versions?.autovisor||'Autovisor Core', about_version: runtime.about_version||'', core_paths: runtime.core_paths||(runtime.paths?`Yatori: ${runtime.paths.yatori||''}\nAutovisor: ${runtime.paths.autovisor||''}`:''), shutdown_pending: !!runtime.shutdown_pending }; state.runtime = n; observeRuntimeAchievements(n); backendConnected = true; renderConsole(); document.getElementById('sidebar-status').textContent = 'Python 后端已连接'; setCoreStatus('yatori', n.yatori_running, n.yatori_version); setCoreStatus('autovisor', n.autovisor_running, n.autovisor_version); renderAutovisorActivity(n.autovisor_activity); if (n.about_version) { document.getElementById('about-version').textContent = n.about_version; const m = n.about_version.match(/统一启动器\s*([^|]+)/); if (m) document.getElementById('about-title-version').textContent = m[1].trim(); } if (n.core_paths) { document.getElementById('about-paths').textContent = n.core_paths; initTypewriterPaths(); } const qbR = !!runtime.qb_running, qbP = runtime.qb_port||8083, qbS = runtime.qb_stats||{total:0,ai_cached:0}; setQbStatus(qbR, qbP, qbS); const sm = document.getElementById('shutdown-modal'); if (sm) sm.classList.toggle('active', n.shutdown_pending); if (n.shutdown_pending && !window._shutdownTimer) { let sec = 60; const secEl = document.getElementById('shutdown-countdown-sec'); if (secEl) secEl.textContent = sec; window._shutdownTimer = setInterval(() => { const el = document.getElementById('shutdown-countdown-sec'); if (el) el.textContent = --sec; if (sec <= 0) { clearInterval(window._shutdownTimer); window._shutdownTimer = null; document.getElementById('shutdown-modal')?.classList.remove('active'); } }, 1000); } else if (!n.shutdown_pending && window._shutdownTimer) { clearInterval(window._shutdownTimer); window._shutdownTimer = null; } }
+        function renderRuntime(runtime) {
+            if (!runtime) return;
+            const n = {
+                ...runtime,
+                yatori_running: runtime.yatori_running??!!runtime.running?.yatori,
+                autovisor_running: runtime.autovisor_running??!!runtime.running?.autovisor,
+                yatori_version: runtime.yatori_version||runtime.versions?.yatori||'Yatori Core',
+                autovisor_version: runtime.autovisor_version||runtime.versions?.autovisor||'Autovisor Core',
+                about_version: runtime.about_version||'',
+                core_paths: runtime.core_paths||(runtime.paths?`Yatori: ${runtime.paths.yatori||''}\nAutovisor: ${runtime.paths.autovisor||''}`:''),
+                starting: { ...(runtime.starting||{}) },
+                dependency_installing: { ...(runtime.dependency_installing||{}) },
+                shutdown_pending: !!runtime.shutdown_pending
+            };
+            state.runtime = n;
+            observeRuntimeAchievements(n);
+            backendConnected = true;
+            renderConsole();
+            document.getElementById('sidebar-status').textContent = 'Python 后端已连接';
+            setCoreStatus(
+                'yatori',
+                n.yatori_running,
+                n.yatori_version,
+                !!n.starting.yatori,
+                false
+            );
+            setCoreStatus(
+                'autovisor',
+                n.autovisor_running,
+                n.autovisor_version,
+                !!n.starting.autovisor,
+                !!n.dependency_installing.autovisor
+            );
+            renderAutovisorActivity(n.autovisor_activity);
+            if (n.about_version) {
+                document.getElementById('about-version').textContent = n.about_version;
+                const m = n.about_version.match(/统一启动器\s*([^|]+)/);
+                if (m) document.getElementById('about-title-version').textContent = m[1].trim();
+            }
+            if (n.core_paths) {
+                document.getElementById('about-paths').textContent = n.core_paths;
+                initTypewriterPaths();
+            }
+            const qbR = !!runtime.qb_running;
+            const qbP = runtime.qb_port||8083;
+            const qbS = runtime.qb_stats||{total:0,ai_cached:0};
+            setQbStatus(qbR, qbP, qbS);
+            const sm = document.getElementById('shutdown-modal');
+            if (sm) sm.classList.toggle('active', n.shutdown_pending);
+            if (n.shutdown_pending && !window._shutdownTimer) {
+                let sec = 60;
+                const secEl = document.getElementById('shutdown-countdown-sec');
+                if (secEl) secEl.textContent = sec;
+                window._shutdownTimer = setInterval(() => {
+                    const el = document.getElementById('shutdown-countdown-sec');
+                    if (el) el.textContent = --sec;
+                    if (sec <= 0) {
+                        clearInterval(window._shutdownTimer);
+                        window._shutdownTimer = null;
+                        document.getElementById('shutdown-modal')?.classList.remove('active');
+                    }
+                }, 1000);
+            } else if (!n.shutdown_pending && window._shutdownTimer) {
+                clearInterval(window._shutdownTimer);
+                window._shutdownTimer = null;
+            }
+        }
 
-        function setCoreStatus(core, running, version) { document.getElementById(`${core}-dot`).classList.toggle('running', running); document.getElementById(`${core}-status`).textContent = running?'运行中':'未启动'; document.getElementById(`${core}-ready`).textContent = running?'运行中':'待命'; document.getElementById(`${core}-ready`).className = 'status-badge '+(running?'ready':'idle'); document.getElementById(`${core}-version`).textContent = version||`${core} Core`; document.getElementById(`${core}-action-btn`).innerHTML = running?'<i class="fas fa-stop"></i> 停止核心':'<i class="fas fa-power-off"></i> 启动核心'; document.getElementById(`${core}-action-btn`).onclick = () => handleCoreAction(core); }
+        function setCoreStatus(core, running, version, starting=false, dependencyInstalling=false) {
+            const active = running || starting;
+            const status = dependencyInstalling ? '安装依赖中' : starting ? '启动中' : running ? '运行中' : '未启动';
+            const ready = dependencyInstalling ? '准备环境' : starting ? '正在启动' : running ? '运行中' : '待命';
+            const button = document.getElementById(`${core}-action-btn`);
+            document.getElementById(`${core}-dot`).classList.toggle('running', active);
+            document.getElementById(`${core}-status`).textContent = status;
+            document.getElementById(`${core}-ready`).textContent = ready;
+            document.getElementById(`${core}-ready`).className = 'status-badge '+(active||dependencyInstalling?'ready':'idle');
+            document.getElementById(`${core}-version`).textContent = version||`${core} Core`;
+            button.disabled = dependencyInstalling;
+            button.innerHTML = dependencyInstalling
+                ? '<i class="fas fa-spinner fa-spin"></i> 安装依赖中'
+                : starting
+                    ? '<i class="fas fa-stop"></i> 取消启动'
+                    : running
+                        ? '<i class="fas fa-stop"></i> 停止核心'
+                        : '<i class="fas fa-power-off"></i> 启动核心';
+            button.onclick = () => handleCoreAction(core);
+        }
 
         function setQbStatus(running, port, stats) {
             const e = (id) => document.getElementById(id);
@@ -739,7 +824,8 @@
         async function handleCoreAction(core) {
             try {
                 const running = core === 'yatori' ? !!state.runtime?.yatori_running : !!state.runtime?.autovisor_running;
-                const action = running ? 'stop' : 'start';
+                const starting = !!state.runtime?.starting?.[core];
+                const action = (running || starting) ? 'stop' : 'start';
                 if (action === 'start') {
                     const sr = await saveSettings(false);
                     if (!sr?.ok) return sr || { ok: false, message: '保存配置失败' };

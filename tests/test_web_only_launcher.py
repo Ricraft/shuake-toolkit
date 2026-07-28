@@ -846,7 +846,16 @@ class WebOnlyLauncherTests(unittest.TestCase):
             "async function toggleQuestionBank", 1
         )[0]
         self.assertIn("if (action === 'start')", core_action)
+        self.assertIn("state.runtime?.starting?.[core]", core_action)
+        self.assertIn("(running || starting) ? 'stop' : 'start'", core_action)
         self.assertLess(core_action.index("const action"), core_action.index("saveSettings"))
+
+        core_status = frontend.split("function setCoreStatus", 1)[1].split(
+            "function setQbStatus", 1
+        )[0]
+        self.assertIn("dependencyInstalling", core_status)
+        self.assertIn("安装依赖中", core_status)
+        self.assertIn("取消启动", core_status)
 
     def test_start_all_reports_partial_failure_to_web(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)

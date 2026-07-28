@@ -9,7 +9,6 @@ import subprocess
 import threading
 import os
 import sys
-import locale
 import glob
 import re
 from datetime import datetime
@@ -21,6 +20,7 @@ from src.atomic_io import (
 from src.ai_service import AIConnectivityService
 from src.autovisor_dependency_manager import AutovisorDependencyManager
 from src.config_service import ConfigService
+from src.core_launch_service import CoreLaunchService
 from src.course_api_service import CourseAPIService
 from src.course_catalog import CourseCatalogService
 from src.desktop_platform_service import DesktopPlatformService
@@ -216,6 +216,13 @@ class UnifiedLauncher:
             coordinator = RuntimeCoordinator(self)
             self._runtime_coordinator = coordinator
         return coordinator
+
+    def _get_core_launch_service(self):
+        service = getattr(self, '_core_launch_service', None)
+        if service is None:
+            service = CoreLaunchService(self)
+            self._core_launch_service = service
+        return service
 
     def _get_practice_mode_service(self):
         service = getattr(self, '_practice_mode_service', None)
@@ -903,6 +910,9 @@ class UnifiedLauncher:
             },
             'running': dict(self.running),
             'starting': dict(self.starting),
+            'dependency_installing': {
+                'autovisor': bool(self.autovisor_installing),
+            },
             'practice_account_id': getattr(self, 'practice_account_id', None),
             'qb_running': self.question_bank.running,
             'qb_port': self.question_bank.port,
@@ -1162,230 +1172,19 @@ class UnifiedLauncher:
         return stopped
 
     def start_yatori(self):
-        """启动 Yatori"""
-        if self.running['yatori'] or self.starting['yatori']:
-            self.log_system("Yatori 已经在运行或启动中")
-            return True
-        if not self._get_runtime_coordinator().prepare_start('yatori'):
-            return False
-
-        self.yatori_path = self.find_yatori_path(self.get_base_dir())
-
-        # 检查配置文件
-        config_path = os.path.join(self.yatori_path, 'config.yaml')
-        if not os.path.exists(config_path):
-            self.log_system(f"错误: 未找到配置文件 {config_path}")
-            self._show_error("启动失败", "未找到 config.yaml 配置文件\n请使用配置生成器创建配置")
-            return self._reject_runtime_start(
-                'yatori',
-                '未找到 Yatori 的 config.yaml，请先保存配置',
-                failure_kind='configuration',
-            )
-
-        saved_config = self._load_yatori_config_data()
-        runtime_validation_error = self._validate_yatori_runtime(
-            saved_config.get('users') or [],
-        )
-        if runtime_validation_error:
-            self.log_system(f"Yatori 启动已取消: {runtime_validation_error}")
-            return self._reject_runtime_start(
-                'yatori',
-                runtime_validation_error,
-                failure_kind='configuration',
-            )
-
-        cmd, entry_path = self._get_yatori_command()
-        if not cmd:
-            self.log_system("错误: 未找到 Yatori 可执行文件")
-            self._show_error("启动失败", "未找到 Yatori 可执行文件")
-            return self._reject_runtime_start('yatori', '未找到 Yatori 可执行文件，请检查核心是否安装完整')
-
-        # 同步题库 URL 到 Yatori 配置
-        self._sync_yatori_question_bank_url()
-
-        if not self._claim_runtime_start('yatori'):
-            if self._last_start_failure_kind.get('yatori') == 'system':
-                return False
-            self.log_system("Yatori 已经在运行或启动中")
-            return True
-
-        self.log_system("正在启动 Yatori...")
-        self.log_system(f"Yatori 入口: {entry_path}")
-        return self._get_runtime_process_service().start(
-            core='yatori',
-            label='Yatori',
-            command=cmd,
-            cwd=self.yatori_path,
-            encodings=self._build_encoding_candidates(
-                'utf-8-sig', 'utf-8', 'gb18030', 'gbk', 'cp936'
-            ),
-        )
+        return self._get_core_launch_service().start_yatori()
 
     def get_python_executable(self):
         return find_python_executable()
 
     def _prepare_autovisor_question_bank(self):
-        """Start and briefly probe the local question-bank service."""
-        import socket
-        import time
-
-        if not self.question_bank.running:
-            self.log_system("[Autovisor] 正在启动题库服务器...")
-            self.start_question_bank(silent=True)
-            for _ in range(30):
-                if self.stop_requested.get('autovisor'):
-                    return
-                time.sleep(0.1)
-        else:
-            self.log_system("[Autovisor] 题库服务器已在运行")
-
-        port = self.question_bank.port
-        result = None
-        for attempt in range(3):
-            if self.stop_requested.get('autovisor'):
-                return
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(2)
-                result = sock.connect_ex(('127.0.0.1', port))
-            if result == 0:
-                self.log_system(
-                    f"[Autovisor] 题库服务器验证成功 (尝试 {attempt + 1})"
-                )
-                return
-            self.log_system(
-                f"[Autovisor] 端口验证失败 (尝试 {attempt + 1}/3)，等待2秒..."
-            )
-            for _ in range(20):
-                if self.stop_requested.get('autovisor'):
-                    return
-                time.sleep(0.1)
-        self.log_system(
-            f"[Autovisor] 警告: 题库服务器验证失败，错误码 {result}，继续启动..."
-        )
+        return self._get_core_launch_service().prepare_autovisor_question_bank()
 
     def _build_autovisor_runtime_env(self):
-        env = os.environ.copy()
-        qb_url = self.get_question_bank_url()
-        if qb_url:
-            env["QB_URL"] = qb_url
-            self.log_system(f"[Autovisor] 设置题库URL: {qb_url}")
-        else:
-            self.log_system("[Autovisor] 警告: 题库服务器未启动，使用默认URL")
-        return env
+        return self._get_core_launch_service().build_autovisor_runtime_env()
 
     def start_autovisor(self):
-        """启动 Autovisor"""
-        if not self._get_runtime_coordinator().prepare_start('autovisor'):
-            return False
-        if self.autovisor_installing:
-            self.log_system("Autovisor 依赖安装中，请等待安装完成后自动启动。")
-            return True
-
-        if self.running['autovisor'] or self.starting['autovisor']:
-            self.log_system("Autovisor 已经在运行或启动中")
-            return True
-
-        self.autovisor_path = self.find_autovisor_path(self.get_base_dir())
-        multi_mode = self._get_autovisor_multi_mode()
-        script_path, script_name, exact_match, is_executable = self._get_autovisor_entry_path(multi_mode)
-
-        if not script_path:
-            self.log_system(f"错误: 未找到 Autovisor 入口文件，目录: {self.autovisor_path}")
-            self._show_error("启动失败", "Autovisor 目录中未找到可用入口文件\n请检查 Autovisor 包是否完整")
-            return self._reject_runtime_start('autovisor', '未找到 Autovisor 入口文件，请检查核心是否安装完整')
-
-        # 检查配置文件
-        config_path = os.path.join(self.autovisor_path, 'configs.ini')
-        if not os.path.exists(config_path):
-            self.log_system(f"错误: 未找到配置文件 {config_path}")
-            self._show_error("启动失败", "未找到 configs.ini 配置文件\n请使用配置生成器创建配置")
-            return self._reject_runtime_start(
-                'autovisor',
-                '未找到 Autovisor 的 configs.ini，请先保存配置',
-                failure_kind='configuration',
-            )
-
-        saved_config = self._load_autovisor_config_data()
-        runtime_validation_error = self._validate_autovisor_runtime(
-            saved_config.get('accounts') or [],
-            multi_mode,
-        )
-        if runtime_validation_error:
-            self.log_system(f"Autovisor 启动已取消: {runtime_validation_error}")
-            return self._reject_runtime_start(
-                'autovisor',
-                runtime_validation_error,
-                failure_kind='configuration',
-            )
-
-        runtime_state = self._prepare_autovisor_config(config_path, multi_mode)
-        for summary in runtime_state['browser_summaries']:
-            self.log_system(summary)
-
-        python_exe = None
-        if is_executable:
-            self.log_system("检测到 Autovisor 可执行版，将直接启动 EXE。")
-        else:
-            # 检查 Python 环境
-            python_exe = self.get_python_executable()
-            if not python_exe:
-                self.log_system("错误: 未找到 Python 解释器")
-                self._show_error("启动失败", "未找到 Python 解释器\n请确保已安装 Python 并添加到环境变量")
-                return self._reject_runtime_start('autovisor', '未找到可用的 Python 解释器')
-
-            missing_dependencies = self._check_autovisor_dependencies(python_exe)
-            if missing_dependencies or runtime_state['needs_playwright_browser']:
-                package_names = ", ".join(sorted({item[1] for item in missing_dependencies}))
-                self.log_system(f"错误: 当前 Python 环境缺少 Autovisor 依赖: {package_names}")
-                for module_name, package_name, error in missing_dependencies:
-                    if error:
-                        self.log_system(f"依赖检查失败 [{module_name}/{package_name}]: {error}")
-                if runtime_state['needs_playwright_browser']:
-                    self.log_system("未检测到可用 Chrome/Edge，将自动安装 Playwright Chromium 作为浏览器回退。")
-                accepted = self._install_autovisor_dependencies_async(
-                    python_exe,
-                    missing_dependencies,
-                    ensure_playwright_browser=runtime_state['needs_playwright_browser']
-                )
-                if accepted:
-                    return True
-                # A concurrent click may have claimed installation between the
-                # initial check and this call; the request is still in progress.
-                if self.autovisor_installing:
-                    return True
-                return self._reject_runtime_start('autovisor', 'Autovisor 依赖安装任务未能启动')
-
-        if not self._claim_runtime_start('autovisor'):
-            if self._last_start_failure_kind.get('autovisor') == 'system':
-                return False
-            self.log_system("Autovisor 已经在运行或启动中")
-            return True
-
-        self.log_system("正在启动 Autovisor...")
-        self.log('autovisor', "正在启动任务...")
-        self.log_system(f"Autovisor 目录: {self.autovisor_path}")
-        self.log_system(f"Autovisor 入口: {script_name}")
-        if is_executable:
-            self.log_system("启动方式: 直接运行 EXE")
-        else:
-            self.log_system(f"Python 解释器: {python_exe}")
-        if is_executable:
-            self.log_system("提示: 当前 Autovisor 为可执行版，已跳过 Python 依赖检查。")
-        elif not exact_match:
-            expected_name = 'Autovisor_Multi.py' if multi_mode else 'Autovisor.py'
-            self.log_system(f"警告: 未找到请求入口 {expected_name}，已回落到 {script_name}")
-        command = [script_path] if is_executable else [python_exe, script_path]
-        return self._get_runtime_process_service().start(
-            core='autovisor',
-            label='Autovisor',
-            command=command,
-            cwd=self.autovisor_path,
-            encodings=self._build_encoding_candidates(
-                locale.getpreferredencoding(False), 'utf-8', 'gb18030', 'gbk'
-            ),
-            before_launch=self._prepare_autovisor_question_bank,
-            env_factory=self._build_autovisor_runtime_env,
-        )
+        return self._get_core_launch_service().start_autovisor()
 
     def stop_script(self, script_type):
         """停止指定脚本"""
