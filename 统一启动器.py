@@ -827,8 +827,10 @@ class UnifiedLauncher:
                 winsound.MessageBeep(winsound.MB_ICONHAND if error else winsound.MB_OK)
             else:
                 print('\a', end='')
-        except Exception:
-            pass
+        except Exception as exc:
+            if not getattr(self, '_feedback_sound_error_logged', False):
+                self._feedback_sound_error_logged = True
+                self.log_system(f"播放提示音失败: {exc}")
 
     def _notify_runtime_event(self, title, message, error=False):
         pref_key = 'notifyOnError' if error else 'notifyOnComplete'

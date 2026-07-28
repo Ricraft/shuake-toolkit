@@ -101,6 +101,27 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertEqual(window.events.closing.handlers, [launcher._handle_web_window_closing])
         self.assertEqual(calls, [True])
 
+    def test_feedback_sound_failure_is_logged_once(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._preference_enabled = lambda *_args, **_kwargs: True
+        logs = []
+        launcher.log_system = logs.append
+
+        def fail_message_beep(_value):
+            raise OSError("audio unavailable")
+
+        with patch.object(
+            launcher_module,
+            "winsound",
+            SimpleNamespace(MB_ICONHAND=1, MB_OK=2, MessageBeep=fail_message_beep),
+        ):
+            launcher._play_feedback_sound()
+            launcher._play_feedback_sound(error=True)
+
+        self.assertEqual(len(logs), 1)
+        self.assertIn("播放提示音失败", logs[0])
+        self.assertIn("audio unavailable", logs[0])
+
     def test_exit_confirmation_requests_are_coalesced_until_modal_runs(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.web_window = _Window(evaluate_result=True)

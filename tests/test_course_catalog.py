@@ -544,6 +544,36 @@ class CourseCatalogServiceTests(unittest.TestCase):
             self.assertEqual(len(sessions[0].posts), 2)
             self.assertEqual(len(sessions[0].gets), 2)
 
+    def test_xuexitong_redirect_probe_failure_is_logged_but_recoverable(self):
+        class RedirectProbeFailureSession(_Session):
+            def post(self, url, **kwargs):
+                self.posts.append((url, kwargs))
+                return _Response(
+                    302,
+                    headers={"Location": "https://i.chaoxing.com"},
+                )
+
+            def get(self, url, **kwargs):
+                self.gets.append((url, kwargs))
+                if len(self.gets) == 1:
+                    raise OSError("redirect unavailable")
+                return super().get(url, **kwargs)
+
+        logs = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = CourseCatalogService(
+                temp_dir,
+                logger=logs.append,
+                session_factory=lambda: RedirectProbeFailureSession("课程A"),
+            )
+
+            result = service.get_xuexitong_courses(0, "alice", "secret")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["courses"][0]["name"], "课程A")
+        self.assertTrue(any("登录跳转检查失败" in message for message in logs))
+        self.assertTrue(any("redirect unavailable" in message for message in logs))
+
     def test_xuexitong_response_contract_distinguishes_empty_from_failure(self):
         self.assertTrue(is_xuexitong_course_payload({"channelList": []}))
         self.assertFalse(is_xuexitong_course_payload({"status": False}))

@@ -406,8 +406,11 @@ class CourseCatalogService:
             )
             try:
                 session.get(redirect_url, headers=headers, timeout=30)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.log(
+                    "[学习通课程] 登录跳转检查失败，继续尝试课程列表: "
+                    f"{exc}"
+                )
         else:
             try:
                 login_result = response.json()

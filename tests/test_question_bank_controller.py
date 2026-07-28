@@ -209,6 +209,33 @@ class QuestionBankControllerTests(unittest.TestCase):
             self.assertIsNone(controller.server)
             self.assertTrue(_FakeServer.instances[0].stopped)
 
+    def test_unreachable_started_server_cleanup_error_is_logged(self):
+        class StopFailingServer(_FakeServer):
+            def stop(self):
+                super().stop()
+                raise OSError("stop failed")
+
+        logs = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = QuestionBankController(
+                temp_dir,
+                log=logs.append,
+                server_factory=StopFailingServer,
+                configure_models=lambda **_kwargs: None,
+                configure_auto_save_setting=lambda **_kwargs: None,
+                port_checker=lambda _port: False,
+                sleep=lambda _seconds: None,
+                available=True,
+            )
+
+            self.assertFalse(controller.start())
+
+        self.assertFalse(controller.running)
+        self.assertIsNone(controller.server)
+        self.assertTrue(StopFailingServer.instances[0].stopped)
+        self.assertTrue(any("清理失败的题库服务器实例" in line for line in logs))
+        self.assertTrue(any("stop failed" in line for line in logs))
+
     def test_import_export_deduplicate_and_clear_round_trip(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

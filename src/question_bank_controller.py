@@ -353,8 +353,8 @@ class QuestionBankController:
         if failed_server:
             try:
                 failed_server.stop()
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                self.log(f"[QB] 清理失败的题库服务器实例时出现异常: {cleanup_exc}")
         self.on_status_change()
         return False
 
