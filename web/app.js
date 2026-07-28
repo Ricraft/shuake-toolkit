@@ -2160,7 +2160,7 @@
         const TIANYI_HISTORY_MAX = 12;
         const TIANYI_CHAT_SAVE_MAX = 60;
         const TIANYI_CHAT_TEXT_MAX = 2000;
-        const tianyiState = { history: [], chat: [], busy: false, greeted: false, chatLoaded: false };
+        const tianyiState = { history: [], chat: [], busy: false, commandBusy: false, greeted: false, chatLoaded: false };
 
         function normalizeTianyiSavedChat(raw) {
             if (!Array.isArray(raw)) return [];
@@ -2579,6 +2579,14 @@
         }
 
         async function runTianyiCommand(cmd) {
+            if (tianyiState.commandBusy) {
+                const text = '上一条控制指令还在执行，请稍等一下～';
+                appendTianyiMsg('cmd-fail', text);
+                return { ok: false, text };
+            }
+            tianyiState.commandBusy = true;
+            const wasBusy = tianyiState.busy;
+            if (!wasBusy) setTianyiBusy(true);
             appendTianyiMsg('sys', '⚡ 执行指令：' + cmd);
             let res;
             const actionName = cmd.split(':')[0];
@@ -2587,6 +2595,9 @@
                 res = await execTianyiAction(action, arg);
             } catch (e) {
                 res = { ok: false, text: e?.message || '执行出错' };
+            } finally {
+                tianyiState.commandBusy = false;
+                if (!wasBusy) setTianyiBusy(false);
             }
             const ok = res?.ok !== false;
             const text = res?.text || (ok ? '完成' : '失败');

@@ -39,6 +39,27 @@ def test_tianyi_control_actions_propagate_backend_failures():
     assert "停止失败：" in tianyi_action
 
 
+def test_tianyi_control_commands_are_mutexed():
+    frontend = (PROJECT_ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    state_line = next(
+        line for line in frontend.splitlines() if "const tianyiState =" in line
+    )
+    command_runner = _function_source(
+        frontend,
+        "async function runTianyiCommand",
+        "async function execTianyiAction",
+    )
+
+    assert "commandBusy: false" in state_line
+    assert "if (tianyiState.commandBusy)" in command_runner
+    assert "tianyiState.commandBusy = true" in command_runner
+    assert "tianyiState.commandBusy = false" in command_runner
+    assert "finally" in command_runner
+    assert command_runner.index("tianyiState.commandBusy = true") < command_runner.index(
+        "execTianyiAction"
+    )
+
+
 def test_tianyi_local_assets_referenced_by_ui_exist():
     frontend = (PROJECT_ROOT / "web" / "app.js").read_text(encoding="utf-8")
     html = next(
