@@ -248,6 +248,18 @@ _SESSION_FAILURE_MARKERS = (
     "任务已中断",
     "返回码:",
 )
+_COURSE_POSITION_RE = re.compile(
+    r"开始处理第\s*(?P<index>\d+)\s*/\s*(?P<total>\d+)\s*门课程"
+)
+_COURSE_TITLE_RE = re.compile(r"当前课程\s*[:：]\s*<<(?P<title>.+?)>>")
+_COURSE_PROGRESS_RE = re.compile(
+    r"(?:完成进度|学习进度|播放进度)\s*[:：]?\s*(?:\|.*?\|\s*)?"
+    r"(?P<percent>\d{1,3})%"
+)
+_COURSE_TERMINAL_RE = re.compile(
+    r"第\s*(?P<index>\d+)\s*/\s*(?P<total>\d+)\s*门课程.*?"
+    r"(?P<result>执行完成|执行失败)"
+)
 
 
 def _count_matches(lines: list[str], markers: tuple[str, ...]) -> int:
@@ -285,6 +297,69 @@ def _derive_dashboard_stats() -> dict:
         "success_rate": success_rate,
         "stats_source": "runtime_logs",
     }
+
+
+def _derive_course_rows(urls: list[str]) -> list[dict]:
+    logs, _total = _get_dashboard_logs(1000)
+    lines = [str(log.get("message", "")) for log in logs]
+    current_index: int | None = None
+    titles: dict[int, str] = {}
+    progress: dict[int, int] = {}
+    completed: set[int] = set()
+    failed: set[int] = set()
+    all_completed = False
+
+    for line in lines:
+        position = _COURSE_POSITION_RE.search(line)
+        if position:
+            current_index = int(position.group("index"))
+
+        title = _COURSE_TITLE_RE.search(line)
+        if title and current_index:
+            titles[current_index] = title.group("title").strip()
+
+        progress_match = _COURSE_PROGRESS_RE.search(line)
+        if progress_match and current_index:
+            percent = max(0, min(100, int(progress_match.group("percent"))))
+            progress[current_index] = percent
+
+        terminal = _COURSE_TERMINAL_RE.search(line)
+        if terminal:
+            index = int(terminal.group("index"))
+            if terminal.group("result") == "执行完成":
+                completed.add(index)
+                progress[index] = 100
+            else:
+                failed.add(index)
+
+        if any(marker in line for marker in ("所有课程已学习完毕", "所有课程已完成")):
+            all_completed = True
+
+    rows = []
+    for index, url in enumerate(urls, 1):
+        row_progress = progress.get(index, 0)
+        status = "pending"
+        if all_completed or index in completed:
+            status = "completed"
+            row_progress = 100
+        elif index in failed:
+            status = "failed"
+        elif current_index == index:
+            status = "running"
+        elif current_index and index < current_index and index not in failed:
+            status = "completed"
+            row_progress = max(row_progress, 100)
+
+        rows.append(
+            {
+                "id": index,
+                "url": url,
+                "name": titles.get(index) or f"课程 {index}",
+                "progress": row_progress,
+                "status": status,
+            }
+        )
+    return rows
 
 # ============================================================
 # Config Manager
@@ -558,15 +633,7 @@ async def get_courses():
     try:
         cfg = config_manager.get()
         urls = getattr(cfg, "course_urls", [])
-        courses = []
-        for i, url in enumerate(urls, 1):
-            courses.append({
-                "id": i,
-                "url": url,
-                "name": f"课程 {i}",
-                "progress": 0,
-                "status": "pending",
-            })
+        courses = _derive_course_rows(list(urls))
         return ApiResponse(data={"courses": courses})
     except Exception as e:
         dashboard_logger.error(f"Get courses failed: {e}")

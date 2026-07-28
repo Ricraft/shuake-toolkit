@@ -430,6 +430,7 @@ class TestStatsEndpoint(unittest.TestCase):
 class TestCoursesEndpoint(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+        self.original_supervisor = api_module.task_supervisor
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_config = Path(self.temp_dir.name) / "test_configs.ini"
         self.temp_config.write_text(
@@ -445,7 +446,13 @@ class TestCoursesEndpoint(unittest.TestCase):
         config_manager._config = None
 
     def tearDown(self):
+        api_module.task_supervisor = self.original_supervisor
         self.temp_dir.cleanup()
+
+    def _use_task_log(self, content: str):
+        task_log = Path(self.temp_dir.name) / "DashboardTask.log"
+        task_log.write_text(content, encoding="utf-8")
+        api_module.task_supervisor = SimpleNamespace(log_path=task_log)
 
     def test_get_courses(self):
         response = self.client.get("/api/courses")
@@ -454,6 +461,49 @@ class TestCoursesEndpoint(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertEqual(len(data["data"]["courses"]), 2)
         self.assertEqual(data["data"]["courses"][0]["url"], "https://lc.zhihuishu.com/course1")
+
+    def test_get_courses_uses_task_log_current_progress(self):
+        self._use_task_log(
+            "程序启动中...\n"
+            "开始处理第 1/2 门课程（example.com）\n"
+            "当前课程:<<大学生安全教育>>，是新版课程\n"
+            "完成进度: 73%\n"
+        )
+
+        response = self.client.get("/api/courses")
+
+        courses = response.json()["data"]["courses"]
+        self.assertEqual(courses[0]["name"], "大学生安全教育")
+        self.assertEqual(courses[0]["progress"], 73)
+        self.assertEqual(courses[0]["status"], "running")
+        self.assertEqual(courses[1]["status"], "pending")
+
+    def test_get_courses_marks_completed_and_failed_rows_from_task_log(self):
+        self._use_task_log(
+            "开始处理第 1/2 门课程（one.example）\n"
+            "第 1/2 门课程（one.example）执行完成\n"
+            "开始处理第 2/2 门课程（two.example）\n"
+            "第 2/2 门课程（two.example）执行失败: RuntimeError: boom\n"
+        )
+
+        response = self.client.get("/api/courses")
+
+        courses = response.json()["data"]["courses"]
+        self.assertEqual(courses[0]["progress"], 100)
+        self.assertEqual(courses[0]["status"], "completed")
+        self.assertEqual(courses[1]["status"], "failed")
+
+    def test_get_courses_marks_all_rows_completed_when_task_finished(self):
+        self._use_task_log("所有课程已学习完毕!\n")
+
+        response = self.client.get("/api/courses")
+
+        courses = response.json()["data"]["courses"]
+        self.assertEqual([course["progress"] for course in courses], [100, 100])
+        self.assertEqual(
+            [course["status"] for course in courses],
+            ["completed", "completed"],
+        )
 
 
 class TestErrorHandling(unittest.TestCase):
