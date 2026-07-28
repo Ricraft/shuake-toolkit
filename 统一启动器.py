@@ -33,7 +33,6 @@ from src.preferences_service import PreferencesService
 from src.practice_mode_service import PracticeModeService
 from src.python_runtime import find_python_executable
 from src.question_bank_controller import QuestionBankController
-from src.runtime_activity import summarize_autovisor_activity
 from src.runtime_coordinator import RuntimeCoordinator
 from src.runtime_process_service import RuntimeProcessService
 from src.update_controller import UpdateController
@@ -42,6 +41,7 @@ from src.web_action_service import (
     WebActionService,
 )
 from src.web_settings_service import WebSettingsService
+from src.web_state_service import WebStateService
 from src.web_window_controller import WebWindowController
 
 try:
@@ -766,6 +766,13 @@ class UnifiedLauncher:
             self._web_settings_service = service
         return service
 
+    def _get_web_state_service(self):
+        service = getattr(self, '_web_state_service', None)
+        if service is None:
+            service = WebStateService(self)
+            self._web_state_service = service
+        return service
+
     def _load_web_preferences(self):
         return self._get_preferences_service().get()
 
@@ -913,66 +920,10 @@ class UnifiedLauncher:
         return result
 
     def get_web_runtime_state(self):
-        yatori_version = self._get_yatori_display_version()
-        autovisor_version = self._get_autovisor_display_version()
-        logs = {name: list(lines) for name, lines in self.log_history.items()}
-        autovisor_activity = summarize_autovisor_activity(
-            logs.get('autovisor'),
-            running=bool(self.running.get('autovisor')),
-            starting=bool(self.starting.get('autovisor')),
-        )
-        core_paths = "\n".join(
-            [
-                f"Yatori: {self.yatori_path}",
-                f"Autovisor: {self.autovisor_path}",
-            ]
-        )
-        return {
-            'backend_ready': True,
-            'yatori_running': bool(self.running.get('yatori')),
-            'autovisor_running': bool(self.running.get('autovisor')),
-            'yatori_version': yatori_version,
-            'autovisor_version': autovisor_version,
-            'about_version': f"统一启动器 {self.LAUNCHER_VERSION} | Yatori {yatori_version} | Autovisor {autovisor_version}",
-            'core_paths': core_paths,
-            'versions': {
-                'yatori': yatori_version,
-                'autovisor': autovisor_version,
-            },
-            'paths': {
-                'yatori': self.yatori_path,
-                'autovisor': self.autovisor_path,
-            },
-            'installed': {
-                'yatori': self._directory_has_any_file(self.yatori_path, self.YATORI_ENTRY_FILES),
-                'autovisor': self._directory_has_any_file(self.autovisor_path, self.AUTOVISOR_ENTRY_FILES),
-            },
-            'running': dict(self.running),
-            'starting': dict(self.starting),
-            'dependency_installing': {
-                'autovisor': bool(self.autovisor_installing),
-            },
-            'practice_account_id': getattr(self, 'practice_account_id', None),
-            'qb_running': self.question_bank.running,
-            'qb_port': self.question_bank.port,
-            'qb_stats': self.question_bank.get_stats(),
-            'logs': logs,
-            'autovisor_activity': autovisor_activity,
-            'shutdown_pending': self._shutdown_pending,
-            'autovisor_multi_mode': self._get_autovisor_multi_mode(),
-            'runtime_event': getattr(self, '_last_runtime_event', None),
-        }
+        return self._get_web_state_service().runtime_state()
 
     def get_web_initial_state(self):
-        return {
-            'runtime': self.get_web_runtime_state(),
-            'preferences': self.get_web_preferences(),
-            'settings': {
-                'yatori': self._load_yatori_config_data(),
-                'autovisor': self._load_autovisor_config_data(),
-                'questionbank': self.get_qb_settings_from_web(),
-            },
-        }
+        return self._get_web_state_service().initial_state()
 
     def save_settings_from_web(self, payload):
         return self._get_web_settings_service().save(payload)

@@ -1128,9 +1128,11 @@ class WebOnlyLauncherTests(unittest.TestCase):
         page = (project_root / "web" / "现代启动器_UI_预览.html").read_text(
             encoding="utf-8"
         )
-        launcher_source = Path(launcher_module.__file__).read_text(encoding="utf-8")
+        state_service_source = (project_root / "src" / "web_state_service.py").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn("'autovisor_activity': autovisor_activity", launcher_source)
+        self.assertIn('"autovisor_activity": autovisor_activity', state_service_source)
         self.assertIn("function renderAutovisorActivity(activity)", frontend)
         self.assertIn("renderAutovisorActivity(n.autovisor_activity)", frontend)
         for element_id in (
