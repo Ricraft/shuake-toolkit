@@ -1,5 +1,6 @@
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,31 @@ from 统一启动器 import UnifiedLauncher
 
 
 class LauncherStateTests(unittest.TestCase):
+    def test_scheduled_callbacks_can_be_cancelled_before_startup_failure(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._scheduled_timer_lock = threading.RLock()
+        launcher._scheduled_timers = set()
+        called = []
+
+        launcher._after(80, lambda: called.append(True))
+        cancelled = launcher._cancel_scheduled_callbacks()
+        time.sleep(0.12)
+
+        self.assertEqual(cancelled, 1)
+        self.assertEqual(called, [])
+        self.assertEqual(launcher._scheduled_timers, set())
+
+    def test_completed_scheduled_callback_removes_its_timer(self):
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher._scheduled_timer_lock = threading.RLock()
+        launcher._scheduled_timers = set()
+        completed = threading.Event()
+
+        launcher._after(10, completed.set)
+
+        self.assertTrue(completed.wait(0.5))
+        self.assertEqual(launcher._scheduled_timers, set())
+
     def test_failed_runtime_exit_is_visible_and_never_triggers_auto_shutdown(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.running = {"yatori": False, "autovisor": True}

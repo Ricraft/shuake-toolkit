@@ -18,6 +18,12 @@ from src.atomic_io import (
     restore_file_state,
 )
 from src.ai_service import AIConnectivityService
+from src.application_bootstrap import (
+    WebApplicationBootstrap,
+    enable_windows_dpi_awareness,
+    install_crash_hook,
+    resolve_file_dialog_constants,
+)
 from src.autovisor_dependency_manager import AutovisorDependencyManager
 from src.config_service import ConfigService
 from src.core_launch_service import CoreLaunchService
@@ -559,6 +565,8 @@ class UnifiedLauncher:
             'practice': False,
         }
         self._runtime_lock = threading.RLock()
+        self._scheduled_timer_lock = threading.RLock()
+        self._scheduled_timers = set()
         self.stop_requested = {
             'yatori': False,
             'autovisor': False,
@@ -634,9 +642,33 @@ class UnifiedLauncher:
             callback()
             return
 
-        timer = threading.Timer(delay_seconds, callback)
+        timer = None
+
+        def run_callback():
+            try:
+                callback()
+            finally:
+                with self._scheduled_timer_lock:
+                    self._scheduled_timers.discard(timer)
+
+        timer = threading.Timer(delay_seconds, run_callback)
         timer.daemon = True
+        with self._scheduled_timer_lock:
+            self._scheduled_timers.add(timer)
         timer.start()
+        return timer
+
+    def _cancel_scheduled_callbacks(self):
+        lock = getattr(self, "_scheduled_timer_lock", None)
+        timers = getattr(self, "_scheduled_timers", None)
+        if lock is None or timers is None:
+            return 0
+        with lock:
+            pending = list(timers)
+            timers.clear()
+        for timer in pending:
+            timer.cancel()
+        return len(pending)
 
     @property
     def qb_server(self):
@@ -1536,6 +1568,8 @@ class UnifiedLauncher:
             if not confirmed:
                 self.log_system("有核心任务正在运行，取消未确认的退出请求。")
                 return
+        self._cancel_scheduled_callbacks()
+        if core_task_running:
             self.stop_all()
         else:
             course_service = getattr(self, '_course_api_service', None)
@@ -1547,30 +1581,7 @@ class UnifiedLauncher:
 
 def main():
     """主程序入口"""
-    # 全局未捕获异常处理 — 写入崩溃日志
-    import traceback as _traceback
-    _CRASH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    os.makedirs(_CRASH_DIR, exist_ok=True)
-
-    def _crash_handler(exc_type, exc_value, exc_tb):
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(_CRASH_DIR, f"crash_{ts}.log")
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(f"Time: {datetime.now()}\n")
-                f.write(f"Type: {exc_type.__name__}\n")
-                f.write(f"Value: {exc_value}\n")
-                f.write("Traceback:\n")
-                _traceback.print_tb(exc_tb, file=f)
-                f.write("\n")
-                _traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
-            print(f"[CRASH] 崩溃日志已写入: {path}")
-        except Exception:
-            pass
-        # 调用原始 excepthook（显示默认错误对话框）
-        sys.__excepthook__(exc_type, exc_value, exc_tb)
-
-    sys.excepthook = _crash_handler
+    install_crash_hook(os.path.dirname(os.path.abspath(__file__)))
 
     # 启动时自动检查并安装缺失依赖
     ensure_core_dependencies()
@@ -1588,52 +1599,17 @@ def main():
 
     # FileDialog 兼容常量（不同 pywebview 版本 API 不一致）
     global FD_OPEN, FD_SAVE
-    FD_OPEN = getattr(getattr(webview, 'FileDialog', None), 'OPEN',
-              getattr(webview, 'OPEN_DIALOG', 10))
-    FD_SAVE = getattr(getattr(webview, 'FileDialog', None), 'SAVE',
-              getattr(webview, 'SAVE_DIALOG', 30))
-    # 设置高 DPI 感知 (Windows 10+)
-    try:
-        from ctypes import windll
-        windll.shcore.SetProcessDpiAwareness(1)
-    except:
-        pass
+    FD_OPEN, FD_SAVE = resolve_file_dialog_constants(webview)
+    enable_windows_dpi_awareness()
 
-    app = UnifiedLauncher()
-    api = WebLauncherAPI(app)
-    html_path = app.resolve_web_ui_path(app.get_base_dir())
-    window = webview.create_window(
-        "统一启动器",
-        html_path,
-        js_api=api,
-        width=1480,
-        height=940,
-        min_size=(1180, 760),
-        confirm_close=False,
+    bootstrap = WebApplicationBootstrap(
+        launcher_factory=UnifiedLauncher,
+        api_factory=WebLauncherAPI,
+        webview_module=webview,
     )
-    app.attach_web_window(window)
     dev_mode = '--dev' in sys.argv
-    # 非开发者模式启动后隐藏控制台
-    if not dev_mode and os.name == 'nt':
-        try:
-            import ctypes
-            ctypes.windll.user32.ShowWindow(
-                ctypes.windll.kernel32.GetConsoleWindow(), 0
-            )
-        except Exception:
-            pass
-    webview.start(debug=dev_mode, http_server=True)
+    return bootstrap.run(debug=dev_mode)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        import traceback as _tb
-        _crash_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-        os.makedirs(_crash_dir, exist_ok=True)
-        _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
-        with open(os.path.join(_crash_dir, f"crash_{_ts}.log"), 'w', encoding='utf-8') as _f:
-            _tb.print_exc(file=_f)
-        print(f"[FATAL] 启动崩溃，日志已写入 logs/crash_{_ts}.log")
-        raise
+    main()

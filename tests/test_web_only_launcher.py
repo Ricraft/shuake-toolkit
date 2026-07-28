@@ -241,6 +241,9 @@ class WebOnlyLauncherTests(unittest.TestCase):
         events = []
         launcher._preference_enabled = lambda *_args, **_kwargs: False
         launcher.log_system = events.append
+        launcher._cancel_scheduled_callbacks = lambda: events.append(
+            "cancel_timers"
+        )
         launcher.stop_all = lambda: events.append("stop_all")
         launcher.stop_question_bank = lambda: events.append("stop_question_bank")
         launcher._close_main_window = lambda: events.append("close")
@@ -249,6 +252,7 @@ class WebOnlyLauncherTests(unittest.TestCase):
 
         self.assertNotIn("stop_all", events)
         self.assertNotIn("close", events)
+        self.assertNotIn("cancel_timers", events)
         self.assertTrue(any("取消未确认" in entry for entry in events))
 
     def test_confirmed_exit_stops_active_course_fetch_without_core_task(self):
@@ -260,6 +264,9 @@ class WebOnlyLauncherTests(unittest.TestCase):
             stop_active_fetch=lambda: events.append("stop_course_fetch")
         )
         launcher._preference_enabled = lambda *_args, **_kwargs: False
+        launcher._cancel_scheduled_callbacks = lambda: events.append(
+            "cancel_timers"
+        )
         launcher.stop_question_bank = lambda: events.append("stop_question_bank")
         launcher._close_main_window = lambda: events.append("close")
 
@@ -267,7 +274,12 @@ class WebOnlyLauncherTests(unittest.TestCase):
 
         self.assertEqual(
             events,
-            ["stop_course_fetch", "stop_question_bank", "close"],
+            [
+                "cancel_timers",
+                "stop_course_fetch",
+                "stop_question_bank",
+                "close",
+            ],
         )
 
     def test_stop_all_also_stops_active_course_fetch(self):
