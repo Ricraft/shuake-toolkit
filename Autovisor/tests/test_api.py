@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 # Ensure the standalone Autovisor modules are importable during collection,
 # then restore sys.path so this test module does not shadow the Autovisor namespace.
@@ -280,6 +281,11 @@ class TestLogsEndpoint(unittest.TestCase):
         self.client = TestClient(app)
         dashboard_logger.logs.clear()
 
+    def _use_task_log(self, log_path: Path):
+        original_supervisor = api_module.task_supervisor
+        api_module.task_supervisor = SimpleNamespace(log_path=log_path)
+        self.addCleanup(setattr, api_module, "task_supervisor", original_supervisor)
+
     def test_get_logs_empty(self):
         response = self.client.get("/api/logs")
         self.assertEqual(response.status_code, 200)
@@ -307,6 +313,43 @@ class TestLogsEndpoint(unittest.TestCase):
         response = self.client.get("/api/logs?limit=10")
         data = response.json()
         self.assertEqual(len(data["data"]["logs"]), 10)
+
+    def test_get_logs_includes_task_output_tail(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_log = Path(temp_dir) / "DashboardTask.log"
+            task_log.write_text(
+                "dashboard child started\nTraceback: child failed\n",
+                encoding="utf-8",
+            )
+            self._use_task_log(task_log)
+
+            response = self.client.get("/api/logs?limit=10")
+
+        data = response.json()
+        self.assertTrue(data["success"])
+        logs = data["data"]["logs"]
+        self.assertTrue(any(log["message"] == "dashboard child started" for log in logs))
+        error_logs = [log for log in logs if "Traceback" in log["message"]]
+        self.assertEqual(error_logs[0]["level"], "ERROR")
+        self.assertEqual(error_logs[0]["source"], "task")
+
+    def test_get_logs_level_filter_applies_to_task_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_log = Path(temp_dir) / "DashboardTask.log"
+            task_log.write_text(
+                "normal child line\nERROR child line\n",
+                encoding="utf-8",
+            )
+            self._use_task_log(task_log)
+
+            response = self.client.get("/api/logs?level=ERROR")
+
+        data = response.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(
+            [log["message"] for log in data["data"]["logs"]],
+            ["ERROR child line"],
+        )
 
 
 class TestCoursesEndpoint(unittest.TestCase):

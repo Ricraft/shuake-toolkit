@@ -151,6 +151,69 @@ class DashboardLogger:
 
 dashboard_logger = DashboardLogger()
 
+
+def _classify_task_log_line(message: str) -> str:
+    upper = message.upper()
+    if (
+        "ERROR" in upper
+        or "TRACEBACK" in upper
+        or "EXCEPTION" in upper
+        or "错误" in message
+        or "失败" in message
+    ):
+        return "ERROR"
+    if "WARN" in upper or "WARNING" in upper or "警告" in message:
+        return "WARN"
+    return "TASK"
+
+
+def _read_task_log_entries(log_path: Path, max_lines: int) -> list[dict]:
+    if max_lines <= 0 or not log_path.is_file():
+        return []
+    max_bytes = 256 * 1024
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            start = max(0, size - max_bytes)
+            handle.seek(start)
+            chunk = handle.read()
+        text = chunk.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        if start and lines:
+            lines = lines[1:]
+        lines = [line for line in lines if line.strip()][-max_lines:]
+        timestamp = datetime.fromtimestamp(log_path.stat().st_mtime).isoformat()
+    except OSError as exc:
+        dashboard_logger.warn(f"Read task log warning: {exc}")
+        return []
+
+    return [
+        {
+            "level": _classify_task_log_line(line),
+            "message": line,
+            "timestamp": timestamp,
+            "shift": False,
+            "source": "task",
+        }
+        for line in lines
+    ]
+
+
+def _get_dashboard_logs(limit: int, level: Optional[str] = None) -> tuple[list[dict], int]:
+    bounded_limit = max(0, min(limit, 1000))
+    task_log_path = getattr(task_supervisor, "log_path", None)
+    task_scan_limit = min(max(bounded_limit * 4, 200), 1000) if bounded_limit else 0
+    logs = list(dashboard_logger.logs)
+    if task_log_path:
+        logs.extend(_read_task_log_entries(Path(task_log_path), task_scan_limit))
+    if level:
+        target = level.upper()
+        logs = [log for log in logs if log.get("level") == target]
+    logs.sort(key=lambda log: log.get("timestamp") or "")
+    total = len(logs)
+    return logs[-bounded_limit:] if bounded_limit else [], total
+
 # ============================================================
 # Config Manager
 # ============================================================
@@ -346,11 +409,8 @@ async def update_config(payload: ConfigUpdate):
 
 @app.get("/api/logs", response_model=ApiResponse)
 async def get_logs(limit: int = 100, level: Optional[str] = None):
-    logs = dashboard_logger.logs
-    if level:
-        logs = [log for log in logs if log["level"] == level.upper()]
-    logs = logs[-limit:]
-    return ApiResponse(data={"logs": logs, "total": len(dashboard_logger.logs)})
+    logs, total = _get_dashboard_logs(limit, level)
+    return ApiResponse(data={"logs": logs, "total": total})
 
 @app.get("/api/stats", response_model=ApiResponse)
 async def get_stats():
