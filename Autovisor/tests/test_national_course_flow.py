@@ -11,6 +11,7 @@ _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules.national_course_flow import is_course_list_url, run_national_course
+from modules.course_session import CourseAuthenticationError
 from modules.national_test_flow import NationalTestOutcome
 
 sys.path.remove(_AUTOVISOR_ROOT)
@@ -77,6 +78,23 @@ class _Page:
         if "paused" in script:
             return False
         return None
+
+    def locator(self, _selector):
+        return _LoginLocator(self)
+
+
+class _LoginLocator:
+    def __init__(self, page):
+        self.page = page
+
+    async def count(self):
+        return 1 if "login.zhihuishu.com" in self.page.url else 0
+
+    async def is_visible(self):
+        return True
+
+    async def all(self):
+        return [self]
 
 
 async def _close_popup(*_args):
@@ -270,6 +288,80 @@ def test_false_video_result_returns_to_list_then_fails_course():
 
     assert page.go_back_calls == 1
     assert is_course_list_url(page.url, _config().course_urls[0])
+
+
+def test_video_redirect_to_login_is_a_fatal_authentication_error():
+    card = _video_card()
+
+    async def scanner(_page):
+        return [card], _summary(1, 1), False
+
+    page = _Page(_config().course_urls[0])
+
+    async def clicker(*_args):
+        page.url = "https://login.zhihuishu.com/"
+        return True
+
+    with pytest.raises(CourseAuthenticationError, match="登录状态失效"):
+        asyncio.run(
+            run_national_course(
+                page,
+                _config(),
+                _Logger(),
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+                card_clicker=clicker,
+                title_reader=lambda *_args: None,
+                clock=lambda: 10,
+            )
+        )
+
+
+def test_return_failure_is_not_reported_as_completed_video():
+    card = _video_card()
+
+    async def scanner(_page):
+        return [card], _summary(1, 1), False
+
+    page = _Page(_config().course_urls[0])
+
+    async def clicker(*_args):
+        page.url = "https://wisdom-mooc.zhihuishu.com/video/index"
+        return True
+
+    async def failed_goto(url, wait_until):
+        page.goto_calls.append((url, wait_until))
+        raise RuntimeError("navigation offline")
+
+    async def wrong_go_back(wait_until):
+        page.go_back_calls += 1
+        page.url = "https://example.com/not-course-list"
+
+    page.goto = failed_goto
+    page.go_back = wrong_go_back
+    logger = _Logger()
+
+    with pytest.raises(RuntimeError, match="返回课程列表失败"):
+        asyncio.run(
+            run_national_course(
+                page,
+                _config(),
+                logger,
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+                card_clicker=clicker,
+                title_reader=lambda *_args: None,
+                clock=lambda: 10,
+            )
+        )
+
+    assert not any("视频播放完成，已返回课程列表" in item for item in logger.infos)
 
 
 def test_confirmed_test_submission_is_not_repeated_on_stale_scan():

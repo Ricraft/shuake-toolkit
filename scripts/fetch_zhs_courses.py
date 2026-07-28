@@ -39,6 +39,7 @@ EXIT_COURSE_RESPONSE = 5
 EXIT_SAVE = 6
 COURSE_RESPONSE_TIMEOUT_SECONDS = 20
 COURSE_RESPONSE_SETTLE_SECONDS = 0.75
+NOTICE_RESPONSE_GRACE_SECONDS = 2
 
 
 class _ConsoleLogger:
@@ -119,6 +120,20 @@ def is_course_api_candidate(url):
     )
 
 
+def is_notice_api_candidate(url):
+    """Recognize only the official Zhihuishu important-notice endpoint."""
+    try:
+        parsed = urlsplit(str(url or ""))
+    except ValueError:
+        return False
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    path = parsed.path.lower()
+    return (
+        hostname == "onlineservice-api.zhihuishu.com"
+        and "importantnotice" in path
+    )
+
+
 def normalize_share_course(row):
     course_name = row.get("courseName", "未知课程")
     lesson_name = row.get("lessonName")
@@ -177,6 +192,20 @@ async def wait_for_course_response(
         except asyncio.TimeoutError:
             break
     return True
+
+
+async def wait_for_optional_notice_response(
+    event,
+    timeout=NOTICE_RESPONSE_GRACE_SECONDS,
+):
+    """Give the notice endpoint a short grace period without blocking forever."""
+    if event.is_set():
+        return True
+    try:
+        await asyncio.wait_for(event.wait(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        return False
 
 
 def _browser_candidates(driver, local_app_data=""):
@@ -438,6 +467,23 @@ def _safe_print(text):
 
 def save_course_data(file_path, username, courses, notices):
     data = load_existing_course_data(file_path)
+    if not isinstance(data, dict):
+        print("已有课程文件顶层结构无效，将重建账号映射", flush=True)
+        data = {}
+
+    existing_account = data.get(username)
+    existing_account = existing_account if isinstance(existing_account, dict) else {}
+    if notices is None:
+        preserved_notices = existing_account.get("notices")
+        notices_to_save = (
+            preserved_notices if isinstance(preserved_notices, list) else []
+        )
+        print(
+            f"未获取到可信通知响应，保留已有见面课通知 {len(notices_to_save)} 条",
+            flush=True,
+        )
+    else:
+        notices_to_save = list(notices)
 
     data[username] = {
         # CourseAPIService uses the file content as the refresh fingerprint.
@@ -445,7 +491,7 @@ def save_course_data(file_path, username, courses, notices):
         # second (especially repeated empty results) are still distinguishable.
         "update_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
         "courses": courses,
-        "notices": notices
+        "notices": notices_to_save,
     }
 
     try:
@@ -491,6 +537,7 @@ async def main():
 
         lessons_by_key = {}
         courses_response_event = asyncio.Event()
+        notice_response_event = asyncio.Event()
         notices_data = None
         notices_captured = False
 
@@ -526,7 +573,7 @@ async def main():
                     if known_course_endpoint:
                         print(f"解析课程响应失败: {e}", flush=True)
 
-            if 'getImportantNoticeList' in url and not notices_captured:
+            if is_notice_api_candidate(url) and not notices_captured:
                 try:
                     rows = extract_notice_rows(await response.json())
                     if rows is None:
@@ -537,6 +584,7 @@ async def main():
                         return
                     notices_data = rows
                     notices_captured = True
+                    notice_response_event.set()
                     print(f"捕获到待办任务通知: {len(rows)} 条", flush=True)
                     for notice in rows:
                         task_name = notice.get('taskName', '无标题')
@@ -589,6 +637,12 @@ async def main():
             await browser.close()
             return EXIT_COURSE_RESPONSE
 
+        if not await wait_for_optional_notice_response(notice_response_event):
+            print(
+                "未在等待窗口内捕获到可信通知响应，将保留已有见面课数据",
+                flush=True,
+            )
+
         all_lessons = list(lessons_by_key.values())
 
         print(f"\n{'='*60}", flush=True)
@@ -608,7 +662,7 @@ async def main():
                 print(f"   截止时间: {format_time(lesson['courseEndTime'])}", flush=True)
                 print("-" * 60, flush=True)
 
-        notices_list = []
+        notices_list = None
         if notices_data is not None:
             notices_list = notices_data
             print(f"\n{'='*60}", flush=True)

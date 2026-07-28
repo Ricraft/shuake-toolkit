@@ -320,6 +320,31 @@ print('COURSE_CATALOG_IMPORT_OK')
             )
         )
 
+    def test_zhs_notice_api_discovery_is_host_and_path_scoped(self):
+        self.assertTrue(
+            fetch_zhs_courses.is_notice_api_candidate(
+                "https://onlineservice-api.zhihuishu.com/"
+                "gateway/getImportantNoticeList"
+            )
+        )
+        self.assertTrue(
+            fetch_zhs_courses.is_notice_api_candidate(
+                "https://onlineservice-api.zhihuishu.com/"
+                "gateway/v2/queryImportantNotice"
+            )
+        )
+        self.assertFalse(
+            fetch_zhs_courses.is_notice_api_candidate(
+                "https://onlineservice-api.zhihuishu.com.example.com/"
+                "gateway/getImportantNoticeList"
+            )
+        )
+        self.assertFalse(
+            fetch_zhs_courses.is_notice_api_candidate(
+                "https://onlineservice-api.zhihuishu.com/gateway/user/profile"
+            )
+        )
+
     def test_zhs_fetch_merges_repeated_course_responses_without_duplicates(self):
         courses = {}
         fetch_zhs_courses.merge_share_courses(
@@ -396,6 +421,26 @@ print('COURSE_CATALOG_IMPORT_OK')
         self.assertEqual(event.wait_count, 3)
         self.assertEqual(event.clear_count, 2)
 
+    def test_zhs_fetch_notice_wait_is_bounded_and_accepts_ready_event(self):
+        ready = asyncio.Event()
+        ready.set()
+        self.assertTrue(
+            asyncio.run(
+                fetch_zhs_courses.wait_for_optional_notice_response(
+                    ready,
+                    timeout=0.01,
+                )
+            )
+        )
+        self.assertFalse(
+            asyncio.run(
+                fetch_zhs_courses.wait_for_optional_notice_response(
+                    asyncio.Event(),
+                    timeout=0.001,
+                )
+            )
+        )
+
     def test_zhs_fetch_save_failure_is_reported_to_the_caller(self):
         with patch.object(
             fetch_zhs_courses,
@@ -435,6 +480,70 @@ print('COURSE_CATALOG_IMPORT_OK')
             self.assertNotEqual(first_content, second_content)
             self.assertEqual(first_update_time, "2026-07-22 10:00:00.000001")
             self.assertEqual(second_update_time, "2026-07-22 10:00:00.000002")
+
+    def test_zhs_fetch_preserves_notices_without_a_trusted_notice_response(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "zhs_course.json"
+            old_notice = {
+                "taskName": "旧见面课",
+                "liveCourseId": "live-1",
+                "courseId": "course-1",
+                "recruitId": "recruit-1",
+            }
+            output.write_text(
+                json.dumps(
+                    {
+                        "alice": {
+                            "update_time": "old",
+                            "courses": [{"courseName": "旧课程"}],
+                            "notices": [old_notice],
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                fetch_zhs_courses.save_course_data(
+                    output,
+                    "alice",
+                    [{"courseName": "新课程"}],
+                    None,
+                )
+            )
+            preserved = json.loads(output.read_text(encoding="utf-8"))["alice"]
+            self.assertEqual(preserved["courses"], [{"courseName": "新课程"}])
+            self.assertEqual(preserved["notices"], [old_notice])
+
+            self.assertTrue(
+                fetch_zhs_courses.save_course_data(
+                    output,
+                    "alice",
+                    [{"courseName": "新课程"}],
+                    [],
+                )
+            )
+            cleared = json.loads(output.read_text(encoding="utf-8"))["alice"]
+            self.assertEqual(cleared["notices"], [])
+
+    def test_zhs_fetch_rebuilds_invalid_top_level_before_saving(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "zhs_course.json"
+            output.write_text("[]", encoding="utf-8")
+
+            self.assertTrue(
+                fetch_zhs_courses.save_course_data(
+                    output,
+                    "alice",
+                    [],
+                    None,
+                )
+            )
+
+            saved = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(saved["alice"]["courses"], [])
+            self.assertEqual(saved["alice"]["notices"], [])
 
     def test_zhs_fetch_script_reuses_shared_portal_navigation_contract(self):
         source = Path(fetch_zhs_courses.__file__).read_text(encoding="utf-8")

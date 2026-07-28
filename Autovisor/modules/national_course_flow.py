@@ -6,6 +6,10 @@ from __future__ import annotations
 import time
 from urllib.parse import urlsplit
 
+from playwright._impl._errors import TargetClosedError
+
+from modules.course_portal import is_course_homepage_url, is_login_page
+from modules.course_session import CourseAuthenticationError
 from modules.lesson_navigation import (
     LessonNavigationState,
     SelectionReason,
@@ -34,17 +38,32 @@ async def return_to_course_list(page, course_url, logger) -> None:
     try:
         await page.go_back(wait_until="domcontentloaded")
         await page.wait_for_timeout(1000)
+        if await is_login_page(page):
+            raise CourseAuthenticationError("返回课程列表时登录状态失效")
         if not is_course_list_url(page.url, course_url):
             logger.info("go_back未回到课程列表，改用goto导航", shift=True)
             await page.goto(course_url, wait_until="domcontentloaded")
             await page.wait_for_timeout(1500)
+        if await is_login_page(page):
+            raise CourseAuthenticationError("返回课程列表时登录状态失效")
+        if not is_course_list_url(page.url, course_url):
+            raise RuntimeError(f"返回后地址仍不是课程列表: {page.url[:100]}")
+    except (CourseAuthenticationError, TargetClosedError):
+        raise
     except Exception as exc:
         logger.write_log(f"go_back失败，改用goto导航回课程列表: {exc}\n")
         try:
             await page.goto(course_url, wait_until="domcontentloaded")
             await page.wait_for_timeout(1500)
+            if await is_login_page(page):
+                raise CourseAuthenticationError("恢复课程列表时登录状态失效")
+            if not is_course_list_url(page.url, course_url):
+                raise RuntimeError(f"恢复后地址仍不是课程列表: {page.url[:100]}")
+        except (CourseAuthenticationError, TargetClosedError):
+            raise
         except Exception as goto_error:
             logger.warn(f"返回课程列表失败: {goto_error}", shift=True)
+            raise RuntimeError(f"返回课程列表失败: {goto_error}") from goto_error
 
 
 async def run_national_course(
@@ -165,6 +184,8 @@ async def run_national_course(
                 logger.info("点击卡片前检测到页面不在课程列表，重新导航", shift=True)
                 await page.goto(course_url, wait_until="domcontentloaded")
                 await page.wait_for_timeout(1500)
+                if await is_login_page(page):
+                    raise CourseAuthenticationError("恢复课程列表时登录状态失效")
                 all_cards, _summary, is_in_iframe = await scanner(page)
                 lesson = find_course_card(pending_course_cards(all_cards), lesson_key)
                 if lesson is None:
@@ -175,6 +196,10 @@ async def run_national_course(
                     continue
                 card_id = lesson["card_id"]
                 title = lesson["title"]
+        except (CourseAuthenticationError, TargetClosedError):
+            if test_session:
+                await test_session.cancel()
+            raise
         except Exception as exc:
             logger.warn(f"恢复课程列表失败: {exc}", shift=True)
             if test_session:
@@ -214,6 +239,8 @@ async def run_national_course(
 
         await page.wait_for_timeout(1000)
         await close_popup(page, logger)
+        if await is_login_page(page) or is_course_homepage_url(page.url):
+            raise CourseAuthenticationError("打开视频后登录状态失效")
         try:
             current_title = await title_reader(page, False, True) or title
         except Exception:
@@ -223,9 +250,8 @@ async def run_national_course(
         try:
             await page.wait_for_selector("video", state="attached", timeout=15000)
             await page.wait_for_timeout(500)
-            if "www.zhihuishu.com" in page.url:
-                logger.error("检测到被重定向到首页，session 可能已过期，退出", shift=True)
-                return
+            if await is_login_page(page) or is_course_homepage_url(page.url):
+                raise CourseAuthenticationError("等待视频时登录状态失效")
             await page.evaluate(config.remove_pause)
             await page.evaluate(
                 APPLY_VIDEO_SETTINGS_JS,
@@ -254,7 +280,11 @@ async def run_national_course(
                     logger.write_log("视频已开始播放\n")
                 else:
                     logger.warn(f"视频播放失败: {play_result['error']}")
+        except (CourseAuthenticationError, TargetClosedError):
+            raise
         except Exception as exc:
+            if await is_login_page(page) or is_course_homepage_url(page.url):
+                raise CourseAuthenticationError("等待视频时登录状态失效") from exc
             logger.warn(
                 f"未及时检测到视频元素,进入宽松等待模式: {str(exc)[:80]}",
                 shift=True,

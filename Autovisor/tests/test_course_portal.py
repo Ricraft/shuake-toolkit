@@ -17,8 +17,10 @@ from modules.course_portal import (
     PORTAL_READY_SELECTOR,
     PORTAL_RENDER_TIMEOUT_MS,
     is_course_portal_url,
+    is_course_homepage_url,
     is_login_page,
     is_login_url,
+    is_zhihuishu_host,
     navigate_to_my_course,
 )
 from modules import practice_mode
@@ -109,6 +111,14 @@ def test_course_portal_url_checks_are_host_scoped():
     assert not is_login_url("https://example.com/?next=passport.zhihuishu.com/login")
     assert is_course_portal_url("https://onlineweb.zhihuishu.com/onlinestuh5")
     assert not is_course_portal_url("https://onlineweb.zhihuishu.com.example.com/")
+    assert is_zhihuishu_host("https://onlineweb.zhihuishu.com/")
+    assert is_zhihuishu_host("https://zhihuishu.com/")
+    assert not is_zhihuishu_host("https://evilzhihuishu.com/")
+    assert not is_zhihuishu_host("https://zhihuishu.com.example.com/")
+    assert is_course_homepage_url("https://www.zhihuishu.com/")
+    assert not is_course_homepage_url(
+        "https://example.com/?next=https://www.zhihuishu.com/"
+    )
 
 
 def test_rendered_login_panel_is_detected_before_url_redirect_finishes():

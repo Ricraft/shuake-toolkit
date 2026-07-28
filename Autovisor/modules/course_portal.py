@@ -44,6 +44,15 @@ def is_course_portal_url(url: str) -> bool:
     return (urlsplit(url).hostname or "").lower().rstrip(".") == "onlineweb.zhihuishu.com"
 
 
+def is_zhihuishu_host(url: str) -> bool:
+    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    return hostname == "zhihuishu.com" or hostname.endswith(".zhihuishu.com")
+
+
+def is_course_homepage_url(url: str) -> bool:
+    return (urlsplit(url).hostname or "").lower().rstrip(".") == "www.zhihuishu.com"
+
+
 async def is_login_page(page) -> bool:
     """Recognize login state from either the current URL or rendered login DOM."""
     if is_login_url(getattr(page, "url", "")):
@@ -100,7 +109,7 @@ async def navigate_to_my_course(page, logger) -> bool:
         logger.info("当前子页面未显示课程列表，正在返回课程门户首页...")
         return await _open_portal_directly(page, logger)
 
-    if (urlsplit(current_url).hostname or "").lower().endswith("zhihuishu.com"):
+    if is_zhihuishu_host(current_url):
         logger.info("正在从智慧树页面进入我的学堂...")
     else:
         logger.info("正在导航到智慧树首页...")
