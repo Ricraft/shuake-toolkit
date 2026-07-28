@@ -10,6 +10,7 @@
 ├─ src/                       # 启动器后端、题库服务、更新与通用基础设施
 │  ├─ application_bootstrap.py # 崩溃日志、WebView 创建和启动失败清理
 │  ├─ launcher_api.py         # pywebview 暴露给前端的最小 API
+│  ├─ web_settings_service.py # Web 三组配置校验、保存与跨文件回滚
 │  ├─ dependencies.py         # 唯一的启动器依赖定义与检查入口
 │  ├─ autovisor_dependency_manager.py # Autovisor 依赖、浏览器与运行配置准备
 │  ├─ question_bank_controller.py # 题库设置与本地服务生命周期

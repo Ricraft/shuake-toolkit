@@ -902,6 +902,25 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("安装依赖中", core_status)
         self.assertIn("取消启动", core_status)
 
+    def test_frontend_keeps_save_success_when_state_refresh_is_unavailable(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        save_source = frontend.split(
+            "async function saveSettings", 1
+        )[1].split("async function cancelShutdown", 1)[0]
+
+        self.assertIn("if (result?.ok)", save_source)
+        self.assertIn("if (result.state)", save_source)
+        self.assertNotIn(
+            "if (result?.ok && result.state)",
+            save_source,
+        )
+        self.assertIn(
+            "showToast(result?.message || '配置已保存', 'success')",
+            save_source,
+        )
+
     def test_start_all_reports_partial_failure_to_web(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.question_bank = SimpleNamespace(running=True, available=True)

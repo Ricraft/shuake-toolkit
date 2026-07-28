@@ -800,8 +800,13 @@
             if (msg) { showToast(msg, 'error'); return { ok: false, message: msg }; }
             try {
                 const result = await apiCall('save_settings', { yatori: gatherYatoriSettings(), autovisor: gatherAutovisorSettings(), questionbank: gatherQbSettings() });
-                if (result?.ok && result.state) { renderSettings(result.state.settings); applyRuntimeState(unwrapState(result)); if (showSuccess) showToast('配置已保存', 'success'); }
-                else { showToast(result?.message || '保存失败', 'error'); }
+                if (result?.ok) {
+                    if (result.state) {
+                        renderSettings(result.state.settings);
+                        applyRuntimeState(unwrapState(result));
+                    }
+                    if (showSuccess) showToast(result?.message || '配置已保存', 'success');
+                } else { showToast(result?.message || '保存失败', 'error'); }
                 return result;
             } catch (error) { if (!error?.silent) showToast(error.message || '保存失败', 'error'); return { ok: false, message: error.message || '保存失败', silent: !!error?.silent }; }
         }

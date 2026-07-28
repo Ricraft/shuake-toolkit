@@ -13,10 +13,6 @@ import glob
 import re
 from datetime import datetime
 
-from src.atomic_io import (
-    capture_file_state,
-    restore_file_state,
-)
 from src.ai_service import AIConnectivityService
 from src.application_bootstrap import (
     WebApplicationBootstrap,
@@ -45,6 +41,7 @@ from src.web_action_service import (
     AUTOVISOR_UPDATE_DISABLED_MESSAGE,
     WebActionService,
 )
+from src.web_settings_service import WebSettingsService
 from src.web_window_controller import WebWindowController
 
 try:
@@ -762,6 +759,13 @@ class UnifiedLauncher:
             self.web_preferences = service.values
         return service
 
+    def _get_web_settings_service(self):
+        service = getattr(self, '_web_settings_service', None)
+        if service is None:
+            service = WebSettingsService(self)
+            self._web_settings_service = service
+        return service
+
     def _load_web_preferences(self):
         return self._get_preferences_service().get()
 
@@ -971,109 +975,7 @@ class UnifiedLauncher:
         }
 
     def save_settings_from_web(self, payload):
-        yatori_data = payload.get('yatori') if isinstance(payload, dict) else None
-        autovisor_data = payload.get('autovisor') if isinstance(payload, dict) else None
-        qb_data = payload.get('questionbank') if isinstance(payload, dict) else None
-        if not isinstance(yatori_data, dict):
-            yatori_data = self._load_yatori_config_data()
-        if not isinstance(autovisor_data, dict):
-            autovisor_data = self._load_autovisor_config_data()
-        if isinstance(qb_data, dict):
-            try:
-                requested_qb_port = int(qb_data.get('port', 8083))
-            except (TypeError, ValueError):
-                return {'ok': False, 'message': '题库端口必须是整数', 'state': self.get_web_initial_state()}
-            if not 1024 <= requested_qb_port <= 65535:
-                return {
-                    'ok': False,
-                    'message': '题库端口必须在 1024 到 65535 之间',
-                    'state': self.get_web_initial_state(),
-                }
-        accounts = autovisor_data.get('accounts') or [self._default_autovisor_account(1)]
-        multi_mode = bool(autovisor_data.get('multi_mode'))
-        if len(accounts) > 1:
-            multi_mode = True
-        if not multi_mode:
-            accounts = accounts[:1]
-        for account in accounts:
-            account['limit_speed'] = self._normalize_autovisor_speed(account.get('limit_speed', '1.0'), '1.0')
-        validation_error = self._validate_autovisor_accounts(accounts)
-        if validation_error:
-            return {'ok': False, 'message': validation_error, 'state': self.get_web_initial_state()}
-        autovisor_data = {
-            'multi_mode': multi_mode,
-            'browser_driver': autovisor_data.get('browser_driver', 'Chrome') or 'Chrome',
-            'browser_path': autovisor_data.get('browser_path', '').strip(),
-            'accounts': accounts,
-        }
-
-        merged = self._load_yatori_config_data()
-        merged.setdefault('setting', {})
-        incoming_setting = yatori_data.get('setting', {})
-        merged['setting'].setdefault('basicSetting', {}).update(incoming_setting.get('basicSetting', {}))
-        merged['setting'].setdefault('emailInform', {}).update(incoming_setting.get('emailInform', {}))
-        merged['setting'].setdefault('aiSetting', {}).update(incoming_setting.get('aiSetting', {}))
-        merged['setting'].setdefault('apiQueSetting', {}).update(incoming_setting.get('apiQueSetting', {}))
-        # Merge users: preserve fields not exposed in the Web UI
-        existing_users = merged.get('users') if isinstance(merged.get('users'), list) else []
-        incoming_users = yatori_data.get('users') or [self._default_yatori_user(1)]
-        merged_users = []
-        for i, incoming_user in enumerate(incoming_users):
-            existing = existing_users[i] if i < len(existing_users) and isinstance(existing_users[i], dict) else {}
-            merged_user = dict(existing)
-            merged_user.update({k: v for k, v in incoming_user.items() if k != 'coursesCustom'})
-            existing_cc = existing.get('coursesCustom') if isinstance(existing.get('coursesCustom'), dict) else {}
-            merged_cc = dict(existing_cc)
-            merged_cc.update(incoming_user.get('coursesCustom', {}))
-            merged_user['coursesCustom'] = merged_cc
-            merged_users.append(merged_user)
-        merged['users'] = merged_users or [self._default_yatori_user(1)]
-        config_paths = [
-            self._get_yatori_config_path(),
-            self._get_autovisor_config_path(),
-        ]
-        if isinstance(qb_data, dict):
-            config_paths.append(self.question_bank.config_path)
-        try:
-            file_snapshot = capture_file_state(config_paths)
-        except OSError as exc:
-            return {
-                'ok': False,
-                'message': f'无法读取现有配置，已取消保存: {exc}',
-                'state': self.get_web_initial_state(),
-            }
-
-        previous_multi_mode = self._get_autovisor_multi_mode()
-        try:
-            self._save_yatori_config_data(merged)
-            self._save_autovisor_config_data(autovisor_data)
-            if isinstance(qb_data, dict):
-                qb_result = self.save_qb_settings_from_web(qb_data)
-                if not qb_result.get('ok'):
-                    raise RuntimeError(
-                        qb_result.get('message', '题库设置保存失败')
-                    )
-            self._set_autovisor_multi_mode(autovisor_data.get('multi_mode'))
-        except Exception as exc:
-            self._set_autovisor_multi_mode(previous_multi_mode)
-            restore_error = None
-            try:
-                restore_file_state(file_snapshot)
-            except OSError as rollback_exc:
-                restore_error = str(rollback_exc)
-            message = str(exc) or '配置保存失败'
-            if restore_error:
-                message = f'{message}；旧配置恢复失败: {restore_error}'
-            else:
-                message = f'{message}；未保留任何部分改动'
-            self.log_system(f"启动器配置保存失败: {message}")
-            return {
-                'ok': False,
-                'message': message,
-                'state': self.get_web_initial_state(),
-            }
-        self.log_system("启动器配置已保存")
-        return {'ok': True, 'state': self.get_web_initial_state()}
+        return self._get_web_settings_service().save(payload)
 
     def detect_browser_path_for_web(self, browser_name='Chrome'):
         normalized = self._normalize_browser_name(browser_name or 'Chrome')
