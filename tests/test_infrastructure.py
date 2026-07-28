@@ -436,6 +436,186 @@ class InfrastructureTests(unittest.TestCase):
             self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
             self.assertFalse((Path(manager.yatori_path) / "new-core.txt").exists())
 
+    def test_yatori_install_stages_nested_release_and_preserves_live_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            yatori = Path(manager.yatori_path)
+            (yatori / "config.yaml").write_text("account: current\n", encoding="utf-8")
+            (yatori / "old-core.txt").write_text("old", encoding="utf-8")
+            Path(temp_dir, "config.yaml.bak").write_text(
+                "account: stale\n",
+                encoding="utf-8",
+            )
+
+            source_archive = Path(temp_dir, "publisher.zip")
+            with zipfile.ZipFile(source_archive, "w") as archive:
+                archive.writestr(
+                    "bundle/command/yatori-go-console.exe",
+                    b"new executable",
+                )
+                archive.writestr("bundle/command/assets/runtime.txt", b"asset")
+            payload = source_archive.read_bytes()
+            release = {
+                "version": "v2.6.2-beta.11",
+                "download_url": "https://example.test/yatori.zip",
+                "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+                "asset_size": len(payload),
+            }
+
+            def fake_download(_url, target_path, _progress=None):
+                Path(target_path).write_bytes(payload)
+                return True
+
+            manager.download_file = fake_download
+
+            self.assertTrue(manager.install_yatori(release))
+            self.assertEqual(
+                (yatori / "config.yaml").read_text(encoding="utf-8"),
+                "account: current\n",
+            )
+            self.assertEqual(
+                (yatori / "yatori-go-console.exe").read_bytes(),
+                b"new executable",
+            )
+            self.assertTrue((yatori / "assets" / "runtime.txt").is_file())
+            self.assertFalse((yatori / "old-core.txt").exists())
+            self.assertEqual(manager.local_versions["yatori"], "v2.6.2-beta.11")
+            self.assertEqual(
+                list(Path(temp_dir).glob(".yatori-update-*")),
+                [],
+            )
+
+    def test_yatori_install_does_not_restore_stale_global_config_backup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            Path(temp_dir, "config.yaml.bak").write_text(
+                "account: stale\n",
+                encoding="utf-8",
+            )
+            source_archive = Path(temp_dir, "publisher.zip")
+            with zipfile.ZipFile(source_archive, "w") as archive:
+                archive.writestr("yatori-go-console.exe", b"new executable")
+            payload = source_archive.read_bytes()
+            manager.download_file = lambda _url, target, _progress=None: (
+                Path(target).write_bytes(payload) >= 0
+            )
+
+            installed = manager.install_yatori(
+                {
+                    "version": "v2.6.2-beta.11",
+                    "download_url": "https://example.test/yatori.zip",
+                    "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+                    "asset_size": len(payload),
+                }
+            )
+
+            self.assertTrue(installed)
+            self.assertFalse(Path(manager.yatori_path, "config.yaml").exists())
+
+    def test_invalid_yatori_release_never_removes_existing_core(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            marker = Path(manager.yatori_path, "existing-core.txt")
+            marker.write_text("keep", encoding="utf-8")
+            source_archive = Path(temp_dir, "publisher.zip")
+            with zipfile.ZipFile(source_archive, "w") as archive:
+                archive.writestr("README.txt", "missing executable")
+            payload = source_archive.read_bytes()
+            manager.download_file = lambda _url, target, _progress=None: (
+                Path(target).write_bytes(payload) >= 0
+            )
+
+            installed = manager.install_yatori(
+                {
+                    "version": "v2.6.2-beta.11",
+                    "download_url": "https://example.test/yatori.zip",
+                    "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+                    "asset_size": len(payload),
+                }
+            )
+
+            self.assertFalse(installed)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+            self.assertIsNone(manager.local_versions["yatori"])
+
+    def test_yatori_activation_failure_rolls_back_previous_core(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            yatori = Path(manager.yatori_path)
+            marker = yatori / "existing-core.txt"
+            marker.write_text("keep", encoding="utf-8")
+            (yatori / "config.yaml").write_text("account: old\n", encoding="utf-8")
+            source_archive = Path(temp_dir, "publisher.zip")
+            with zipfile.ZipFile(source_archive, "w") as archive:
+                archive.writestr("yatori-go-console.exe", b"new executable")
+            payload = source_archive.read_bytes()
+            manager.download_file = lambda _url, target, _progress=None: (
+                Path(target).write_bytes(payload) >= 0
+            )
+            release = {
+                "version": "v2.6.2-beta.11",
+                "download_url": "https://example.test/yatori.zip",
+                "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+                "asset_size": len(payload),
+            }
+            real_replace = os.replace
+
+            def fail_new_activation(source, destination):
+                if (
+                    Path(source).name == "stage"
+                    and os.path.normcase(os.path.abspath(destination))
+                    == os.path.normcase(os.path.abspath(manager.yatori_path))
+                ):
+                    raise OSError("simulated activation failure")
+                return real_replace(source, destination)
+
+            with patch("src.core_manager.os.replace", side_effect=fail_new_activation):
+                installed = manager.install_yatori(release)
+
+            self.assertFalse(installed)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+            self.assertEqual(
+                (yatori / "config.yaml").read_text(encoding="utf-8"),
+                "account: old\n",
+            )
+            self.assertFalse((yatori / "yatori-go-console.exe").exists())
+            self.assertTrue(any("已回滚到更新前的 Yatori" in item for item in logs))
+            self.assertEqual(list(Path(temp_dir).glob(".yatori-update-*")), [])
+
+    def test_yatori_version_record_failure_rolls_back_previous_core(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            yatori = Path(manager.yatori_path)
+            marker = yatori / "existing-core.txt"
+            marker.write_text("keep", encoding="utf-8")
+            manager.local_versions["yatori"] = "v2.6.2-beta.8"
+            source_archive = Path(temp_dir, "publisher.zip")
+            with zipfile.ZipFile(source_archive, "w") as archive:
+                archive.writestr("yatori-go-console.exe", b"new executable")
+            payload = source_archive.read_bytes()
+            manager.download_file = lambda _url, target, _progress=None: (
+                Path(target).write_bytes(payload) >= 0
+            )
+            manager._save_local_versions = lambda: False
+
+            installed = manager.install_yatori(
+                {
+                    "version": "v2.6.2-beta.11",
+                    "download_url": "https://example.test/yatori.zip",
+                    "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+                    "asset_size": len(payload),
+                }
+            )
+
+            self.assertFalse(installed)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+            self.assertFalse((yatori / "yatori-go-console.exe").exists())
+            self.assertEqual(manager.local_versions["yatori"], "v2.6.2-beta.8")
+            self.assertTrue(any("无法保存 Yatori 版本记录" in item for item in logs))
+            self.assertTrue(any("已回滚到更新前的 Yatori" in item for item in logs))
+
     def test_yatori_scraper_uses_expanded_assets_before_release_page(self):
         class Response:
             def __enter__(self):

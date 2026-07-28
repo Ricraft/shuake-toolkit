@@ -16,7 +16,13 @@ import ssl
 import re
 import time
 import glob
+import tempfile
 from datetime import datetime
+
+try:
+    from .atomic_io import atomic_dump_json
+except ImportError:  # pragma: no cover - direct maintenance execution
+    from atomic_io import atomic_dump_json
 
 
 class CoreManager:
@@ -212,10 +218,11 @@ class CoreManager:
     def _save_local_versions(self):
         """保存本地版本信息"""
         try:
-            with open(self.version_file, 'w', encoding='utf-8') as f:
-                json.dump(self.local_versions, f, ensure_ascii=False, indent=2)
+            atomic_dump_json(self.version_file, self.local_versions)
+            return True
         except Exception as e:
             self._log(f"保存版本文件失败: {e}")
+            return False
 
     def _directory_has_any_file(self, directory, file_names):
         return os.path.isdir(directory) and any(
@@ -835,84 +842,139 @@ class CoreManager:
             "可等待发布方提供 GitHub 资源摘要或手动核验安装"
         )
         return False
+
+    def _find_yatori_source_dir(self, extract_dir):
+        """Locate the runnable Yatori directory inside a release archive."""
+        candidates = []
+        extract_dir = os.path.abspath(extract_dir)
+        for root, _dirs, files in os.walk(extract_dir):
+            names = set(files)
+            if not any(entry in names for entry in self.YATORI_ENTRY_FILES):
+                continue
+            relative = os.path.relpath(root, extract_dir)
+            depth = 0 if relative == "." else len(relative.split(os.sep))
+            score = (
+                1 if "yatori-go-console.exe" in names else 0,
+                sum(entry in names for entry in self.YATORI_ENTRY_FILES),
+                -depth,
+            )
+            candidates.append((score, root))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
     
     def install_yatori(self, release_info, progress_callback=None):
-        """安装/更新 Yatori"""
+        """Install Yatori through a validated, rollback-capable directory swap."""
         version = release_info['version']
         download_url = release_info['download_url']
-        
-        # 临时下载路径
-        temp_zip = os.path.join(self.base_dir, f"yatori-{version}.zip")
-        temp_extract = os.path.join(self.base_dir, f"yatori-{version}-temp")
-        backup_config = os.path.join(self.base_dir, "config.yaml.bak")
-        
+        safe_version = self._safe_name(version)
+        work_dir = tempfile.mkdtemp(
+            prefix=f".yatori-update-{safe_version}-",
+            dir=self.base_dir,
+        )
+        temp_zip = os.path.join(work_dir, "release.zip")
+        temp_extract = os.path.join(work_dir, "extract")
+        stage_dir = os.path.join(work_dir, "stage")
+        backup_dir = os.path.join(work_dir, "previous")
+        moved_old = False
+        activated_new = False
+        preserve_work_dir = False
+        previous_versions = dict(self.local_versions)
+
         try:
             self._log(f"正在安装 Yatori {version}...")
             if not self._can_download_release(release_info):
                 return False
-            
-            # 0. 先备份现有配置（如果存在）
+
+            # Capture the current config only from the live core. A fixed
+            # config.yaml.bak file can be stale and must never be reused.
             config_file = os.path.join(self.yatori_path, "config.yaml")
-            if os.path.exists(config_file):
-                shutil.copy2(config_file, backup_config)
-                self._log("已备份用户配置")
-            
-            # 1. 下载
+            config_bytes = None
+            if os.path.isfile(config_file):
+                with open(config_file, "rb") as handle:
+                    config_bytes = handle.read()
+
             if not self.download_file(download_url, temp_zip, progress_callback):
                 return False
             if not self._verify_release_archive(temp_zip, release_info):
                 return False
-            
-            # 2. 解压
+
             self._log("正在解压...")
+            os.makedirs(temp_extract, exist_ok=True)
             with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
                 self._safe_extract_zip(zip_ref, temp_extract)
-            
-            # 3. 清理旧版本
-            if os.path.exists(self.yatori_path):
-                self._log("清理旧版本...")
-                shutil.rmtree(self.yatori_path)
-            
-            os.makedirs(self.yatori_path, exist_ok=True)
-            
-            # 4. 移动新文件
-            src_dir = temp_extract
-            items = os.listdir(temp_extract)
-            if len(items) == 1 and os.path.isdir(os.path.join(temp_extract, items[0])):
-                src_dir = os.path.join(temp_extract, items[0])
-                
-            for item in os.listdir(src_dir):
-                s = os.path.join(src_dir, item)
-                d = os.path.join(self.yatori_path, item)
-                if os.path.isdir(s):
-                    shutil.copytree(s, d, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(s, d)
-            
-            # 5. 恢复配置
-            if os.path.exists(backup_config):
-                shutil.copy2(backup_config, os.path.join(self.yatori_path, "config.yaml"))
+
+            source_dir = self._find_yatori_source_dir(temp_extract)
+            if not source_dir:
+                raise ValueError("发行包中未找到可运行的 Yatori 入口文件")
+
+            self._log("正在准备新版本...")
+            shutil.copytree(source_dir, stage_dir)
+            if not self._directory_has_any_file(stage_dir, self.YATORI_ENTRY_FILES):
+                raise ValueError("Yatori 新版本暂存校验失败")
+
+            if config_bytes is not None:
+                with open(os.path.join(stage_dir, "config.yaml"), "wb") as handle:
+                    handle.write(config_bytes)
                 self._log("已恢复用户配置")
-            
-            # 6. 保存版本信息
+
+            # Both directories live under base_dir, so the final activation is
+            # a same-volume rename. Keep the previous core until activation
+            # and metadata updates have completed.
+            if os.path.exists(self.yatori_path):
+                self._log("正在切换到新版本...")
+                os.replace(self.yatori_path, backup_dir)
+                moved_old = True
+            os.replace(stage_dir, self.yatori_path)
+            activated_new = True
+
             self.local_versions['yatori'] = version
             self.local_versions['last_check'] = datetime.now().isoformat()
-            self._save_local_versions()
-            
+            if not self._save_local_versions():
+                raise OSError("无法保存 Yatori 版本记录")
+
+            if moved_old and os.path.exists(backup_dir):
+                try:
+                    shutil.rmtree(backup_dir)
+                except Exception as cleanup_error:
+                    preserve_work_dir = True
+                    self._log(
+                        "新版本已启用，但旧版本备份清理失败，"
+                        f"已保留在 {backup_dir}: {cleanup_error}"
+                    )
+
             self._log(f"Yatori {version} 安装完成！")
             return True
-            
+
         except Exception as e:
+            self.local_versions = previous_versions
             self._log(f"安装失败: {e}")
+            if moved_old and os.path.exists(backup_dir):
+                try:
+                    if os.path.exists(self.yatori_path):
+                        shutil.rmtree(self.yatori_path)
+                    os.replace(backup_dir, self.yatori_path)
+                    activated_new = False
+                    self._log("已回滚到更新前的 Yatori")
+                except Exception as rollback_error:
+                    preserve_work_dir = True
+                    self._log(
+                        "回滚 Yatori 失败，旧版本备份已保留在 "
+                        f"{backup_dir}: {rollback_error}"
+                    )
+            elif activated_new and os.path.exists(self.yatori_path):
+                try:
+                    shutil.rmtree(self.yatori_path)
+                except Exception as cleanup_error:
+                    self._log(f"清理未完成的 Yatori 安装失败: {cleanup_error}")
             return False
         finally:
-            # 清理临时文件
-            if os.path.exists(temp_zip): 
-                try: os.remove(temp_zip)
-                except: pass
-            if os.path.exists(temp_extract): 
-                try: shutil.rmtree(temp_extract)
-                except: pass
+            if not preserve_work_dir and os.path.exists(work_dir):
+                try:
+                    shutil.rmtree(work_dir)
+                except Exception as cleanup_error:
+                    self._log(f"清理 Yatori 更新临时目录失败: {cleanup_error}")
 
     def _find_autovisor_source_dir(self, extract_dir):
         candidates = [extract_dir]
