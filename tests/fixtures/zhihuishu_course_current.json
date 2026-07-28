@@ -1,0 +1,28 @@
+{
+  "code": 200,
+  "message": "success",
+  "result": {
+    "courseOpenDtos": [
+      {
+        "recruitAndCourseId": "current-normal-001",
+        "courseName": "录制样本普通课",
+        "lessonName": "第一章",
+        "lessonNum": 12,
+        "progress": "45%",
+        "courseType": 1,
+        "courseStartTime": 1772352000000,
+        "courseEndTime": 1774944000000
+      },
+      {
+        "recruitAndCourseId": "current-shared-002",
+        "courseName": "录制样本共享课",
+        "lessonName": "共享课导学",
+        "lessonNum": 8,
+        "progress": "80%",
+        "courseType": 7,
+        "courseStartTime": 1772352000000,
+        "courseEndTime": 1774944000000
+      }
+    ]
+  }
+}

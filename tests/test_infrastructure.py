@@ -256,6 +256,105 @@ class InfrastructureTests(unittest.TestCase):
             "github-release-asset-digest",
         )
 
+    def test_yatori_release_list_selects_newest_prerelease_with_windows_asset(self):
+        payload = b"publisher asset"
+        digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+        releases = [
+            {
+                "tag_name": "v2.6.1-beta.8",
+                "published_at": "2026-07-20T10:00:00Z",
+                "prerelease": True,
+                "assets": [
+                    {
+                        "name": "yatori-windows-amd64.zip",
+                        "browser_download_url": "https://example.test/beta8.zip",
+                        "digest": digest,
+                        "size": len(payload),
+                    }
+                ],
+            },
+            {
+                "tag_name": "v2.6.1-beta.11",
+                "published_at": "2026-07-25T10:00:00Z",
+                "prerelease": True,
+                "assets": [
+                    {
+                        "name": "yatori-windows-amd64.zip",
+                        "browser_download_url": "https://example.test/beta11.zip",
+                        "digest": digest,
+                        "size": len(payload),
+                    }
+                ],
+            },
+            {
+                "tag_name": "v9.9.9-draft",
+                "published_at": "2026-07-26T10:00:00Z",
+                "draft": True,
+                "assets": [
+                    {
+                        "name": "yatori-windows-amd64.zip",
+                        "browser_download_url": "https://example.test/draft.zip",
+                    }
+                ],
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            selected = manager._select_yatori_release(releases)
+
+        self.assertEqual(selected["version"], "v2.6.1-beta.11")
+        self.assertEqual(selected["download_url"], "https://example.test/beta11.zip")
+        self.assertTrue(selected["prerelease"])
+        self.assertEqual(selected["verification_source"], "github-release-asset-digest")
+
+    def test_yatori_update_check_queries_releases_list_before_latest_endpoint(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        releases = [
+            {
+                "tag_name": "v2.6.1-beta.11",
+                "published_at": "2026-07-25T10:00:00Z",
+                "prerelease": True,
+                "assets": [
+                    {
+                        "name": "yatori-windows-amd64.zip",
+                        "browser_download_url": "https://example.test/beta11.zip",
+                        "digest": "sha256:" + "a" * 64,
+                        "size": 1024,
+                    }
+                ],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            requested = []
+
+            def open_url(request, **_kwargs):
+                requested.append(request.full_url)
+                return Response(releases)
+
+            with patch(
+                "src.core_manager.urllib.request.urlopen",
+                side_effect=open_url,
+            ):
+                result = manager.get_yatori_latest_release()
+
+        self.assertEqual(requested, [manager.YATORI_RELEASES_API_URL])
+        self.assertEqual(result["version"], "v2.6.1-beta.11")
+
     def test_release_archive_requires_matching_sha256_and_size(self):
         payload = b"verified core archive"
         with tempfile.TemporaryDirectory() as temp_dir:

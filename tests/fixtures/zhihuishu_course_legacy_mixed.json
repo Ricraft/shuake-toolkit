@@ -1,0 +1,21 @@
+{
+  "code": "200",
+  "result": {
+    "courseOpenDtos": [
+      {
+        "secret": "legacy-secret-001",
+        "courseName": "录制样本旧字段课程",
+        "lessonName": "旧接口课时",
+        "lessonNum": 3,
+        "progress": "20%",
+        "courseType": 1
+      },
+      {
+        "courseName": "缺少访问标识的脏行",
+        "lessonName": "不应生成可运行课程",
+        "progress": "99%",
+        "courseType": 1
+      }
+    ]
+  }
+}

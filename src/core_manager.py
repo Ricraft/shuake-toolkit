@@ -55,6 +55,9 @@ class CoreManager:
     # GitHub API 配置
     YATORI_REPO = "Yatori-Dev/yatori-go-console"
     YATORI_API_URL = f"https://api.github.com/repos/{YATORI_REPO}/releases/latest"
+    YATORI_RELEASES_API_URL = (
+        f"https://api.github.com/repos/{YATORI_REPO}/releases?per_page=20"
+    )
     
     # Autovisor 仓库
     AUTOVISOR_REPO = "CXRunfree/Autovisor"
@@ -294,7 +297,27 @@ class CoreManager:
         try:
             self._log("正在检查 Yatori 最新版本...")
             
-            # 1. 尝试直接调用 GitHub API
+            # 1. 优先读取 releases 列表。GitHub /releases/latest 对 beta/
+            # prerelease 版本并不总是可靠，Yatori 的可用更新经常发布在 beta
+            # 通道，因此这里主动从发布列表里选择最新可安装的 Windows ZIP。
+            try:
+                req = urllib.request.Request(
+                    self.YATORI_RELEASES_API_URL,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept': 'application/vnd.github.v3+json'
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=5, context=self.ssl_context) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                    release = self._select_yatori_release(data)
+                    if release:
+                        return release
+                    self._log("发布列表中未找到可安装的 Yatori Windows ZIP，尝试 latest API...")
+            except Exception as e:
+                self._log(f"访问发布列表失败 ({e})，尝试 latest API...")
+
+            # 2. 兼容旧路径：当 releases 列表不可用时再读取 latest。
             try:
                 req = urllib.request.Request(
                     self.YATORI_API_URL,
@@ -307,9 +330,9 @@ class CoreManager:
                     data = json.loads(response.read().decode('utf-8'))
                     return self._parse_yatori_release(data)
             except Exception as e:
-                self._log(f"直接访问 API 失败 ({e})，尝试备用方式...")
+                self._log(f"访问 latest API 失败 ({e})，尝试备用方式...")
             
-            # 2. 尝试备用方式
+            # 3. 尝试备用方式
             return self._get_yatori_latest_fallback()
                 
         except Exception as e:
@@ -317,8 +340,40 @@ class CoreManager:
         
         return None
 
+    @staticmethod
+    def _github_release_time_key(release):
+        value = str(
+            release.get("published_at")
+            or release.get("created_at")
+            or ""
+        )
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0
+
+    def _select_yatori_release(self, releases):
+        """Select newest installable Yatori release, including beta/prerelease."""
+        if not isinstance(releases, list):
+            return None
+
+        for release in sorted(
+            releases,
+            key=self._github_release_time_key,
+            reverse=True,
+        ):
+            if not isinstance(release, dict) or release.get("draft"):
+                continue
+            parsed = self._parse_yatori_release(release)
+            if parsed:
+                parsed["prerelease"] = bool(release.get("prerelease"))
+                return parsed
+        return None
+
     def _parse_yatori_release(self, data):
         """解析 Yatori release 数据"""
+        if not isinstance(data, dict):
+            return None
         version = data.get('tag_name', 'unknown')
         assets = data.get('assets', [])
 

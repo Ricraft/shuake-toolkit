@@ -86,7 +86,22 @@ def extract_share_course_rows(payload):
         return None
     if any(not isinstance(row, dict) for row in rows):
         return None
-    if rows and not any(get_zhs_course_access_id(row) for row in rows):
+    rows_with_access_id = [
+        row for row in rows if get_zhs_course_access_id(row)
+    ]
+    if rows and not rows_with_access_id:
+        return None
+    return rows_with_access_id
+
+
+def extract_notice_rows(payload):
+    """Return valid Zhihuishu notice rows, or ``None`` for unknown shapes."""
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("result")
+    if not isinstance(rows, list):
+        return None
+    if any(not isinstance(row, dict) for row in rows):
         return None
     return rows
 
@@ -513,11 +528,17 @@ async def main():
 
             if 'getImportantNoticeList' in url and not notices_captured:
                 try:
-                    notices_data = await response.json()
+                    rows = extract_notice_rows(await response.json())
+                    if rows is None:
+                        print(
+                            "通知接口返回了无法识别的数据，本次不会写入见面课",
+                            flush=True,
+                        )
+                        return
+                    notices_data = rows
                     notices_captured = True
-                    result = notices_data.get('result', [])
-                    print(f"捕获到待办任务通知: {len(result)} 条", flush=True)
-                    for notice in result:
+                    print(f"捕获到待办任务通知: {len(rows)} 条", flush=True)
+                    for notice in rows:
                         task_name = notice.get('taskName', '无标题')
                         course_name = notice.get('courseName', '未知')
                         status = notice.get('status', 0)
@@ -588,8 +609,8 @@ async def main():
                 print("-" * 60, flush=True)
 
         notices_list = []
-        if notices_data:
-            notices_list = notices_data.get('result', [])
+        if notices_data is not None:
+            notices_list = notices_data
             print(f"\n{'='*60}", flush=True)
             print(f"待办任务通知: 共 {len(notices_list)} 条", flush=True)
             print(f"{'='*60}\n", flush=True)

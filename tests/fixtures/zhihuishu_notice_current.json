@@ -1,0 +1,17 @@
+{
+  "code": 200,
+  "result": [
+    {
+      "liveCourseId": "live-sample-001",
+      "courseId": "course-sample-002",
+      "recruitId": "recruit-sample-003",
+      "courseName": "录制样本见面课",
+      "taskName": "第一场直播回放",
+      "taskId": "task-sample-004",
+      "videoId": "video-sample-005",
+      "status": 1,
+      "startTime": 1772352000000,
+      "endTime": 1774944000000
+    }
+  ]
+}

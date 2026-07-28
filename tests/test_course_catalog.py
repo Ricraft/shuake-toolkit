@@ -25,6 +25,13 @@ from src.course_catalog import (
 from scripts import fetch_zhs_courses
 
 
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+def load_fixture(name: str):
+    return json.loads((FIXTURES_DIR / name).read_text(encoding="utf-8"))
+
+
 class CourseCatalogTests(unittest.TestCase):
     def test_module_import_keeps_requests_and_crypto_lazy(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -241,6 +248,50 @@ print('COURSE_CATALOG_IMPORT_OK')
             {"recruitAndCourseId": "current-id", "courseName": "课程"}
         )
         self.assertEqual(normalized["secret"], "current-id")
+
+    def test_zhs_recorded_course_response_contract_accepts_current_and_legacy_fields(self):
+        current_rows = fetch_zhs_courses.extract_share_course_rows(
+            load_fixture("zhihuishu_course_current.json")
+        )
+        legacy_rows = fetch_zhs_courses.extract_share_course_rows(
+            load_fixture("zhihuishu_course_legacy_mixed.json")
+        )
+
+        self.assertEqual(
+            [get_zhs_course_access_id(row) for row in current_rows],
+            ["current-normal-001", "current-shared-002"],
+        )
+        self.assertEqual(len(legacy_rows), 1)
+        self.assertEqual(get_zhs_course_access_id(legacy_rows[0]), "legacy-secret-001")
+
+        merged = {}
+        fetch_zhs_courses.merge_share_courses(merged, current_rows + legacy_rows)
+        self.assertEqual(
+            list(merged),
+            ["current-normal-001", "current-shared-002", "legacy-secret-001"],
+        )
+        self.assertEqual(merged["current-shared-002"]["courseType"], 7)
+        self.assertNotIn("缺少访问标识的脏行", json.dumps(merged, ensure_ascii=False))
+
+    def test_zhs_recorded_notice_response_contract_builds_meeting_course_url(self):
+        notice_rows = fetch_zhs_courses.extract_notice_rows(
+            load_fixture("zhihuishu_notice_current.json")
+        )
+        courses, identity = parse_zhs_course_data(
+            {"alice": {"courses": [], "notices": notice_rows}},
+            "alice",
+        )
+
+        self.assertEqual(identity, "alice")
+        self.assertEqual(notice_rows[0]["liveCourseId"], "live-sample-001")
+        self.assertEqual(len(courses), 1)
+        self.assertEqual(courses[0]["type"], "见面课")
+        self.assertIn("liveId=live-sample-001", courses[0]["url"])
+        self.assertIn("courseId=course-sample-002", courses[0]["url"])
+        self.assertIn("recruitId=recruit-sample-003", courses[0]["url"])
+        self.assertIsNone(fetch_zhs_courses.extract_notice_rows({"result": {}}))
+        self.assertIsNone(fetch_zhs_courses.extract_notice_rows({"result": ["bad"]}))
+        self.assertEqual(fetch_zhs_courses.extract_notice_rows({"result": []}), [])
 
     def test_zhs_fetch_course_api_discovery_is_host_and_path_scoped(self):
         self.assertTrue(
