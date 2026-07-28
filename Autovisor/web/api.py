@@ -262,30 +262,37 @@ _COURSE_TERMINAL_RE = re.compile(
 )
 
 
-def _count_matches(lines: list[str], markers: tuple[str, ...]) -> int:
-    return sum(1 for line in lines if any(marker in line for marker in markers))
+def _unique_marker_matches(lines: list[str], markers: tuple[str, ...]) -> set[str]:
+    return {line.strip() for line in lines if any(marker in line for marker in markers)}
 
 
 def _derive_dashboard_stats() -> dict:
     logs, _total = _get_dashboard_logs(1000)
     lines = [str(log.get("message", "")) for log in logs]
+    video_marker_evidence = _unique_marker_matches(lines, _VIDEO_COMPLETION_MARKERS)
+    video_progress_evidence = {
+        line.strip() for line in lines if _PROGRESS_COMPLETE_RE.search(line)
+    }
+    test_evidence = _unique_marker_matches(lines, _TEST_COMPLETION_MARKERS)
+    success_evidence = _unique_marker_matches(lines, _SESSION_SUCCESS_MARKERS)
+    failure_evidence = _unique_marker_matches(lines, _SESSION_FAILURE_MARKERS)
 
     total_sessions = max(
         int(app_state.stats.get("total_sessions") or 0),
-        _count_matches(lines, _SESSION_START_MARKERS),
+        len(_unique_marker_matches(lines, _SESSION_START_MARKERS)),
     )
     total_videos = max(
         int(app_state.stats.get("total_videos") or 0),
-        _count_matches(lines, _VIDEO_COMPLETION_MARKERS)
-        + sum(1 for line in lines if _PROGRESS_COMPLETE_RE.search(line)),
+        len(video_marker_evidence),
+        len(video_progress_evidence),
     )
     total_tests = max(
         int(app_state.stats.get("total_tests") or 0),
-        _count_matches(lines, _TEST_COMPLETION_MARKERS),
+        len(test_evidence),
     )
 
-    success_count = _count_matches(lines, _SESSION_SUCCESS_MARKERS)
-    failure_count = _count_matches(lines, _SESSION_FAILURE_MARKERS)
+    success_count = len(success_evidence)
+    failure_count = len(failure_evidence)
     success_rate = None
     if success_count or failure_count:
         success_rate = success_count / (success_count + failure_count)
@@ -321,7 +328,7 @@ def _derive_course_rows(urls: list[str]) -> list[dict]:
         progress_match = _COURSE_PROGRESS_RE.search(line)
         if progress_match and current_index:
             percent = max(0, min(100, int(progress_match.group("percent"))))
-            progress[current_index] = percent
+            progress[current_index] = max(progress.get(current_index, 0), percent)
 
         terminal = _COURSE_TERMINAL_RE.search(line)
         if terminal:
@@ -346,9 +353,6 @@ def _derive_course_rows(urls: list[str]) -> list[dict]:
             status = "failed"
         elif current_index == index:
             status = "running"
-        elif current_index and index < current_index and index not in failed:
-            status = "completed"
-            row_progress = max(row_progress, 100)
 
         rows.append(
             {

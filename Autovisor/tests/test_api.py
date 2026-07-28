@@ -419,6 +419,32 @@ class TestStatsEndpoint(unittest.TestCase):
 
         self.assertEqual(response.json()["data"]["success_rate"], 0.5)
 
+    def test_stats_deduplicates_repeated_runtime_log_lines(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_log = Path(temp_dir) / "DashboardTask.log"
+            task_log.write_text(
+                "程序启动中...\n"
+                "程序启动中...\n"
+                "[OK] 视频播放完成\n"
+                "[OK] 视频播放完成\n"
+                "完成进度: 100%\n"
+                "完成进度: 100%\n"
+                "[OK] 作业提交完成\n"
+                "[OK] 作业提交完成\n"
+                "所有课程已学习完毕!\n"
+                "所有课程已学习完毕!\n",
+                encoding="utf-8",
+            )
+            self._use_task_log(task_log)
+
+            response = self.client.get("/api/stats")
+
+        data = response.json()["data"]
+        self.assertEqual(data["total_sessions"], 1)
+        self.assertEqual(data["total_videos"], 1)
+        self.assertEqual(data["total_tests"], 1)
+        self.assertEqual(data["success_rate"], 1.0)
+
     def test_dashboard_unknown_success_rate_renders_dash_placeholder(self):
         dashboard = (Path(_AUTOVISOR_ROOT) / "web" / "dashboard.html").read_text(
             encoding="utf-8"
@@ -504,6 +530,23 @@ class TestCoursesEndpoint(unittest.TestCase):
             [course["status"] for course in courses],
             ["completed", "completed"],
         )
+
+    def test_get_courses_keeps_highest_progress_without_guessing_completion(self):
+        self._use_task_log(
+            "开始处理第 1/2 门课程（one.example）\n"
+            "完成进度: 80%\n"
+            "完成进度: 60%\n"
+            "开始处理第 2/2 门课程（two.example）\n"
+            "完成进度: 10%\n"
+        )
+
+        response = self.client.get("/api/courses")
+
+        courses = response.json()["data"]["courses"]
+        self.assertEqual(courses[0]["progress"], 80)
+        self.assertNotEqual(courses[0]["status"], "completed")
+        self.assertEqual(courses[1]["progress"], 10)
+        self.assertEqual(courses[1]["status"], "running")
 
 
 class TestErrorHandling(unittest.TestCase):
