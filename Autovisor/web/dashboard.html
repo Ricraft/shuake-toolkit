@@ -659,7 +659,8 @@ async function updateStats() {
     document.getElementById('stat-sessions').textContent = data.total_sessions || 0;
     document.getElementById('stat-videos').textContent = data.total_videos || 0;
     document.getElementById('stat-tests').textContent = data.total_tests || 0;
-    document.getElementById('stat-rate').textContent = Math.round((data.success_rate || 0) * 100) + '%';
+    document.getElementById('stat-rate').textContent =
+      data.success_rate == null ? '--' : Math.round(data.success_rate * 100) + '%';
   } catch (e) { /* ignore */ }
 }
 

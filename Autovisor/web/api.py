@@ -7,6 +7,7 @@ Cal.com-style dashboard backend with FastAPI
 import asyncio
 import json
 import os
+import re
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -90,7 +91,7 @@ class AppState:
         "total_sessions": 0,
         "total_videos": 0,
         "total_tests": 0,
-        "success_rate": 0.92,
+        "success_rate": None,
     })
     courses: list[dict] = field(default_factory=list)
     accounts: list[dict] = field(default_factory=list)
@@ -213,6 +214,77 @@ def _get_dashboard_logs(limit: int, level: Optional[str] = None) -> tuple[list[d
     logs.sort(key=lambda log: log.get("timestamp") or "")
     total = len(logs)
     return logs[-bounded_limit:] if bounded_limit else [], total
+
+
+_PROGRESS_COMPLETE_RE = re.compile(
+    r"(?:完成进度|学习进度|播放进度)\s*[:：]?\s*(?:\|.*?\|\s*)?100%"
+)
+_VIDEO_COMPLETION_MARKERS = (
+    "[OK] 视频播放完成",
+    "所有视频已完成",
+    "视频已完成",
+    "已完成！",
+)
+_TEST_COMPLETION_MARKERS = (
+    "作业提交完成",
+    "测验完成",
+    "测试已完成",
+    "答题并提交成功",
+)
+_SESSION_START_MARKERS = (
+    "程序启动中",
+    "Task started:",
+)
+_SESSION_SUCCESS_MARKERS = (
+    "所有课程已学习完毕",
+    "所有课程已完成",
+    "课程队列结束: 成功",
+)
+_SESSION_FAILURE_MARKERS = (
+    "[ERROR]",
+    "[FAIL]",
+    "Traceback",
+    "执行失败",
+    "任务已中断",
+    "返回码:",
+)
+
+
+def _count_matches(lines: list[str], markers: tuple[str, ...]) -> int:
+    return sum(1 for line in lines if any(marker in line for marker in markers))
+
+
+def _derive_dashboard_stats() -> dict:
+    logs, _total = _get_dashboard_logs(1000)
+    lines = [str(log.get("message", "")) for log in logs]
+
+    total_sessions = max(
+        int(app_state.stats.get("total_sessions") or 0),
+        _count_matches(lines, _SESSION_START_MARKERS),
+    )
+    total_videos = max(
+        int(app_state.stats.get("total_videos") or 0),
+        _count_matches(lines, _VIDEO_COMPLETION_MARKERS)
+        + sum(1 for line in lines if _PROGRESS_COMPLETE_RE.search(line)),
+    )
+    total_tests = max(
+        int(app_state.stats.get("total_tests") or 0),
+        _count_matches(lines, _TEST_COMPLETION_MARKERS),
+    )
+
+    success_count = _count_matches(lines, _SESSION_SUCCESS_MARKERS)
+    failure_count = _count_matches(lines, _SESSION_FAILURE_MARKERS)
+    success_rate = None
+    if success_count or failure_count:
+        success_rate = success_count / (success_count + failure_count)
+
+    return {
+        "total_sessions": total_sessions,
+        "total_videos": total_videos,
+        "total_tests": total_tests,
+        "success_rate": success_rate,
+        "stats_source": "runtime_logs",
+    }
 
 # ============================================================
 # Config Manager
@@ -414,7 +486,7 @@ async def get_logs(limit: int = 100, level: Optional[str] = None):
 
 @app.get("/api/stats", response_model=ApiResponse)
 async def get_stats():
-    return ApiResponse(data=app_state.stats)
+    return ApiResponse(data=_derive_dashboard_stats())
 
 @app.get("/api/status", response_model=ApiResponse)
 async def get_status():

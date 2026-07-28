@@ -352,6 +352,81 @@ class TestLogsEndpoint(unittest.TestCase):
         )
 
 
+class TestStatsEndpoint(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+        self.original_supervisor = api_module.task_supervisor
+        dashboard_logger.logs.clear()
+        app_state.stats = {
+            "total_sessions": 0,
+            "total_videos": 0,
+            "total_tests": 0,
+            "success_rate": None,
+        }
+
+    def tearDown(self):
+        api_module.task_supervisor = self.original_supervisor
+        app_state.stats = {
+            "total_sessions": 0,
+            "total_videos": 0,
+            "total_tests": 0,
+            "success_rate": None,
+        }
+
+    def _use_task_log(self, log_path: Path):
+        api_module.task_supervisor = SimpleNamespace(log_path=log_path)
+
+    def test_stats_default_success_rate_is_unknown(self):
+        response = self.client.get("/api/stats")
+
+        data = response.json()
+        self.assertTrue(data["success"])
+        self.assertIsNone(data["data"]["success_rate"])
+        self.assertEqual(data["data"]["total_sessions"], 0)
+
+    def test_stats_are_derived_from_task_log_tail(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_log = Path(temp_dir) / "DashboardTask.log"
+            task_log.write_text(
+                "程序启动中...\n"
+                "[OK] 视频播放完成\n"
+                "[OK] 作业提交完成\n"
+                "所有课程已学习完毕!\n",
+                encoding="utf-8",
+            )
+            self._use_task_log(task_log)
+
+            response = self.client.get("/api/stats")
+
+        data = response.json()["data"]
+        self.assertEqual(data["total_sessions"], 1)
+        self.assertEqual(data["total_videos"], 1)
+        self.assertEqual(data["total_tests"], 1)
+        self.assertEqual(data["success_rate"], 1.0)
+        self.assertEqual(data["stats_source"], "runtime_logs")
+
+    def test_stats_success_rate_uses_observed_terminal_results(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_log = Path(temp_dir) / "DashboardTask.log"
+            task_log.write_text(
+                "所有课程已学习完毕!\n"
+                "[ERROR] Autovisor 已退出，返回码: 3\n",
+                encoding="utf-8",
+            )
+            self._use_task_log(task_log)
+
+            response = self.client.get("/api/stats")
+
+        self.assertEqual(response.json()["data"]["success_rate"], 0.5)
+
+    def test_dashboard_unknown_success_rate_renders_dash_placeholder(self):
+        dashboard = (Path(_AUTOVISOR_ROOT) / "web" / "dashboard.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("data.success_rate == null ? '--'", dashboard)
+
+
 class TestCoursesEndpoint(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
