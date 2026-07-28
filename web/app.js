@@ -791,6 +791,75 @@
             catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }
         }
 
+        let yatoriUpdateConfirming = false;
+
+        async function openYatoriUpdateDialog() {
+            try {
+                showToast('正在检查 Yatori 更新...', 'info');
+                const result = await apiCall('perform_action', 'show_update_dialog');
+                if (!handleWebActionResult(result, '无法检查 Yatori 更新')) return;
+                if (result?.updateDialog) {
+                    showYatoriUpdateModal(result.updateDialog);
+                }
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '无法检查 Yatori 更新', 'error');
+            }
+        }
+
+        function setText(id, value) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value ?? '';
+        }
+
+        function showYatoriUpdateModal(info) {
+            const modal = document.getElementById('yatori-update-modal');
+            if (!modal) return;
+            window.pendingYatoriUpdateDialog = info || {};
+            setText('yatori-update-current', info?.currentVersion || '未知');
+            setText('yatori-update-latest', info?.latestVersion || '未知');
+            setText('yatori-update-asset', info?.assetName || '未知资源');
+            setText('yatori-update-published', info?.publishedAt || '未提供');
+            setText('yatori-update-notes', info?.releaseNotes || '该版本暂未提供更新说明。');
+            setText(
+                'yatori-update-summary',
+                info?.installed === false
+                    ? `将安装 Yatori ${info?.latestVersion || ''}。请确认后开始下载与替换核心文件。`
+                    : `将从 ${info?.currentVersion || '未知'} 更新到 ${info?.latestVersion || '未知'}。请确认后开始下载与替换核心文件。`
+            );
+            modal.classList.add('active');
+        }
+
+        function closeYatoriUpdateModal() {
+            if (yatoriUpdateConfirming) return;
+            document.getElementById('yatori-update-modal')?.classList.remove('active');
+        }
+
+        async function confirmYatoriUpdate() {
+            if (yatoriUpdateConfirming) return;
+            yatoriUpdateConfirming = true;
+            const btn = document.getElementById('yatori-update-confirm-btn');
+            const oldHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在启动更新...';
+            }
+            try {
+                const result = await apiCall('perform_action', 'install_yatori_update');
+                if (handleWebActionResult(result, 'Yatori 更新启动失败')) {
+                    document.getElementById('yatori-update-modal')?.classList.remove('active');
+                    showToast('Yatori 更新已开始，请查看系统日志进度', 'success');
+                }
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || 'Yatori 更新启动失败', 'error');
+            } finally {
+                yatoriUpdateConfirming = false;
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = oldHtml || '<i class="fas fa-download"></i> 确认更新';
+                }
+            }
+        }
+
         async function confirmAndPerform(action, message) {
             if (!window.confirm(message)) return;
             await performAction(action);

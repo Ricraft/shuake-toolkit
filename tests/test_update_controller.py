@@ -64,18 +64,26 @@ class UpdateControllerTests(unittest.TestCase):
         )
         return controller, manager, logs, notices, installed
 
-    def test_explicit_yatori_check_installs_available_update(self):
-        controller, manager, _logs, notices, installed = self.make_controller()
+    def test_yatori_update_confirmation_does_not_install_until_confirmed(self):
+        controller, manager, _logs, _notices, installed = self.make_controller()
 
-        self.assertTrue(controller.check_yatori_async(explicit=True))
+        result = controller.prepare_yatori_update_confirmation()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["updateDialog"]["latestVersion"], "new")
+        self.assertEqual(result["updateDialog"]["currentVersion"], "old")
+        self.assertEqual(manager.installed, [])
+        self.assertEqual(installed, [])
+        self.assertEqual(controller.yatori_update_info["info"]["version"], "new")
+
+        self.assertTrue(controller.install_yatori_async())
 
         self.assertEqual(manager.installed, [("yatori", "new")])
         self.assertEqual(installed, ["yatori"])
         self.assertIsNone(controller.yatori_update_info)
         self.assertFalse(controller.installing)
-        self.assertTrue(any(item[0] == "info" for item in notices))
 
-    def test_explicit_yatori_update_logs_current_version_and_release_notes(self):
+    def test_yatori_update_confirmation_includes_current_version_and_release_notes(self):
         manager = _Manager()
         manager.yatori_result = {
             "installed": True,
@@ -88,14 +96,14 @@ class UpdateControllerTests(unittest.TestCase):
         }
         controller, _manager, logs, _notices, _installed = self.make_controller(manager)
 
-        self.assertTrue(controller.check_yatori_async(explicit=True))
+        result = controller.prepare_yatori_update_confirmation()
 
         joined_logs = "\n".join(item[0] for item in logs)
         self.assertIn("当前版本: v2.6.2-beta.8", joined_logs)
-        self.assertIn("Yatori 最新版本介绍", joined_logs)
-        self.assertIn("修复智慧树登录适配", joined_logs)
+        self.assertIn("等待用户确认更新", joined_logs)
+        self.assertIn("修复智慧树登录适配", result["updateDialog"]["releaseNotes"])
 
-    def test_explicit_yatori_current_version_dialog_includes_release_notes(self):
+    def test_yatori_current_version_result_includes_release_notes(self):
         manager = _Manager()
         manager.yatori_result = {
             "installed": True,
@@ -108,8 +116,10 @@ class UpdateControllerTests(unittest.TestCase):
         }
         controller, _manager, _logs, notices, _installed = self.make_controller(manager)
 
-        self.assertTrue(controller.check_yatori_async(explicit=True))
+        result = controller.prepare_yatori_update_confirmation()
 
+        self.assertTrue(result["upToDate"])
+        self.assertIn("版本介绍第一行", result["message"])
         self.assertTrue(any("最新版本介绍" in item[2] for item in notices))
         self.assertTrue(any("版本介绍第一行" in item[2] for item in notices))
 

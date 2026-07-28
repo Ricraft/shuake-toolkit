@@ -136,30 +136,88 @@ class UpdateController:
             message = f"{message}\n\n最新版本介绍:\n{notes}"
         return message
 
-    def handle_explicit_yatori_result(self, result) -> None:
+    def _build_yatori_update_dialog(self, result):
+        release_info = result.get("info") or {}
+        latest_version = release_info.get("version", "未知")
+        installed = result.get("installed", False)
+        current_version = result.get("version") or ("未安装" if not installed else "未知")
+        notes = self._format_yatori_release_notes(release_info)
+        return {
+            "core": "yatori",
+            "installed": installed,
+            "currentVersion": current_version,
+            "latestVersion": latest_version,
+            "assetName": release_info.get("asset_name") or "未知资源",
+            "publishedAt": release_info.get("published_at") or "",
+            "releaseNotes": notes or "该版本暂未提供更新说明。",
+            "releaseNotesAvailable": bool(notes),
+        }
+
+    def _prepare_yatori_update_confirmation_result(self, result):
         if not result:
-            self.show_error("管理中心", "无法连接至 GitHub 节点，请检查网络环境。")
-            return
+            message = "无法连接至 GitHub 节点，请检查网络环境。"
+            self.show_error("管理中心", message)
+            return {"ok": False, "message": message}
 
         installed = result.get("installed", False)
         has_update = result.get("has_update", False)
         if not installed or has_update:
             self.yatori_update_info = result
-            release_info = result.get("info")
-            version = (release_info or {}).get("version", "未知")
+            dialog = self._build_yatori_update_dialog(result)
             if installed:
-                current_version = result.get("version", "未知")
                 self.log(
-                    f"检测到 Yatori 新版本 {version}（当前版本: {current_version}），开始更新。"
+                    "检测到 Yatori 新版本 "
+                    f"{dialog['latestVersion']}（当前版本: {dialog['currentVersion']}），"
+                    "等待用户确认更新。"
                 )
             else:
-                self.log(f"准备安装 Yatori 最新版本 {version}。")
-            self._log_yatori_release_notes(release_info)
-            self.install_yatori_async(release_info)
-            return
+                self.log(f"检测到 Yatori 未安装，等待用户确认安装 {dialog['latestVersion']}。")
+            return {
+                "ok": True,
+                "updateDialog": dialog,
+                "toast": "已获取 Yatori 更新说明，请确认是否更新",
+                "toastType": "info",
+            }
 
         self.yatori_update_info = None
-        self.show_info("管理中心", self._build_yatori_current_message(result))
+        message = self._build_yatori_current_message(result)
+        self.show_info("管理中心", message)
+        return {
+            "ok": True,
+            "upToDate": True,
+            "message": message,
+            "toast": f"当前已是最新版本 ({result.get('version', '未知')})",
+            "toastType": "info",
+        }
+
+    def prepare_yatori_update_confirmation(self):
+        if not self.core_manager:
+            message = "核心管理器初始化失败"
+            self.show_error("系统错误", message)
+            return {"ok": False, "message": message}
+
+        with self._lock:
+            if self.installing or self.yatori_checking:
+                message = "版本检查或安装正在进行中，请勿重复操作"
+                self.show_info("管理中心", message)
+                return {"ok": False, "message": message}
+            self.yatori_checking = True
+
+        self.log("手动触发版本检查...")
+        try:
+            result = self.core_manager.check_yatori_update()
+        except Exception as exc:
+            message = f"检查 Yatori 更新失败: {exc}"
+            self.show_error("管理中心", message)
+            return {"ok": False, "message": message}
+        finally:
+            with self._lock:
+                self.yatori_checking = False
+
+        return self._prepare_yatori_update_confirmation_result(result)
+
+    def handle_explicit_yatori_result(self, result) -> None:
+        self._prepare_yatori_update_confirmation_result(result)
 
     def install_yatori_async(self, release_info=None) -> bool:
         return self._install_async("yatori", release_info)

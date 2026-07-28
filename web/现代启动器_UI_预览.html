@@ -136,7 +136,7 @@
                             <button class="btn btn-outline" onclick="openSettingsTab('yatori')">
                                 <i class="fas fa-folder-open"></i> 配置
                             </button>
-                            <button class="btn btn-outline" onclick="performAction('show_update_dialog')">
+                            <button class="btn btn-outline" onclick="openYatoriUpdateDialog()">
                                 <i class="fas fa-cloud-arrow-down"></i> 更新
                             </button>
                         </div>
@@ -1236,7 +1236,7 @@
                     <h1 class="text-3xl font-extrabold tracking-tight mb-1">统一启动器 <span id="about-title-version" class="text-xl font-mono text-transparent bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text"></span></h1>
                     <p id="about-version" class="font-mono text-sm mb-6" style="color: var(--text-muted);">正在读取版本信息...</p>
                     <div class="flex gap-3 justify-center mb-8 flex-wrap">
-                        <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="performAction('show_update_dialog')">
+                        <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="openYatoriUpdateDialog()">
                             <i class="fas fa-download"></i> 安装 Yatori 更新
                         </button>
                         <button class="btn btn-outline btn-pill" onclick="performAction('check_autovisor_update')">
@@ -1396,6 +1396,41 @@
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="hideExitModal()">取消</button>
                 <button class="btn btn-danger" onclick="confirmExit()"><i class="fas fa-power-off"></i> 确认退出</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Yatori 更新确认弹窗 -->
+    <div id="yatori-update-modal" class="modal-overlay">
+        <div class="modal-box update-modal-box">
+            <div class="modal-icon accent"><i class="fas fa-cloud-arrow-down"></i></div>
+            <div class="modal-title">发现 Yatori 可用更新</div>
+            <div class="modal-desc" id="yatori-update-summary">请确认是否开始下载并替换 Yatori 核心文件。</div>
+            <div class="update-version-grid">
+                <div>
+                    <span>当前版本</span>
+                    <strong id="yatori-update-current">未知</strong>
+                </div>
+                <div>
+                    <span>最新版本</span>
+                    <strong id="yatori-update-latest">未知</strong>
+                </div>
+                <div>
+                    <span>发行资源</span>
+                    <strong id="yatori-update-asset">未知资源</strong>
+                </div>
+                <div>
+                    <span>发布时间</span>
+                    <strong id="yatori-update-published">未提供</strong>
+                </div>
+            </div>
+            <div class="update-notes-title">最新版本介绍</div>
+            <pre class="update-release-notes" id="yatori-update-notes">该版本暂未提供更新说明。</pre>
+            <div class="modal-actions">
+                <button class="btn btn-outline" onclick="closeYatoriUpdateModal()">稍后再说</button>
+                <button class="btn btn-primary" id="yatori-update-confirm-btn" onclick="confirmYatoriUpdate()">
+                    <i class="fas fa-download"></i> 确认更新
+                </button>
             </div>
         </div>
     </div>

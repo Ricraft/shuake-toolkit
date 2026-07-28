@@ -67,8 +67,13 @@ class WebActionService:
                     launcher.open_config_dir(script_type or "yatori")
                 )
             elif action == "show_update_dialog":
-                if not launcher.show_update_dialog():
-                    return {"ok": False, "message": "无法检查或安装 Yatori 更新"}
+                return self._with_state(launcher.show_update_dialog())
+            elif action == "install_yatori_update":
+                if not launcher.install_yatori_update_async():
+                    return {
+                        "ok": False,
+                        "message": "暂无可安装的 Yatori 更新",
+                    }
             elif action == "check_autovisor_update":
                 if not launcher.check_autovisor_update_async():
                     return {

@@ -1013,6 +1013,23 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("清空题库", page)
         self.assertIn("删除所有本地题目数据", page)
 
+    def test_yatori_update_requires_frontend_confirmation(self):
+        project_root = Path(launcher_module.__file__).resolve().parent
+        frontend = (project_root / "web" / "app.js").read_text(encoding="utf-8")
+        page = (project_root / "web" / "现代启动器_UI_预览.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("async function openYatoriUpdateDialog", frontend)
+        self.assertIn("function showYatoriUpdateModal", frontend)
+        self.assertIn("async function confirmYatoriUpdate", frontend)
+        self.assertIn("'install_yatori_update'", frontend)
+        self.assertIn('id="yatori-update-modal"', page)
+        self.assertIn("最新版本介绍", page)
+        self.assertIn("确认更新", page)
+        self.assertIn("openYatoriUpdateDialog()", page)
+        self.assertNotIn("performAction('show_update_dialog')", page)
+
     def test_frontend_connection_lifecycle_retries_without_stale_runtime(self):
         frontend = (
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"

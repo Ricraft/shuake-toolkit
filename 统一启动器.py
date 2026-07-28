@@ -1854,8 +1854,8 @@ class UnifiedLauncher:
         return self.update_controller.install_autovisor_async(release_info)
 
     def show_update_dialog(self):
-        """Check and install Yatori from the explicit Web UI action."""
-        return self.update_controller.check_yatori_async(explicit=True)
+        """Check Yatori updates and return Web confirmation dialog data."""
+        return self.update_controller.prepare_yatori_update_confirmation()
 
     def handle_manual_check_result(self, result):
         return self.update_controller.handle_explicit_yatori_result(result)

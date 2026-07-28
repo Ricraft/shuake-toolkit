@@ -83,6 +83,38 @@ def test_deduplicate_only_adds_success_toast_after_success():
     assert succeeded_result["toastType"] == "success"
 
 
+def test_yatori_update_button_returns_confirmation_data_without_installing():
+    calls = []
+    launcher = make_launcher(
+        show_update_dialog=lambda: {
+            "ok": True,
+            "updateDialog": {
+                "latestVersion": "v2.6.2-beta.11",
+                "releaseNotes": "版本介绍",
+            },
+        },
+        install_yatori_update_async=lambda: calls.append("install") or True,
+    )
+
+    result = WebActionService(launcher).perform("show_update_dialog")
+
+    assert result["ok"] is True
+    assert result["updateDialog"]["latestVersion"] == "v2.6.2-beta.11"
+    assert calls == []
+
+
+def test_yatori_update_confirm_action_starts_install():
+    calls = []
+    launcher = make_launcher(
+        install_yatori_update_async=lambda: calls.append("install") or True
+    )
+
+    result = WebActionService(launcher).perform("install_yatori_update")
+
+    assert result["ok"] is True
+    assert calls == ["install"]
+
+
 def test_action_exception_is_shown_and_returned_to_web():
     def fail():
         raise OSError("disk unavailable")
