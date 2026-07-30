@@ -25,6 +25,8 @@ async def _extract_question_title(page: Page) -> str:
         if title_element:
             text = await title_element.text_content()
             return text.strip() if text else ""
+    except TargetClosedError:
+        raise
     except Exception:
         pass
     for selector in (".subject-title", ".question-title", ".el-dialog__body"):
@@ -33,6 +35,8 @@ async def _extract_question_title(page: Page) -> str:
             if element:
                 text = await element.text_content()
                 return text.strip()[:500] if text else ""
+        except TargetClosedError:
+            raise
         except Exception:
             continue
     return ""
@@ -46,6 +50,8 @@ async def _extract_options(page: Page) -> list[str]:
             text = await item.text_content()
             if text:
                 options.append(text.strip())
+    except TargetClosedError:
+        raise
     except Exception:
         pass
     return options
@@ -58,6 +64,8 @@ async def _extract_wisdom_question(page_or_dialog) -> str:
         if await question.count() > 0:
             text = await question.text_content()
             return text.strip() if text else ""
+    except TargetClosedError:
+        raise
     except Exception:
         pass
     return ""
@@ -82,6 +90,8 @@ async def _extract_wisdom_options(page_or_dialog) -> list[str]:
                 answer = (await item.text_content() or "").strip()
             if answer:
                 options.append(f"{letter}. {answer}" if letter else answer)
+    except TargetClosedError:
+        raise
     except Exception:
         pass
     return options
@@ -144,6 +154,8 @@ async def _click_locator_indexes(
         try:
             await options.nth(index).click(timeout=1000)
             await page.wait_for_timeout(100)
+        except TargetClosedError:
+            raise
         except Exception as exc:
             active_logger.warn(
                 "随堂题第 %d 个选项点击失败: %s"
@@ -316,7 +328,20 @@ async def handle_standard_dialog(
         return False
     try:
         await page.press(".el-dialog", "Escape", timeout=1000)
+        await page.wait_for_timeout(300)
+        is_visible = getattr(question_container, "is_visible", None)
+        if callable(is_visible):
+            dialog_remains = await is_visible()
+        else:
+            dialog_remains = bool(
+                await page.query_selector(".el-dialog:visible .number")
+            )
+        if dialog_remains:
+            active_logger.warn("随堂题弹窗关闭后仍可见，保留等待重试")
+            return False
         return True
+    except TargetClosedError:
+        raise
     except Exception as exc:
         active_logger.warn("随堂题弹窗关闭失败: %s" % str(exc)[:60])
         return False

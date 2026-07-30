@@ -246,6 +246,60 @@ def test_standard_single_fallback_clicks_only_one_option():
     assert page.closed_dialog is True
 
 
+def test_standard_dialog_does_not_signal_success_while_dialog_remains_visible():
+    class QuestionNumber:
+        async def click(self, **_kwargs):
+            return None
+
+    class Container:
+        async def query_selector_all(self, _selector):
+            return [QuestionNumber()]
+
+        async def is_visible(self):
+            return True
+
+    class Page:
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        async def query_selector(self, selector):
+            if selector == ".answer":
+                return object()
+            return None
+
+        async def press(self, _selector, _key, **_kwargs):
+            return None
+
+    active_logger = _Logger()
+    result = asyncio.run(
+        questions.handle_standard_dialog(
+            Page(),
+            Container(),
+            query_answer=lambda *_args: (None, False),
+            logger_instance=active_logger,
+        )
+    )
+
+    assert result is False
+    assert any(
+        level == "warn" and "关闭后仍可见" in message
+        for level, message in active_logger.messages
+    )
+
+
+def test_question_extraction_propagates_closed_page():
+    class Page:
+        async def query_selector(self, _selector):
+            raise TargetClosedError("page closed")
+
+    try:
+        asyncio.run(questions._extract_question_title(Page()))
+    except TargetClosedError:
+        pass
+    else:
+        raise AssertionError("TargetClosedError should propagate")
+
+
 def test_wait_for_question_resolution_clears_stale_signal():
     class Page:
         async def query_selector(self, _selector):
