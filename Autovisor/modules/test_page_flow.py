@@ -291,7 +291,7 @@ async def handle_test_page(
             active_logger.info("[手动模式] 请在页面上选择答案")
             is_multiple = "多选" in question_type
             action = await wait_action(page, is_multiple, timeout=180)
-            if action != "closed":
+            if action not in {"closed", "error"}:
                 question["answer_applied"] = await selection_checker(page)
                 if (
                     action in {"next", "option_click", "submit", "timeout"}
@@ -337,7 +337,7 @@ async def handle_test_page(
             elif action == "closed":
                 active_logger.warn("[WARN] 答题页面已关闭，答题流程终止")
                 return False
-            else:
+            elif action == "timeout":
                 active_logger.warn("[手动模式] 超时，自动下一题")
                 if index < total - 1:
                     if not await next_clicker(page):
@@ -347,6 +347,11 @@ async def handle_test_page(
                         return False
                     await page.wait_for_timeout(300)
                 current_index += 1
+            else:
+                active_logger.error(
+                    "[ERROR] 答题页面监听异常，停止答题以防题号错位"
+                )
+                return False
         else:
             active_logger.info("[自动模式] 自动选择答案")
             if answer.strip():

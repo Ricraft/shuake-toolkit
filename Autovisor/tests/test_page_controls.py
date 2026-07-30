@@ -235,6 +235,22 @@ def test_has_selected_answer_uses_current_page_state():
     assert '[contenteditable="true"]' in page.script
 
 
+def test_wait_for_user_action_distinguishes_page_error_from_timeout():
+    class Page:
+        async def evaluate(self, _script):
+            raise RuntimeError("execution context was destroyed")
+
+    result = asyncio.run(
+        controls.wait_for_user_action(
+            Page(),
+            timeout=0.01,
+            poll_interval=0,
+        )
+    )
+
+    assert result == "error"
+
+
 class _FlowPage:
     async def wait_for_load_state(self, _state):
         return None
@@ -459,3 +475,60 @@ def test_manual_answer_stops_cleanly_when_page_is_closed(monkeypatch):
     assert result is False
     assert selection_checks == []
     assert submit_calls == []
+
+
+def test_manual_answer_stops_when_page_listener_fails(monkeypatch):
+    selection_checks = []
+    navigation_calls = []
+    submit_calls = []
+
+    class CaptureLogger(_Logger):
+        def __init__(self):
+            self.errors = []
+
+        def error(self, message, **_kwargs):
+            self.errors.append(message)
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def error_action(*_args, **_kwargs):
+        return "error"
+
+    async def selected(*_args, **_kwargs):
+        selection_checks.append(True)
+        return True
+
+    async def next_page(*_args, **_kwargs):
+        navigation_calls.append(True)
+        return True
+
+    async def submit(*_args, **_kwargs):
+        submit_calls.append(True)
+        return True
+
+    monkeypatch.setattr(task_module, "inject_widget", no_op)
+    monkeypatch.setattr(
+        task_module,
+        "query_question_bank",
+        lambda *_args, **_kwargs: ("A", False),
+    )
+    monkeypatch.setattr(task_module, "wait_for_user_action", error_action)
+    monkeypatch.setattr(task_module, "has_selected_answer", selected)
+    monkeypatch.setattr(task_module, "click_next_button", next_page)
+    monkeypatch.setattr(task_module, "submit_exam", submit)
+
+    logger = CaptureLogger()
+    monkeypatch.setattr(task_module, "logger", logger)
+    result = asyncio.run(
+        task_module.handle_test_page(
+            _FlowPage(),
+            [_manual_question()],
+        )
+    )
+
+    assert result is False
+    assert selection_checks == []
+    assert navigation_calls == []
+    assert submit_calls == []
+    assert any("页面监听异常" in message for message in logger.errors)

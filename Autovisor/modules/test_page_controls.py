@@ -120,7 +120,7 @@ async def wait_for_user_action(
     *,
     poll_interval: float = 0.2,
 ) -> str:
-    """返回 next/prev/option_click/submit/timeout/closed。"""
+    """返回 next/prev/option_click/submit/timeout/closed/error。"""
     try:
         await page.evaluate(
             """
@@ -163,7 +163,7 @@ async def wait_for_user_action(
     except TargetClosedError:
         return "closed"
     except Exception:
-        return "timeout"
+        return "error"
     return "timeout"
 
 
