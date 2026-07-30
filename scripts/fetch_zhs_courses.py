@@ -1,7 +1,10 @@
 import asyncio
 import json
 import random
-from playwright.async_api import async_playwright
+from playwright.async_api import (
+    TimeoutError as PlaywrightTimeoutError,
+    async_playwright,
+)
 import configparser
 import os
 import sys
@@ -40,6 +43,14 @@ EXIT_SAVE = 6
 COURSE_RESPONSE_TIMEOUT_SECONDS = 20
 COURSE_RESPONSE_SETTLE_SECONDS = 0.75
 NOTICE_RESPONSE_GRACE_SECONDS = 2
+SLIDER_VISIBILITY_SELECTORS = (
+    ".yidun_bgimg",
+    "img.yidun_bg-img",
+    "div.yidun_slider",
+)
+SLIDER_DETECTION_TIMEOUT_MS = 3000
+SLIDER_DETECTION_POLL_MS = 250
+SLIDER_RESULT_SETTLE_MS = 750
 
 
 class _ConsoleLogger:
@@ -365,6 +376,48 @@ def gen_movelist(sum_n, steps=30):
     return move_list
 
 
+async def is_slider_visible(page):
+    """Recognize both legacy and current NetEase slider DOM variants."""
+    for selector in SLIDER_VISIBILITY_SELECTORS:
+        locator = page.locator(selector)
+        count = await locator.count()
+        if count == 0:
+            continue
+        if count == 1:
+            if await locator.is_visible():
+                return True
+            continue
+        for item in await locator.all():
+            if await item.is_visible():
+                return True
+    return False
+
+
+async def wait_for_slider_appearance(
+    page,
+    *,
+    timeout_ms=SLIDER_DETECTION_TIMEOUT_MS,
+    poll_ms=SLIDER_DETECTION_POLL_MS,
+):
+    """Give the challenge a bounded window to appear after login submission."""
+    timeout_ms = max(int(timeout_ms), 0)
+    poll_ms = max(int(poll_ms), 1)
+    wait_count = (timeout_ms + poll_ms - 1) // poll_ms
+    attempts = wait_count + 1
+    for attempt in range(attempts):
+        if await is_slider_visible(page):
+            return True
+        if attempt < attempts - 1:
+            await page.wait_for_timeout(poll_ms)
+    return False
+
+
+async def confirm_slider_drag_result(page):
+    """Return success only after the challenge is no longer visible."""
+    await page.wait_for_timeout(SLIDER_RESULT_SETTLE_MS)
+    return not await is_slider_visible(page)
+
+
 async def auto_slider_verify(page, cv2_module=None, np_module=None):
     if not cv2_module or not np_module:
         print("OpenCV未安装，无法自动过滑块验证", flush=True)
@@ -376,8 +429,10 @@ async def auto_slider_verify(page, cv2_module=None, np_module=None):
         try:
             if await page.locator("div.yidun--loading").is_visible():
                 await page.wait_for_selector("div.yidun--loading", state="detached", timeout=5000)
-        except Exception:
-            pass
+        except PlaywrightTimeoutError:
+            print("滑块图片仍在加载，将继续尝试识别", flush=True)
+        except Exception as exc:
+            print(f"检查滑块加载状态失败，将继续尝试: {exc}", flush=True)
 
         bg_url = await page.locator('img.yidun_bg-img').get_attribute('src')
         block_url = await page.locator('img.yidun_jigsaw').get_attribute('src')
@@ -409,7 +464,10 @@ async def auto_slider_verify(page, cv2_module=None, np_module=None):
             await page.mouse.move(box["x"] + sum(move_list[:i]) + 32, box["y"])
         await page.mouse.up()
 
-        print("滑块验证已通过", flush=True)
+        if not await confirm_slider_drag_result(page):
+            print("滑块拖动后验证仍可见，本次自动验证未通过", flush=True)
+            return False
+        print("滑块拖动已完成，等待登录结果", flush=True)
         return True
 
     except Exception as e:
@@ -422,11 +480,7 @@ async def handle_slider_with_retry(page, max_retries=3):
 
     for attempt in range(max_retries):
         try:
-            slider_visible = False
-            try:
-                slider_visible = await page.locator(".yidun_bgimg").is_visible(timeout=3000)
-            except Exception:
-                pass
+            slider_visible = await wait_for_slider_appearance(page)
 
             if slider_visible:
                 print(f"第{attempt + 1}次尝试过滑块验证...", flush=True)
