@@ -357,3 +357,73 @@ def test_learning_loop_limits_repeated_video_load_recovery(monkeypatch):
     assert result is False
     assert page.reloads == 2
     assert any("加载持续失败" in item for item in runtime.logger.errors)
+
+
+def test_learning_loop_propagates_login_redirect_during_recovery(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%"])
+
+    class RedirectedPage(_LearningPage):
+        async def reload(self, **_kwargs):
+            self.reloads += 1
+            self.url = "https://login.zhihuishu.com/?origin=zhs"
+
+    page = RedirectedPage(video_error=3)
+
+    with pytest.raises(CourseAuthenticationError, match="恢复视频页面时"):
+        runtime.asyncio.run(
+            runtime.learning_loop(
+                page,
+                0,
+                clock=lambda: 1,
+                minimum_watch_seconds=0,
+                stuck_timeout=999,
+                health_check_interval=1,
+                position_check_interval=999,
+            )
+        )
+
+    assert page.reloads == 1
+
+
+def test_learning_loop_propagates_closed_page_during_recovery(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%"])
+
+    class ClosedPage(_LearningPage):
+        async def reload(self, **_kwargs):
+            raise TargetClosedError("closed during reload")
+
+    with pytest.raises(TargetClosedError, match="closed during reload"):
+        runtime.asyncio.run(
+            runtime.learning_loop(
+                ClosedPage(video_error=3),
+                0,
+                clock=lambda: 1,
+                minimum_watch_seconds=0,
+                stuck_timeout=999,
+                health_check_interval=1,
+                position_check_interval=999,
+            )
+        )
+
+
+def test_review_loop_propagates_login_redirect(monkeypatch):
+    page = _LearningPage()
+
+    async def video_attr(_page, name):
+        if name == "duration":
+            return 100
+        page.url = "https://www.zhihuishu.com/"
+        return 0
+
+    monkeypatch.setattr(runtime, "get_video_attr", video_attr)
+    monkeypatch.setattr(
+        runtime,
+        "config",
+        SimpleNamespace(
+            limitMaxTime=0,
+            reset_curtime="reset-video",
+        ),
+    )
+
+    with pytest.raises(CourseAuthenticationError, match="复习模式播放期间"):
+        runtime.asyncio.run(runtime.review_loop(page, 0))

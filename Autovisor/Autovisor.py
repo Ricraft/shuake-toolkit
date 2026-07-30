@@ -8,7 +8,6 @@ import traceback
 import sys
 import types
 from typing import Optional
-from urllib.parse import urlsplit
 
 from runtime_bootstrap import activate_runtime_dependencies
 
@@ -42,8 +41,11 @@ from modules.logger import Logger
 from modules.diagnostics import RateLimitedDiagnostics
 from modules.configs import Config
 from modules.course_queue import run_course_queue
-from modules.course_portal import is_login_page
-from modules.course_session import CourseAuthenticationError
+from modules.course_session import (
+    CourseAuthenticationError,
+    ensure_course_authenticated,
+    wait_for_authenticated_selector,
+)
 from modules.hike_course_flow import run_hike_course
 from modules.login_flow import login_to_zhihuishu
 from modules.meeting_course_flow import run_meeting_course
@@ -356,7 +358,12 @@ async def learning_loop(
                     logger.warn(f"视频加载错误(code={video_state['error']})，刷新页面重试", shift=True)
                     try:
                         await page.reload(wait_until="domcontentloaded")
-                        await page.wait_for_selector("video", timeout=15000)
+                        await wait_for_authenticated_selector(
+                            page,
+                            "video",
+                            "恢复视频页面时登录状态失效",
+                            timeout=15000,
+                        )
                         await page.evaluate(config.remove_pause)
                         last_progress = "0%"
                         last_video_position = None
@@ -367,21 +374,18 @@ async def learning_loop(
                             shift=True,
                         )
                         continue
+                    except (CourseAuthenticationError, TargetClosedError):
+                        raise
                     except Exception as reload_e:
                         logger.error(f"刷新页面失败: {str(reload_e)[:50]}", shift=True)
                         break
             
             # P0-2: 每30次循环检查登录态是否过期
             if loop_counter % health_check_interval == 0:
-                current_url = page.url
-                current_host = (urlsplit(current_url).hostname or "").lower()
-                if (
-                    current_host == "www.zhihuishu.com"
-                    or await is_login_page(page)
-                ):
-                    raise CourseAuthenticationError(
-                        "视频播放期间被重定向到首页或登录页"
-                    )
+                await ensure_course_authenticated(
+                    page,
+                    "视频播放期间被重定向到首页或登录页",
+                )
             
             cur_time = await get_course_progress(
                 page,
@@ -409,7 +413,12 @@ async def learning_loop(
                     )
                     try:
                         await page.reload(wait_until="domcontentloaded")
-                        await page.wait_for_selector("video", timeout=15000)
+                        await wait_for_authenticated_selector(
+                            page,
+                            "video",
+                            "恢复视频页面时登录状态失效",
+                            timeout=15000,
+                        )
                         await page.evaluate(config.remove_pause)
                         last_progress = "0%"
                         last_video_position = None
@@ -420,6 +429,8 @@ async def learning_loop(
                             shift=True,
                         )
                         continue
+                    except (CourseAuthenticationError, TargetClosedError):
+                        raise
                     except Exception as reload_e:
                         logger.error(f"刷新页面失败: {str(reload_e)[:50]}", shift=True)
                         break
@@ -484,6 +495,10 @@ async def learning_loop(
             else:
                 logger.warn(repr(e))
 
+    await ensure_course_authenticated(
+        page,
+        "视频播放结束时登录状态失效",
+    )
     completed = cur_time == "100%"
     if not completed:
         logger.warn(f"视频未确认完成，最终进度: {cur_time}", shift=True)
@@ -491,11 +506,13 @@ async def learning_loop(
 
 
 async def review_loop(page: Page, start_time, is_hike_class=False):
+    await ensure_course_authenticated(page, "复习模式启动时登录状态失效")
     total_time = await get_video_attr(page, "duration")
     await page.evaluate(config.reset_curtime)  # 重置视频播放时间
     while True:
         limit_time = config.limitMaxTime
         cur_time = await get_video_attr(page, "currentTime")
+        await ensure_course_authenticated(page, "复习模式播放期间登录状态失效")
         if cur_time >= total_time:
             break
         try:
@@ -515,6 +532,7 @@ async def review_loop(page: Page, start_time, is_hike_class=False):
                 )
             else:
                 logger.warn(repr(e))
+    await ensure_course_authenticated(page, "复习模式结束时登录状态失效")
 
 
 async def working_loop(page: Page, is_new_version=False, is_hike_class=False, is_national_wisdom=False, is_meeting_class=False, course_url=None):
