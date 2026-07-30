@@ -49,6 +49,14 @@ py -m pip install -r requirements.txt
 py -m playwright install chromium
 ```
 
+启动器会检查依赖是否能够实际导入，而不只检查包是否已安装；自动安装后仍无法
+加载（例如本机缺少 DLL）时会在创建 Web 窗口前停止，并提示需要处理的依赖。
+维护或排查环境时也可先运行：
+
+```powershell
+py scripts\install_dependencies.py --check
+```
+
 Autovisor 的验证码二进制依赖可由以下入口准备：
 
 ```powershell

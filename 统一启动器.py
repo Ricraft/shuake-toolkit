@@ -1388,7 +1388,13 @@ def main():
     install_crash_hook(os.path.dirname(os.path.abspath(__file__)))
 
     # 启动时自动检查并安装缺失依赖
-    ensure_core_dependencies()
+    dependency_failures = ensure_core_dependencies()
+    if dependency_failures:
+        raise RuntimeError(
+            "项目依赖未就绪: "
+            + ", ".join(dependency_failures)
+            + "。请运行 `py -m pip install -r requirements.txt` 后重试。"
+        )
     # 重新导入 webview（刚装的包需要重新加载）
     global webview
     if webview is None:

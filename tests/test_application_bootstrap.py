@@ -74,6 +74,37 @@ def test_main_delegates_window_lifecycle_to_bootstrap(monkeypatch):
     assert init_call[1]["webview_module"] is webview
 
 
+def test_main_stops_before_window_when_dependencies_remain_broken(monkeypatch):
+    import 统一启动器 as launcher_module
+
+    calls = []
+    monkeypatch.setattr(
+        launcher_module,
+        "install_crash_hook",
+        lambda _base_dir: calls.append("crash_hook"),
+    )
+    monkeypatch.setattr(
+        launcher_module,
+        "ensure_core_dependencies",
+        lambda: ["playwright>=1.52,<2"],
+    )
+    monkeypatch.setattr(
+        launcher_module,
+        "enable_windows_dpi_awareness",
+        lambda: calls.append("dpi"),
+    )
+    monkeypatch.setattr(
+        launcher_module,
+        "WebApplicationBootstrap",
+        lambda **_kwargs: calls.append("bootstrap"),
+    )
+
+    with pytest.raises(RuntimeError, match="playwright.*requirements.txt"):
+        launcher_module.main()
+
+    assert calls == ["crash_hook"]
+
+
 class FakeLauncher:
     def __init__(self):
         self.attached = []

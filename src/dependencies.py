@@ -45,12 +45,12 @@ def find_missing_dependencies(
     dependencies: Iterable[Dependency],
     import_module: Callable[[str], object] = importlib.import_module,
 ) -> list[str]:
-    """Return requirement strings whose import modules are unavailable."""
+    """Return requirements whose import modules are missing or broken."""
     missing = []
     for dependency in dependencies:
         try:
             import_module(dependency.module)
-        except ImportError:
+        except Exception:
             missing.append(dependency.requirement)
     return missing
 
@@ -60,6 +60,9 @@ def ensure_core_dependencies(
     include_optional: bool = True,
     python_executable: str | None = None,
     index_url: str = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
+    import_module: Callable[[str], object] = importlib.import_module,
+    install: Callable[..., object] = subprocess.check_call,
+    output: Callable[[str], None] = print,
 ) -> list[str]:
     """Install missing launcher dependencies and return failed requirements.
 
@@ -69,29 +72,52 @@ def ensure_core_dependencies(
     ``runtime_deps`` directory instead of being installed into global Python.
     """
     dependencies = CORE_DEPENDENCIES + (OPTIONAL_DEPENDENCIES if include_optional else ())
-    missing = find_missing_dependencies(dependencies)
+    missing = find_missing_dependencies(
+        dependencies,
+        import_module=import_module,
+    )
     if not missing:
         return []
 
     if getattr(sys, "frozen", False):
-        print("[启动器] 打包环境缺少内置依赖，已跳过无效的自安装尝试")
-        print(f"[启动器] 缺失: {', '.join(missing)}")
+        output("[启动器] 打包环境缺少内置依赖，已跳过无效的自安装尝试")
+        output(f"[启动器] 缺失或损坏: {', '.join(missing)}")
         return missing
 
     executable = python_executable or sys.executable
-    print(f"[启动器] 检测到 {len(missing)} 个依赖缺失，正在自动安装...")
-    print(f"[启动器] 待安装: {', '.join(missing)}")
+    output(
+        f"[启动器] 检测到 {len(missing)} 个依赖缺失或损坏，"
+        "正在自动安装..."
+    )
+    output(f"[启动器] 待安装: {', '.join(missing)}")
+    dependency_by_requirement = {
+        dependency.requirement: dependency
+        for dependency in dependencies
+    }
     failures = []
     for requirement in missing:
         try:
-            subprocess.check_call(
+            install(
                 [executable, "-m", "pip", "install", requirement, "-i", index_url],
                 timeout=120,
             )
-            print(f"[启动器] ✓ {requirement} 安装成功")
         except Exception as exc:
             failures.append(requirement)
-            print(f"[启动器] ✗ {requirement} 安装失败: {exc}")
-            print(f"[启动器]   可手动运行: pip install {requirement}")
-    print("[启动器] 依赖检查完成")
+            output(f"[启动器] ✗ {requirement} 安装失败: {exc}")
+            output(f"[启动器]   可手动运行: pip install {requirement}")
+            continue
+
+        importlib.invalidate_caches()
+        dependency = dependency_by_requirement[requirement]
+        try:
+            import_module(dependency.module)
+        except Exception as exc:
+            failures.append(requirement)
+            output(
+                f"[启动器] ✗ {requirement} 安装后仍无法加载: "
+                f"{type(exc).__name__}: {str(exc)[:120]}"
+            )
+            continue
+        output(f"[启动器] ✓ {requirement} 安装并加载成功")
+    output("[启动器] 依赖检查完成")
     return failures

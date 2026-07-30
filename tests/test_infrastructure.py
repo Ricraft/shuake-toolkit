@@ -22,6 +22,7 @@ from src.dependencies import (
     OPTIONAL_DEPENDENCIES,
     WEB_DASHBOARD_DEPENDENCIES,
     Dependency,
+    ensure_core_dependencies,
     find_missing_dependencies,
 )
 from src.launcher_api import WebLauncherAPI
@@ -66,6 +67,71 @@ class InfrastructureTests(unittest.TestCase):
 
         dependencies = [Dependency("available", "a>=1"), Dependency("missing", "b>=2")]
         self.assertEqual(find_missing_dependencies(dependencies, fake_import), ["b>=2"])
+
+    def test_dependency_discovery_treats_broken_binary_import_as_unavailable(self):
+        dependency = Dependency("broken_binary", "broken-binary>=1")
+
+        def fake_import(_name):
+            raise OSError("required DLL could not be loaded")
+
+        self.assertEqual(
+            find_missing_dependencies([dependency], fake_import),
+            ["broken-binary>=1"],
+        )
+
+    def test_dependency_auto_install_rechecks_import_before_success(self):
+        installed_requirements = []
+        messages = []
+
+        def fake_import(_name):
+            if installed_requirements:
+                raise OSError("installed package still cannot load")
+            raise ImportError("missing")
+
+        def fake_install(command, **_kwargs):
+            installed_requirements.append(command[4])
+
+        failures = ensure_core_dependencies(
+            include_optional=False,
+            python_executable="custom-python",
+            import_module=fake_import,
+            install=fake_install,
+            output=messages.append,
+        )
+
+        expected = [dependency.requirement for dependency in CORE_DEPENDENCIES]
+        self.assertEqual(installed_requirements, expected)
+        self.assertEqual(failures, expected)
+        self.assertTrue(any("安装后仍无法加载" in message for message in messages))
+
+    def test_dependency_auto_install_returns_success_only_after_verified_import(self):
+        module_by_requirement = {
+            dependency.requirement: dependency.module
+            for dependency in CORE_DEPENDENCIES
+        }
+        installed_modules = set()
+
+        def fake_import(name):
+            if name not in installed_modules:
+                raise ImportError(name)
+            return object()
+
+        def fake_install(command, **_kwargs):
+            installed_modules.add(module_by_requirement[command[4]])
+
+        failures = ensure_core_dependencies(
+            include_optional=False,
+            python_executable="custom-python",
+            import_module=fake_import,
+            install=fake_install,
+            output=lambda _message: None,
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            installed_modules,
+            {dependency.module for dependency in CORE_DEPENDENCIES},
+        )
 
     def test_requirement_file_matches_launcher_dependency_policy(self):
         project_root = Path(__file__).resolve().parents[1]
