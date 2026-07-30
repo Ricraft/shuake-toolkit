@@ -11,6 +11,7 @@ _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules.hike_course_flow import run_hike_course
+from modules.course_session import CourseAuthenticationError
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -45,8 +46,14 @@ class _Logger:
         self.warnings.append(message)
 
 
+class _EmptyLocator:
+    async def count(self):
+        return 0
+
+
 class _Page:
-    def __init__(self):
+    def __init__(self, url="https://hike.zhihuishu.com/course"):
+        self.url = url
         self.goto_calls = []
         self.timeouts = []
         self.evaluations = []
@@ -63,6 +70,10 @@ class _Page:
 
     async def goto(self, url, wait_until):
         self.goto_calls.append((url, wait_until))
+        self.url = url
+
+    def locator(self, _selector):
+        return _EmptyLocator()
 
 
 def _dependencies(scan_results, *, click_results=None):
@@ -205,3 +216,85 @@ def test_time_limit_stops_before_clicking_next_lesson():
 
     assert calls.clicks == []
     assert logger.infos[-1] == "当前课程已达时限:1min"
+
+
+def test_login_redirect_after_card_click_stops_before_learning():
+    lesson = _lesson("a")
+    calls, dependencies = _dependencies([([lesson], _summary(1, 1))])
+
+    async def close_to_login(page, _logger):
+        page.url = "https://login.zhihuishu.com/?origin=zhs"
+
+    dependencies["close_popup"] = close_to_login
+    page = _Page()
+
+    with pytest.raises(CourseAuthenticationError, match="打开视频后"):
+        asyncio.run(
+            run_hike_course(
+                page,
+                SimpleNamespace(
+                    limitMaxTime=0,
+                    course_urls=["https://hike.zhihuishu.com/course"],
+                    remove_pause="js",
+                ),
+                _Logger(),
+                **dependencies,
+            )
+        )
+
+    assert calls.learns == []
+
+
+def test_login_redirect_while_waiting_for_video_is_not_loose_mode():
+    lesson = _lesson("a")
+    calls, dependencies = _dependencies([([lesson], _summary(1, 1))])
+
+    class _RedirectingPage(_Page):
+        async def wait_for_selector(self, _selector, **_options):
+            self.url = "https://login.zhihuishu.com/?origin=zhs"
+            raise RuntimeError("video missing")
+
+    logger = _Logger()
+    with pytest.raises(CourseAuthenticationError, match="等待视频时"):
+        asyncio.run(
+            run_hike_course(
+                _RedirectingPage(),
+                SimpleNamespace(
+                    limitMaxTime=0,
+                    course_urls=["https://hike.zhihuishu.com/course"],
+                    remove_pause="js",
+                ),
+                logger,
+                **dependencies,
+            )
+        )
+
+    assert calls.learns == []
+    assert not any("宽松等待" in warning for warning in logger.warnings)
+
+
+def test_login_redirect_when_returning_to_list_skips_optimizer_and_rescan():
+    lesson = _lesson("a")
+    calls, dependencies = _dependencies([([lesson], _summary(1, 1))])
+
+    class _RedirectingPage(_Page):
+        async def goto(self, url, wait_until):
+            self.goto_calls.append((url, wait_until))
+            self.url = "https://www.zhihuishu.com/"
+
+    with pytest.raises(CourseAuthenticationError, match="返回课程列表时"):
+        asyncio.run(
+            run_hike_course(
+                _RedirectingPage(),
+                SimpleNamespace(
+                    limitMaxTime=0,
+                    course_urls=["https://hike.zhihuishu.com/course"],
+                    remove_pause="js",
+                ),
+                _Logger(),
+                **dependencies,
+            )
+        )
+
+    assert len(calls.learns) == 1
+    assert calls.optimizes == []
