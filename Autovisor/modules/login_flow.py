@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from modules.course_portal import is_login_url
+from modules.course_portal import is_course_portal_url, is_login_url
 from modules.login_selectors import (
     AUTO_LOGIN_TIMEOUT_MS,
     LOGIN_AGREEMENT_CHECKBOX,
@@ -21,23 +21,34 @@ from modules.login_selectors import (
 from modules.utils import save_cookies
 
 
+async def wait_for_login_destination(page, timeout: int) -> None:
+    """Wait through the authentication gateway until the course portal."""
+    if is_course_portal_url(page.url):
+        return
+
+    try:
+        await page.wait_for_url(
+            lambda url: is_course_portal_url(str(url)),
+            wait_until="commit",
+            timeout=min(timeout, LOGIN_REDIRECT_TIMEOUT_MS),
+        )
+    except PlaywrightTimeoutError as exc:
+        current_url = str(getattr(page, "url", ""))[:120]
+        raise RuntimeError(
+            f"登录跳转未到达智慧树课程门户，当前地址: {current_url}"
+        ) from exc
+    if not is_course_portal_url(page.url):
+        raise RuntimeError("登录跳转结束，但最终地址不是智慧树课程门户")
+
+
 async def wait_for_login_completion(page, timeout: int) -> None:
-    """Wait until the login form and login host have both been left."""
+    """Wait until the login form is left and the course portal is committed."""
     await page.wait_for_selector(
         LOGIN_PANEL,
         state="hidden",
         timeout=timeout,
     )
-    if not is_login_url(page.url):
-        return
-
-    await page.wait_for_url(
-        lambda url: not is_login_url(str(url)),
-        wait_until="commit",
-        timeout=min(timeout, LOGIN_REDIRECT_TIMEOUT_MS),
-    )
-    if is_login_url(page.url):
-        raise RuntimeError("登录表单已隐藏，但页面仍停留在智慧树登录地址")
+    await wait_for_login_destination(page, timeout)
 
 
 async def login_to_zhihuishu(
@@ -64,6 +75,10 @@ async def login_to_zhihuishu(
             timeout=LOGIN_FORM_TIMEOUT_MS,
         )
         if not is_login_url(page.url):
+            await wait_for_login_destination(
+                page,
+                LOGIN_REDIRECT_TIMEOUT_MS,
+            )
             logger.info("检测到已登录,跳过登录步骤.")
             return True
 

@@ -68,18 +68,21 @@ class _Page:
         agreement_count=1,
         agreement_checked=False,
         fail_redirect=False,
+        redirect_url="https://onlineweb.zhihuishu.com/",
     ):
         self.url = url
         self.fail_hidden = fail_hidden
         self.agreement_count = agreement_count
         self.agreement_checked = agreement_checked
         self.fail_redirect = fail_redirect
+        self.redirect_url = redirect_url
         self.goto_calls = []
         self.waits = []
         self.fills = []
         self.clicks = []
         self.checks = []
         self.url_waits = []
+        self.url_predicates = []
 
     async def goto(self, url, **options):
         self.goto_calls.append((url, options))
@@ -91,9 +94,10 @@ class _Page:
 
     async def wait_for_url(self, predicate, **options):
         self.url_waits.append(options)
+        self.url_predicates.append(predicate)
         if self.fail_redirect:
             raise PlaywrightTimeoutError("redirect timeout")
-        self.url = "https://onlineweb.zhihuishu.com/"
+        self.url = self.redirect_url
         assert predicate(self.url)
 
     def locator(self, selector):
@@ -145,6 +149,12 @@ def test_automatic_login_is_bounded_and_saves_cookies_after_success():
     assert page.url_waits == [
         {"wait_until": "commit", "timeout": LOGIN_REDIRECT_TIMEOUT_MS}
     ]
+    assert page.url_predicates[0](
+        "https://onlineservice-api.zhihuishu.com/gateway/f/v1/login/gologin"
+    ) is False
+    assert page.url_predicates[0](
+        "https://onlineweb.zhihuishu.com/"
+    ) is True
     assert saved == [([{"name": "session", "value": "token"}], "account-cookies.json")]
 
 
@@ -272,6 +282,62 @@ def test_existing_authenticated_redirect_skips_the_login_form():
     assert page.waits == []
     assert page.fills == []
     assert page.clicks == []
+
+
+def test_authentication_gateway_waits_for_final_course_portal():
+    page = _Page(
+        url=(
+            "https://onlineservice-api.zhihuishu.com/"
+            "gateway/f/v1/login/gologin"
+        )
+    )
+
+    result = asyncio.run(
+        login_to_zhihuishu(
+            _Context(),
+            page,
+            _config(),
+            _Logger(),
+            cookie_path="cookies.json",
+            cookie_saver=lambda *_args: None,
+        )
+    )
+
+    assert result is True
+    assert page.waits == []
+    assert page.fills == []
+    assert page.url == "https://onlineweb.zhihuishu.com/"
+    assert page.url_waits == [
+        {"wait_until": "commit", "timeout": LOGIN_REDIRECT_TIMEOUT_MS}
+    ]
+
+
+def test_untrusted_redirect_is_not_reported_as_existing_login():
+    page = _Page(
+        url="https://example.com/login-result",
+        fail_redirect=True,
+    )
+    logger = _Logger()
+    saved = []
+
+    result = asyncio.run(
+        login_to_zhihuishu(
+            _Context(),
+            page,
+            _config(),
+            logger,
+            cookie_path="cookies.json",
+            cookie_saver=lambda *args: saved.append(args),
+        )
+    )
+
+    assert result is False
+    assert saved == []
+    assert page.fills == []
+    assert any(
+        "登录跳转未到达智慧树课程门户" in message
+        for message in logger.errors
+    )
 
 
 def test_captcha_handler_runs_only_for_configured_automatic_login():
