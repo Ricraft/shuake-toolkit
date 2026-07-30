@@ -35,6 +35,7 @@ from src.python_runtime import find_python_executable
 from src.question_bank_controller import QuestionBankController
 from src.runtime_coordinator import RuntimeCoordinator
 from src.runtime_process_service import RuntimeProcessService
+from src.scheduled_task_service import ScheduledTaskService
 from src.update_controller import UpdateController
 from src.web_action_service import (
     AUTOVISOR_UPDATE_DISABLED_MESSAGE,
@@ -222,6 +223,19 @@ class UnifiedLauncher:
             coordinator = RuntimeCoordinator(self)
             self._runtime_coordinator = coordinator
         return coordinator
+
+    def _get_scheduled_task_service(self):
+        service = getattr(self, '_scheduled_task_service', None)
+        if service is None:
+            service = ScheduledTaskService(
+                log=getattr(self, 'log_system', lambda _message: None),
+                lock=getattr(self, '_scheduled_timer_lock', None),
+                pending=getattr(self, '_scheduled_timers', None),
+            )
+            self._scheduled_task_service = service
+            self._scheduled_timer_lock = service.lock
+            self._scheduled_timers = service.pending
+        return service
 
     def _get_core_launch_service(self):
         service = getattr(self, '_core_launch_service', None)
@@ -562,8 +576,9 @@ class UnifiedLauncher:
             'practice': False,
         }
         self._runtime_lock = threading.RLock()
-        self._scheduled_timer_lock = threading.RLock()
-        self._scheduled_timers = set()
+        self._scheduled_task_service = ScheduledTaskService(log=self.log_system)
+        self._scheduled_timer_lock = self._scheduled_task_service.lock
+        self._scheduled_timers = self._scheduled_task_service.pending
         self.stop_requested = {
             'yatori': False,
             'autovisor': False,
@@ -634,38 +649,13 @@ class UnifiedLauncher:
         self._after(1400, self._apply_auto_run_preference)
 
     def _after(self, delay_ms, callback):
-        delay_seconds = max(delay_ms, 0) / 1000.0
-        if delay_seconds <= 0:
-            callback()
-            return
-
-        timer = None
-
-        def run_callback():
-            try:
-                callback()
-            finally:
-                with self._scheduled_timer_lock:
-                    self._scheduled_timers.discard(timer)
-
-        timer = threading.Timer(delay_seconds, run_callback)
-        timer.daemon = True
-        with self._scheduled_timer_lock:
-            self._scheduled_timers.add(timer)
-        timer.start()
-        return timer
+        return self._get_scheduled_task_service().schedule(delay_ms, callback)
 
     def _cancel_scheduled_callbacks(self):
-        lock = getattr(self, "_scheduled_timer_lock", None)
-        timers = getattr(self, "_scheduled_timers", None)
-        if lock is None or timers is None:
+        service = getattr(self, '_scheduled_task_service', None)
+        if service is None and not hasattr(self, '_scheduled_timers'):
             return 0
-        with lock:
-            pending = list(timers)
-            timers.clear()
-        for timer in pending:
-            timer.cancel()
-        return len(pending)
+        return self._get_scheduled_task_service().cancel_all()
 
     @property
     def qb_server(self):
