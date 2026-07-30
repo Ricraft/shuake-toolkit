@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from modules.course_portal import is_login_page
+from modules.course_portal import is_course_homepage_url, is_login_page
 from modules.course_types import CourseProfile
 from modules.utils import optimize_page
 
@@ -19,6 +19,33 @@ class CourseNavigationError(RuntimeError):
 
 class CourseAuthenticationError(CourseNavigationError):
     """The course navigation lost authentication and the whole queue must stop."""
+
+
+async def ensure_course_authenticated(page, message: str) -> None:
+    """Raise a fatal course error when navigation fell back to login/home."""
+    if await is_login_page(page) or is_course_homepage_url(
+        getattr(page, "url", "")
+    ):
+        raise CourseAuthenticationError(message)
+
+
+async def wait_for_authenticated_selector(
+    page,
+    selector: str,
+    message: str,
+    **options,
+):
+    """Wait for course UI while preserving authentication failures."""
+    try:
+        result = await page.wait_for_selector(selector, **options)
+    except Exception as exc:
+        try:
+            await ensure_course_authenticated(page, message)
+        except CourseAuthenticationError as auth_error:
+            raise auth_error from exc
+        raise
+    await ensure_course_authenticated(page, message)
+    return result
 
 
 class CourseSession:
@@ -52,8 +79,7 @@ class CourseSession:
         status = getattr(response, "status", None)
         if isinstance(status, int) and status >= 400:
             raise CourseNavigationError(f"课程页面返回 HTTP {status}")
-        if await is_login_page(page):
-            raise CourseAuthenticationError("课程页面重定向到登录页")
+        await ensure_course_authenticated(page, "课程页面重定向到登录页")
         await self.optimizer(
             page,
             config,
@@ -62,8 +88,7 @@ class CourseSession:
             self.profile.is_national_wisdom,
             self.profile.is_meeting_class,
         )
-        if await is_login_page(page):
-            raise CourseAuthenticationError("页面优化期间登录状态失效")
+        await ensure_course_authenticated(page, "页面优化期间登录状态失效")
         logger.info("页面优化完成!")
 
         try:

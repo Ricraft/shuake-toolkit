@@ -8,6 +8,11 @@ import time
 from contextlib import suppress
 from enum import Enum
 
+from modules.course_session import (
+    CourseAuthenticationError,
+    ensure_course_authenticated,
+    wait_for_authenticated_selector,
+)
 from modules.utils import (
     get_filtered_class,
     get_lesson_name,
@@ -126,13 +131,29 @@ async def restore_normal_course_list(
         await page.goto(course_url, wait_until="domcontentloaded")
         logger.info("已返回课程列表页面")
     except Exception as exc:
-        logger.warn(f"返回课程列表失败: {str(exc)[:50]}")
+        try:
+            await ensure_course_authenticated(
+                page,
+                "测验结束后登录状态失效",
+            )
+        except CourseAuthenticationError as auth_error:
+            raise auth_error from exc
+        raise RuntimeError(f"返回课程列表失败: {str(exc)[:100]}") from exc
     await page.wait_for_timeout(2000)
+    await ensure_course_authenticated(page, "返回课程列表时登录状态失效")
     try:
         await optimizer(page, config, is_new_version, False, False, False)
         logger.info("页面优化完成")
     except Exception as exc:
-        logger.warn(f"页面优化失败: {str(exc)[:50]}")
+        try:
+            await ensure_course_authenticated(
+                page,
+                "恢复课程列表时登录状态失效",
+            )
+        except CourseAuthenticationError as auth_error:
+            raise auth_error from exc
+        raise RuntimeError(f"页面优化失败: {str(exc)[:100]}") from exc
+    await ensure_course_authenticated(page, "恢复课程列表时登录状态失效")
 
 
 async def check_normal_course_time_limit(
@@ -182,7 +203,12 @@ async def run_normal_course(
     clock=time.time,
 ) -> None:
     target_course_url = course_url or config.course_urls[0]
-    await page.wait_for_selector(".clearfix.video, .chapter-test", state="attached")
+    await wait_for_authenticated_selector(
+        page,
+        ".clearfix.video, .chapter-test",
+        "普通课列表加载时登录状态失效",
+        state="attached",
+    )
     await page.wait_for_timeout(2000)
     for _ in range(5):
         if not await close_popup(page, logger):
@@ -212,6 +238,7 @@ async def run_normal_course(
             break
 
         await close_popup(page, logger)
+        await ensure_course_authenticated(page, "普通课处理期间登录状态失效")
         all_class = await class_provider(
             page,
             is_new_version,
@@ -226,7 +253,14 @@ async def run_normal_course(
         course = all_class[current_index]
         try:
             course_class = await course.get_attribute("class")
-        except Exception:
+        except Exception as exc:
+            try:
+                await ensure_course_authenticated(
+                    page,
+                    "读取课程列表时登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
             logger.warn("获取课程class属性失败，跳过该课程")
             current_index += 1
             continue
@@ -308,18 +342,36 @@ async def run_normal_course(
         try:
             await course.click()
         except Exception as exc:
+            try:
+                await ensure_course_authenticated(
+                    page,
+                    "点击课时后登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
             logger.warn(f"点击课程失败: {str(exc)[:50]}，跳过该课程")
             current_index += 1
             continue
 
-        await page.wait_for_selector(".current_play", state="attached")
+        await wait_for_authenticated_selector(
+            page,
+            ".current_play",
+            "打开视频后登录状态失效",
+            state="attached",
+        )
         await page.wait_for_timeout(500)
         await close_popup(page, logger)
+        await ensure_course_authenticated(page, "打开视频后登录状态失效")
 
         title = await title_reader(page, False, False)
         logger.info(f"正在学习:{title}")
         page.set_default_timeout(10000)
-        await page.wait_for_selector("video", state="attached")
+        await wait_for_authenticated_selector(
+            page,
+            "video",
+            "等待视频时登录状态失效",
+            state="attached",
+        )
         await page.evaluate(config.remove_pause)
         if learning:
             completed = await learning_loop(
@@ -329,6 +381,7 @@ async def run_normal_course(
                 raise RuntimeError(f"视频未确认完成: {title}")
         else:
             await review_loop(page, start_time, False)
+        await ensure_course_authenticated(page, "视频播放期间登录状态失效")
 
         try:
             if "current_play" in await all_class[current_index].get_attribute("class"):

@@ -16,6 +16,7 @@ from modules.course_session import (
     CourseAuthenticationError,
     CourseNavigationError,
     CourseSession,
+    wait_for_authenticated_selector,
 )
 from modules.course_types import CourseKind, CourseProfile
 
@@ -105,7 +106,7 @@ class _Page:
             return None
         return type("Response", (), {"status": self.response_status})()
 
-    async def wait_for_selector(self, selector, timeout):
+    async def wait_for_selector(self, selector, timeout, **_options):
         self.selector_calls.append((selector, timeout))
         if selector not in self.titles:
             raise PlaywrightTimeoutError(f"missing: {selector}")
@@ -206,6 +207,23 @@ def test_course_session_rejects_login_redirect_before_optimization():
     assert optimized == []
 
 
+def test_course_session_rejects_homepage_redirect_before_optimization():
+    optimized = []
+
+    async def optimizer(*_args):
+        optimized.append(True)
+
+    page = _Page(redirect_url="https://www.zhihuishu.com/")
+    session = CourseSession.from_url(
+        "https://studyvideoh5.zhihuishu.com/course",
+        optimizer=optimizer,
+    )
+
+    with pytest.raises(CourseAuthenticationError, match="重定向到登录页"):
+        asyncio.run(session.open(page, object(), _Logger()))
+    assert optimized == []
+
+
 def test_course_session_rejects_rendered_login_before_url_redirect():
     optimized = []
 
@@ -223,3 +241,38 @@ def test_course_session_rejects_rendered_login_before_url_redirect():
     with pytest.raises(CourseAuthenticationError, match="重定向到登录页"):
         asyncio.run(session.open(page, object(), _Logger()))
     assert optimized == []
+
+
+def test_authenticated_selector_wait_converts_login_timeout_to_fatal_error():
+    page = _Page()
+    page.url = "https://login.zhihuishu.com/?origin=zhs"
+
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="等待课程控件时登录状态失效",
+    ):
+        asyncio.run(
+            wait_for_authenticated_selector(
+                page,
+                ".missing-course-ui",
+                "等待课程控件时登录状态失效",
+                state="attached",
+                timeout=1000,
+            )
+        )
+
+
+def test_authenticated_selector_wait_preserves_non_authentication_timeout():
+    page = _Page()
+    page.url = "https://studyvideoh5.zhihuishu.com/course"
+
+    with pytest.raises(PlaywrightTimeoutError, match="missing"):
+        asyncio.run(
+            wait_for_authenticated_selector(
+                page,
+                ".missing-course-ui",
+                "等待课程控件时登录状态失效",
+                state="attached",
+                timeout=1000,
+            )
+        )

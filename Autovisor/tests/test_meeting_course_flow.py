@@ -15,6 +15,7 @@ from modules.meeting_course_flow import (
     set_meeting_playback_rate,
     start_meeting_video,
 )
+from modules.course_session import CourseAuthenticationError
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -59,8 +60,14 @@ class _Locator:
 
 
 class _Page:
-    def __init__(self, locators=None):
+    def __init__(
+        self,
+        locators=None,
+        *,
+        url="https://lc.zhihuishu.com/course",
+    ):
         self.locators = locators or {}
+        self.url = url
         self.evaluations = []
         self.waits = []
 
@@ -270,3 +277,68 @@ def test_false_learning_result_is_not_reported_as_completed():
 
     assert "视频 '未完成' 已完成！" not in logger.infos
     assert any("未确认完成" in warning for warning in logger.warnings)
+
+
+def test_login_page_stops_before_meeting_video_scan():
+    scanner_calls = []
+
+    async def scanner(_page):
+        scanner_calls.append(True)
+        return []
+
+    with pytest.raises(CourseAuthenticationError, match="见面课扫描时"):
+        asyncio.run(
+            run_meeting_course(
+                _Page(url="https://login.zhihuishu.com/?origin=zhs"),
+                SimpleNamespace(playbackRate=1.5),
+                _Logger(),
+                close_popup=_noop,
+                learning_loop=_noop,
+                scanner=scanner,
+            )
+        )
+
+    assert scanner_calls == []
+
+
+def test_login_redirect_after_video_click_stops_before_preparation():
+    page = _Page()
+    calls = SimpleNamespace(prepares=0, learns=0)
+
+    class _RedirectingVideo:
+        async def click(self, timeout):
+            assert timeout == 5000
+            page.url = "https://www.zhihuishu.com/"
+            raise RuntimeError("detached during redirect")
+
+    async def scanner(_page):
+        return [
+            {
+                "completed": False,
+                "element": _RedirectingVideo(),
+                "title": "待学习",
+                "duration": "1:00",
+            }
+        ]
+
+    async def preparer(*_args, **_kwargs):
+        calls.prepares += 1
+
+    async def learning_loop(*_args):
+        calls.learns += 1
+
+    with pytest.raises(CourseAuthenticationError, match="点击见面课视频后"):
+        asyncio.run(
+            run_meeting_course(
+                page,
+                SimpleNamespace(playbackRate=1.5),
+                _Logger(),
+                close_popup=_noop,
+                learning_loop=learning_loop,
+                scanner=scanner,
+                video_preparer=preparer,
+            )
+        )
+
+    assert calls.prepares == 0
+    assert calls.learns == 0

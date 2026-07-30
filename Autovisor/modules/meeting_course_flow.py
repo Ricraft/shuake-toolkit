@@ -5,6 +5,11 @@ from __future__ import annotations
 
 import time
 
+from modules.course_session import (
+    CourseAuthenticationError,
+    ensure_course_authenticated,
+    wait_for_authenticated_selector,
+)
 from modules.progress import move_mouse_meeting_class
 from modules.utils import scan_meeting_class_videos
 
@@ -154,11 +159,19 @@ async def run_meeting_course(
 ) -> None:
     logger.info("见面课模式：签到进度达到80%即完成签到")
     logger.info("扫描视频列表...")
+    await ensure_course_authenticated(page, "见面课扫描时登录状态失效")
     videos = await scanner(page)
+    await ensure_course_authenticated(page, "见面课扫描后登录状态失效")
 
     if not videos:
         logger.warn("未找到视频列表，尝试直接播放")
-        await page.wait_for_selector("video", state="attached", timeout=15000)
+        await wait_for_authenticated_selector(
+            page,
+            "video",
+            "等待见面课视频时登录状态失效",
+            state="attached",
+            timeout=15000,
+        )
         start_time = clock()
         await video_preparer(
             page,
@@ -167,6 +180,10 @@ async def run_meeting_course(
             close_popup=close_popup,
             set_speed=True,
         )
+        await ensure_course_authenticated(
+            page,
+            "准备见面课视频时登录状态失效",
+        )
         completed = await learning_loop(
             page,
             start_time,
@@ -174,6 +191,10 @@ async def run_meeting_course(
             is_hike_class,
             is_national_wisdom,
             True,
+        )
+        await ensure_course_authenticated(
+            page,
+            "见面课视频播放期间登录状态失效",
         )
         if completed is False:
             raise RuntimeError("见面课视频未确认完成")
@@ -203,10 +224,27 @@ async def run_meeting_course(
             await video["element"].click(timeout=5000)
             await page.wait_for_timeout(2000)
         except Exception as exc:
+            try:
+                await ensure_course_authenticated(
+                    page,
+                    "点击见面课视频后登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
             logger.warn(f"点击视频失败: {str(exc)[:50]}")
             continue
 
-        await page.wait_for_selector("video", state="attached", timeout=15000)
+        await ensure_course_authenticated(
+            page,
+            "点击见面课视频后登录状态失效",
+        )
+        await wait_for_authenticated_selector(
+            page,
+            "video",
+            "等待见面课视频时登录状态失效",
+            state="attached",
+            timeout=15000,
+        )
         start_time = clock()
         should_set_speed = not speed_configured
         speed_applied = await video_preparer(
@@ -215,6 +253,10 @@ async def run_meeting_course(
             logger,
             close_popup=close_popup,
             set_speed=should_set_speed,
+        )
+        await ensure_course_authenticated(
+            page,
+            "准备见面课视频时登录状态失效",
         )
         if should_set_speed and speed_applied:
             speed_configured = True
@@ -226,6 +268,10 @@ async def run_meeting_course(
             is_hike_class,
             is_national_wisdom,
             True,
+        )
+        await ensure_course_authenticated(
+            page,
+            "见面课视频播放期间登录状态失效",
         )
         if completed is False:
             logger.warn(f"视频 '{video['title']}' 未确认完成", shift=True)

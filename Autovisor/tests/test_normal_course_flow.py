@@ -14,8 +14,10 @@ from modules.normal_course_flow import (
     NormalTestOutcome,
     NormalTestSession,
     check_normal_course_time_limit,
+    restore_normal_course_list,
     run_normal_course,
 )
+from modules.course_session import CourseAuthenticationError
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -48,9 +50,10 @@ class _Context:
 
 
 class _Page:
-    def __init__(self, *, wait_forever=False):
+    def __init__(self, *, wait_forever=False, redirect_url=None):
         self.context = _Context(wait_forever=wait_forever)
         self.url = "https://studyvideoh5.zhihuishu.com/course"
+        self.redirect_url = redirect_url
         self.default_timeouts = []
         self.waits = []
         self.evaluations = []
@@ -70,6 +73,7 @@ class _Page:
 
     async def goto(self, url, wait_until):
         self.goto_calls.append((url, wait_until))
+        self.url = self.redirect_url or url
 
     def set_default_timeout(self, timeout):
         self.default_timeouts.append(timeout)
@@ -387,3 +391,63 @@ def test_failed_test_submission_retries_before_advancing():
 
     assert process_calls == 2
     assert any("准备第 2 次尝试" in warning for warning in logger.warnings)
+
+
+def test_restore_course_list_rejects_homepage_redirect_before_optimizer():
+    page = _Page(redirect_url="https://www.zhihuishu.com/")
+    optimized = []
+
+    with pytest.raises(CourseAuthenticationError, match="返回课程列表时"):
+        asyncio.run(
+            restore_normal_course_list(
+                page,
+                SimpleNamespace(),
+                _Logger(),
+                course_url="https://studyvideoh5.zhihuishu.com/course",
+                is_new_version=False,
+                optimizer=lambda *_args: optimized.append(True),
+            )
+        )
+
+    assert optimized == []
+
+
+def test_video_open_login_redirect_stops_before_learning():
+    class _RedirectingPage(_Page):
+        async def wait_for_selector(self, selector, **options):
+            await super().wait_for_selector(selector, **options)
+            if selector == ".current_play":
+                self.url = "https://login.zhihuishu.com/?origin=zhs"
+
+    page = _RedirectingPage()
+    course = _ClickableCourse()
+    learning_calls = []
+
+    async def close_popup(*_args):
+        return False
+
+    async def class_provider(*_args, **_kwargs):
+        return [course]
+
+    with pytest.raises(CourseAuthenticationError, match="打开视频后"):
+        asyncio.run(
+            run_normal_course(
+                page,
+                SimpleNamespace(
+                    remove_pause="js",
+                    course_urls=["course"],
+                    limitMaxTime=0,
+                ),
+                _Logger(),
+                close_popup=close_popup,
+                learning_loop=lambda *_args: learning_calls.append(True),
+                review_loop=None,
+                handler_factory=lambda: _Handler(),
+                answer_handler=None,
+                class_provider=class_provider,
+                test_scanner=lambda *_args: asyncio.sleep(0, result=[]),
+                clock=lambda: 0,
+            )
+        )
+
+    assert learning_calls == []

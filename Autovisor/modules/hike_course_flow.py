@@ -7,8 +7,10 @@ import time
 
 from playwright._impl._errors import TargetClosedError
 
-from modules.course_portal import is_course_homepage_url, is_login_page
-from modules.course_session import CourseAuthenticationError
+from modules.course_session import (
+    CourseAuthenticationError,
+    ensure_course_authenticated,
+)
 from modules.utils import (
     click_card_by_id,
     get_lesson_name,
@@ -73,18 +75,20 @@ async def run_hike_course(
 
         await page.wait_for_timeout(1000)
         await close_popup(page, logger)
-        if await is_login_page(page) or is_course_homepage_url(page.url):
-            raise CourseAuthenticationError("打开视频后登录状态失效")
+        await ensure_course_authenticated(page, "打开视频后登录状态失效")
 
         try:
             current_title = await title_reader(page, True) or title
         except TargetClosedError:
             raise
         except Exception as exc:
-            if await is_login_page(page) or is_course_homepage_url(page.url):
-                raise CourseAuthenticationError(
-                    "读取视频标题时登录状态失效"
-                ) from exc
+            try:
+                await ensure_course_authenticated(
+                    page,
+                    "读取视频标题时登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
             logger.warn(
                 f"读取课程标题失败，继续使用列表标题: {str(exc)[:80]}"
             )
@@ -93,16 +97,18 @@ async def run_hike_course(
 
         try:
             await page.wait_for_selector("video", state="attached", timeout=15000)
-            if await is_login_page(page) or is_course_homepage_url(page.url):
-                raise CourseAuthenticationError("等待视频时登录状态失效")
+            await ensure_course_authenticated(page, "等待视频时登录状态失效")
             await page.evaluate(config.remove_pause)
         except (CourseAuthenticationError, TargetClosedError):
             raise
         except Exception as exc:
-            if await is_login_page(page) or is_course_homepage_url(page.url):
-                raise CourseAuthenticationError(
-                    "等待视频时登录状态失效"
-                ) from exc
+            try:
+                await ensure_course_authenticated(
+                    page,
+                    "等待视频时登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
             logger.warn(
                 f"未及时检测到视频元素,进入宽松等待模式: {str(exc)[:80]}",
                 shift=True,
@@ -118,8 +124,10 @@ async def run_hike_course(
 
         await page.goto(target_course_url, wait_until="domcontentloaded")
         await page.wait_for_timeout(2000)
-        if await is_login_page(page) or is_course_homepage_url(page.url):
-            raise CourseAuthenticationError("返回课程列表时登录状态失效")
+        await ensure_course_authenticated(
+            page,
+            "返回课程列表时登录状态失效",
+        )
         await optimizer(
             page,
             config,
@@ -127,8 +135,10 @@ async def run_hike_course(
             True,
             is_national_wisdom,
         )
-        if await is_login_page(page) or is_course_homepage_url(page.url):
-            raise CourseAuthenticationError("恢复课程列表时登录状态失效")
+        await ensure_course_authenticated(
+            page,
+            "恢复课程列表时登录状态失效",
+        )
         if completed is False:
             raise RuntimeError(f"视频未确认完成: {current_title}")
 
