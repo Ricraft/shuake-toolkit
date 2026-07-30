@@ -28,15 +28,14 @@ from src.course_catalog import CourseCatalogService
 from src.desktop_platform_service import DesktopPlatformService
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
+from src.launcher_startup_service import LauncherStartupService
 from src.process_supervisor import ProcessSupervisor
 from src.preferences_service import PreferencesService
 from src.practice_mode_service import PracticeModeService
 from src.python_runtime import find_python_executable
-from src.question_bank_controller import QuestionBankController
 from src.runtime_coordinator import RuntimeCoordinator
 from src.runtime_process_service import RuntimeProcessService
 from src.scheduled_task_service import ScheduledTaskService
-from src.update_controller import UpdateController
 from src.web_action_service import (
     AUTOVISOR_UPDATE_DISABLED_MESSAGE,
     WebActionService,
@@ -235,6 +234,18 @@ class UnifiedLauncher:
             self._scheduled_task_service = service
             self._scheduled_timer_lock = service.lock
             self._scheduled_timers = service.pending
+        return service
+
+    def _get_launcher_startup_service(self):
+        service = getattr(self, '_launcher_startup_service', None)
+        if service is None:
+            service = LauncherStartupService(
+                self,
+                source_file=__file__,
+                sound_module=winsound,
+                core_manager_factory=CoreManager,
+            )
+            self._launcher_startup_service = service
         return service
 
     def _get_core_launch_service(self):
@@ -590,63 +601,13 @@ class UnifiedLauncher:
         self._last_runtime_event = None
         self.practice_account_id = None
 
-        base_dir = self.get_base_dir()
-        self._desktop_platform_service = DesktopPlatformService(
-            base_dir,
-            __file__,
-            log=self.log_system,
-            get_window=lambda: self.web_window,
-            sound_module=winsound,
-        )
-        self.preferences_path = self.get_preferences_file_path(base_dir)
-        self._preferences_service = PreferencesService(
-            self.preferences_path,
-            log=self.log_system,
-            apply_side_effects=self._handle_preference_side_effects,
-            rollback_side_effects=self._rollback_preference_side_effects,
-        )
-        self.web_preferences = self._preferences_service.values
-        if self.web_preferences.get('autoCleanLogs'):
-            self._clean_old_runtime_logs(base_dir)
-        self.yatori_path = self.find_yatori_path(base_dir)
-        self.autovisor_path = self.find_autovisor_path(base_dir)
-
         self.core_manager = None
         self._shutdown_pending = False
 
-        self._get_autovisor_dependency_manager()
-
-        self.question_bank = QuestionBankController(
-            base_dir,
-            log=self.log_system,
-            on_status_change=self._after_qb_status_update,
-            sync_external_url=self._sync_yatori_question_bank_url,
-        )
-        if self.question_bank.available:
-            self.log_system("[QB] 题库服务器模块已加载")
-        else:
-            self.log_system("[QB] 题库服务器模块未找到，请确保 题库服务器.py 在同目录下")
-
-        initial_autovisor_config = self._load_autovisor_config_data()
-        self.autovisor_multi_mode = len(initial_autovisor_config.get('accounts', [])) > 1
-        if CoreManager:
-            self.core_manager = CoreManager(base_dir, log_callback=self._core_manager_log)
-        self.update_controller = UpdateController(
-            self.core_manager,
-            log=self.log_system,
-            show_info=self._show_info,
-            show_warning=self._show_warning,
-            show_error=self._show_error,
-            is_core_running=lambda core: bool(self.running.get(core)),
-            on_installed=self._handle_core_installed,
-            get_autovisor_version=self._get_autovisor_display_version,
-            schedule=self._after,
-        )
-
+        startup_service = self._get_launcher_startup_service()
+        startup_service.compose()
         self.log_system("统一启动器已就绪")
-        self._after(600, self.auto_start_question_bank)
-        self._after(1000, self.auto_check_cores)
-        self._after(1400, self._apply_auto_run_preference)
+        startup_service.schedule_deferred_tasks()
 
     def _after(self, delay_ms, callback):
         return self._get_scheduled_task_service().schedule(delay_ms, callback)

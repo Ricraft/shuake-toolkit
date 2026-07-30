@@ -10,6 +10,7 @@
 ├─ src/                       # 启动器后端、题库服务、更新与通用基础设施
 │  ├─ application_bootstrap.py # 崩溃日志、WebView 创建和启动失败清理
 │  ├─ launcher_api.py         # pywebview 暴露给前端的最小 API
+│  ├─ launcher_startup_service.py # 启动服务装配与延迟任务声明
 │  ├─ web_settings_service.py # Web 三组配置校验、保存与跨文件回滚
 │  ├─ web_state_service.py    # Web 运行状态一致性快照与局部故障降级
 │  ├─ scheduled_task_service.py # 启动延迟任务的跟踪、异常记录与退出取消
