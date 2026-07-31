@@ -21,6 +21,11 @@
         let pendingBackgroundPreferences = {};
         let backgroundPreferenceSavePromise = null;
         let backgroundPreferenceWarningShown = false;
+        let settingsSaveTail = Promise.resolve();
+        const settingsSaveInFlight = new Map();
+        let settingsSavePendingCount = 0;
+        let settingsSaveRequestSequence = 0;
+        let latestSettingsSaveSequence = 0;
         const PREFERENCES_STORAGE_KEY = 'launcher_preferences_v1';
         const ACHIEVEMENTS = {
             tianyi_theme: {
@@ -799,21 +804,107 @@
             return '';
         }
 
+        function syncSettingsSaveButton() {
+            const button = document.getElementById('btn-save-settings');
+            if (!button) return;
+            if (!button.dataset.idleHtml) {
+                button.dataset.idleHtml = button.innerHTML;
+            }
+            const busy = settingsSavePendingCount > 0;
+            button.disabled = busy;
+            button.innerHTML = busy
+                ? '<i class="fas fa-circle-notch fa-spin"></i> 正在保存...'
+                : button.dataset.idleHtml;
+        }
+
+        async function executeSettingsSave(payload, sequence) {
+            try {
+                const result = await apiCall('save_settings', payload);
+                if (!result?.ok) {
+                    showToast(result?.message || '保存失败', 'error');
+                }
+                return result || { ok: false, message: '保存失败' };
+            } catch (error) {
+                if (!error?.silent) {
+                    showToast(error.message || '保存失败', 'error');
+                }
+                return {
+                    ok: false,
+                    message: error.message || '保存失败',
+                    silent: !!error?.silent,
+                };
+            }
+        }
+
         async function saveSettings(showSuccess = true) {
             captureCurrentConfigTab();
             const msg = validateWebSettingsBeforeSave();
             if (msg) { showToast(msg, 'error'); return { ok: false, message: msg }; }
+            const payload = {
+                yatori: gatherYatoriSettings(),
+                autovisor: gatherAutovisorSettings(),
+                questionbank: gatherQbSettings(),
+            };
+            let key;
             try {
-                const result = await apiCall('save_settings', { yatori: gatherYatoriSettings(), autovisor: gatherAutovisorSettings(), questionbank: gatherQbSettings() });
-                if (result?.ok) {
-                    if (result.state) {
-                        renderSettings(result.state.settings);
+                key = JSON.stringify(payload);
+            } catch (_) {
+                key = `settings-save-${Date.now()}-${settingsSaveRequestSequence + 1}`;
+            }
+
+            let record = settingsSaveInFlight.get(key);
+            if (!record) {
+                const sequence = ++settingsSaveRequestSequence;
+                latestSettingsSaveSequence = sequence;
+                settingsSavePendingCount += 1;
+                syncSettingsSaveButton();
+
+                const promise = settingsSaveTail
+                    .catch(() => {})
+                    .then(() => executeSettingsSave(payload, sequence));
+                settingsSaveTail = promise.catch(() => {});
+                record = {
+                    promise,
+                    sequence,
+                    stateApplied: false,
+                    successToastShown: false,
+                };
+                settingsSaveInFlight.set(key, record);
+                promise.finally(() => {
+                    if (settingsSaveInFlight.get(key) === record) {
+                        settingsSaveInFlight.delete(key);
+                    }
+                    settingsSavePendingCount = Math.max(
+                        0,
+                        settingsSavePendingCount - 1,
+                    );
+                    syncSettingsSaveButton();
+                });
+            }
+            const result = await record.promise;
+            if (result?.ok) {
+                if (result.state) {
+                    if (!record.stateApplied) {
+                        record.stateApplied = true;
+                        if (
+                            record.sequence === latestSettingsSaveSequence
+                            && result.state.settings
+                        ) {
+                            renderSettings(result.state.settings);
+                        }
                         applyRuntimeState(unwrapState(result));
                     }
-                    if (showSuccess) showToast(result?.message || '配置已保存', 'success');
-                } else { showToast(result?.message || '保存失败', 'error'); }
-                return result;
-            } catch (error) { if (!error?.silent) showToast(error.message || '保存失败', 'error'); return { ok: false, message: error.message || '保存失败', silent: !!error?.silent }; }
+                }
+                if (
+                    showSuccess
+                    && !record.successToastShown
+                    && record.sequence === latestSettingsSaveSequence
+                ) {
+                    record.successToastShown = true;
+                    showToast(result?.message || '配置已保存', 'success');
+                }
+            }
+            return result;
         }
 
         async function cancelShutdown() {
