@@ -9,10 +9,13 @@
         let initInFlight = false;
         let initialized = false;
         let preferencesHydrated = false;
+        let initialPreferenceLoadPending = true;
         let initRetryTimer = null;
         let runtimeRefreshInFlight = false;
         let runtimeRequestSequence = 0;
         let runtimeAppliedSequence = 0;
+        let preferenceRequestSequence = 0;
+        let preferenceAppliedSequence = 0;
         let currentBgType = 'none';
         let lastObservedRuntimeEventKey = null;
         let pendingBackgroundPreferences = {};
@@ -1488,38 +1491,124 @@
         function loadStoredPreferences() { try { const raw = localStorage.getItem(PREFERENCES_STORAGE_KEY); if (!raw) return {}; const parsed = JSON.parse(raw); return parsed && typeof parsed === 'object' ? parsed : {}; } catch (e) { return {}; } }
         function persistStoredPreferences() { try { localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(state.preferences || {})); } catch (e) {} }
 
-        function loadPreferences() {
-            state.preferences = { autoStart: false, autoShutdown: false, autoRun: false, minimizeToTray: false, startMinimized: false, alwaysOnTop: false, notifyOnComplete: true, notifyOnError: true, soundEnabled: true, rememberGeometry: false, autoCleanLogs: false, theme: 'dark', bgType: 'none', bgUrl: '', tianyiThemeUnlocked: false, tianyiAchievementShown: false, tianyiChatHistory: [], achievements: {}, achievementResetToken: 0, ...loadStoredPreferences() };
-            normalizeAchievementStore();
-            const set = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
-            set('pref-auto-start', state.preferences.autoStart);
-            set('pref-auto-shutdown', state.preferences.autoShutdown);
-            set('pref-auto-run', state.preferences.autoRun);
-            set('pref-minimize-tray', state.preferences.minimizeToTray);
-            set('pref-start-minimized', state.preferences.startMinimized);
-            set('pref-always-on-top', state.preferences.alwaysOnTop);
-            set('pref-notify-complete', state.preferences.notifyOnComplete);
-            set('pref-notify-error', state.preferences.notifyOnError);
-            set('pref-sound-enabled', state.preferences.soundEnabled);
-            set('pref-remember-geometry', state.preferences.rememberGeometry);
-            set('pref-auto-clean-logs', state.preferences.autoCleanLogs);
+        const PREFERENCE_CONTROL_IDS = {
+            autoStart: 'pref-auto-start',
+            autoShutdown: 'pref-auto-shutdown',
+            autoRun: 'pref-auto-run',
+            minimizeToTray: 'pref-minimize-tray',
+            startMinimized: 'pref-start-minimized',
+            alwaysOnTop: 'pref-always-on-top',
+            notifyOnComplete: 'pref-notify-complete',
+            notifyOnError: 'pref-notify-error',
+            soundEnabled: 'pref-sound-enabled',
+            rememberGeometry: 'pref-remember-geometry',
+            autoCleanLogs: 'pref-auto-clean-logs',
+        };
+
+        function syncPreferenceControls(preferences = state.preferences) {
+            Object.entries(PREFERENCE_CONTROL_IDS).forEach(([key, id]) => {
+                const input = document.getElementById(id);
+                if (input) input.checked = !!preferences?.[key];
+            });
+        }
+
+        function markLocalPreferenceMutation() {
+            const requestId = ++preferenceRequestSequence;
+            preferenceAppliedSequence = requestId;
+            return requestId;
+        }
+
+        function applyRemotePreferences(
+            preferences,
+            requestId = null,
+            { refreshUi = true } = {},
+        ) {
+            if (!preferences || typeof preferences !== 'object') return false;
+            const effectiveId = requestId ?? ++preferenceRequestSequence;
+            if (effectiveId < preferenceAppliedSequence) return false;
+            preferenceAppliedSequence = effectiveId;
+            mergePreferencesWithAchievements(preferences);
+            preferencesHydrated = true;
+            persistStoredPreferences();
+            if (!refreshUi) return true;
+            syncPreferenceControls();
             syncTianyiThemeUnlockUI();
             updateAchievementSummary();
             applySavedTheme();
             applySavedBg();
-            try { apiCall('get_preferences').then(prefs => { if (prefs && typeof prefs === 'object') { mergePreferencesWithAchievements(prefs); preferencesHydrated = true; set('pref-auto-start', prefs.autoStart); set('pref-auto-shutdown', prefs.autoShutdown); set('pref-auto-run', prefs.autoRun); set('pref-minimize-tray', prefs.minimizeToTray); set('pref-start-minimized', prefs.startMinimized); set('pref-always-on-top', prefs.alwaysOnTop); set('pref-notify-complete', prefs.notifyOnComplete); set('pref-notify-error', prefs.notifyOnError); set('pref-sound-enabled', prefs.soundEnabled); set('pref-remember-geometry', prefs.rememberGeometry); set('pref-auto-clean-logs', prefs.autoCleanLogs); persistStoredPreferences(); syncTianyiThemeUnlockUI(); updateAchievementSummary(); applySavedTheme(); applySavedBg(); if (document.getElementById('view-tianyi')?.classList.contains('active')) { tianyiState.chatLoaded = false; initTianyiPage(); } } }).catch(() => {}); } catch (e) {}
+            if (document.getElementById('view-tianyi')?.classList.contains('active')) {
+                tianyiState.chatLoaded = false;
+                initTianyiPage();
+            }
+            return true;
         }
 
-        async function savePreference(key, value) { const previous = state.preferences[key]; state.preferences[key] = value; persistStoredPreferences(); if (!bridge()) { showToast('后端未连接，偏好仅临时保存在当前页面', 'warning'); return { ok: false, localOnly: true }; } try { const result = await apiCall('save_preference', { [key]: value }); if (!result?.ok) throw new Error(result?.message||'偏好设置保存失败'); if (result.preferences) mergePreferencesWithAchievements(result.preferences); persistStoredPreferences(); return result; } catch (error) { state.preferences[key] = previous; persistStoredPreferences(); const ids = { autoStart:'pref-auto-start', autoShutdown:'pref-auto-shutdown', autoRun:'pref-auto-run', minimizeToTray:'pref-minimize-tray', startMinimized:'pref-start-minimized', alwaysOnTop:'pref-always-on-top', notifyOnComplete:'pref-notify-complete', notifyOnError:'pref-notify-error', soundEnabled:'pref-sound-enabled', rememberGeometry:'pref-remember-geometry', autoCleanLogs:'pref-auto-clean-logs' }; const input = document.getElementById(ids[key]); if (input) input.checked = !!previous; if (!error?.silent) showToast(error?.message||'偏好设置保存失败', 'error'); return { ok: false, message: error?.message||'偏好设置保存失败' }; } }
+        function loadPreferences() {
+            const fetchRemote = !initialPreferenceLoadPending;
+            initialPreferenceLoadPending = false;
+            state.preferences = { autoStart: false, autoShutdown: false, autoRun: false, minimizeToTray: false, startMinimized: false, alwaysOnTop: false, notifyOnComplete: true, notifyOnError: true, soundEnabled: true, rememberGeometry: false, autoCleanLogs: false, theme: 'dark', bgType: 'none', bgUrl: '', tianyiThemeUnlocked: false, tianyiAchievementShown: false, tianyiChatHistory: [], achievements: {}, achievementResetToken: 0, ...loadStoredPreferences() };
+            normalizeAchievementStore();
+            syncPreferenceControls();
+            syncTianyiThemeUnlockUI();
+            updateAchievementSummary();
+            applySavedTheme();
+            applySavedBg();
+            if (!fetchRemote) return;
+            const requestId = ++preferenceRequestSequence;
+            apiCall('get_preferences')
+                .then(preferences => applyRemotePreferences(
+                    preferences,
+                    requestId,
+                ))
+                .catch(() => {});
+        }
+
+        async function savePreference(key, value) {
+            const previous = state.preferences[key];
+            state.preferences[key] = value;
+            const requestId = markLocalPreferenceMutation();
+            persistStoredPreferences();
+            if (!bridge()) {
+                showToast('后端未连接，偏好仅临时保存在当前页面', 'warning');
+                return { ok: false, localOnly: true };
+            }
+            try {
+                const result = await apiCall('save_preference', { [key]: value });
+                if (!result?.ok) throw new Error(result?.message || '偏好设置保存失败');
+                if (result.preferences) {
+                    applyRemotePreferences(result.preferences, requestId);
+                }
+                return result;
+            } catch (error) {
+                state.preferences[key] = previous;
+                persistStoredPreferences();
+                syncPreferenceControls();
+                const input = document.getElementById(PREFERENCE_CONTROL_IDS[key]);
+                if (input) input.checked = !!previous;
+                if (!error?.silent) {
+                    showToast(error?.message||'偏好设置保存失败', 'error');
+                }
+                return {
+                    ok: false,
+                    message: error?.message || '偏好设置保存失败',
+                };
+            }
+        }
 
         async function savePreferenceSilent(key, value) {
             state.preferences[key] = value;
+            const requestId = markLocalPreferenceMutation();
             persistStoredPreferences();
             if (!bridge()) return { ok: false, localOnly: true };
             try {
                 const result = await apiCall('save_preference', { [key]: value });
-                if (result?.preferences) mergePreferencesWithAchievements(result.preferences);
-                persistStoredPreferences();
+                if (result?.preferences) {
+                    applyRemotePreferences(
+                        result.preferences,
+                        requestId,
+                        { refreshUi: false },
+                    );
+                }
                 return result || { ok: true };
             } catch (e) {
                 return { ok: false, message: e?.message || '保存失败' };
@@ -1566,10 +1655,13 @@
                     message: '偏好设置格式无效',
                 });
             }
-            pendingBackgroundPreferences = {
-                ...pendingBackgroundPreferences,
-                ...payload,
-            };
+            if (Object.keys(payload).length) {
+                markLocalPreferenceMutation();
+                pendingBackgroundPreferences = {
+                    ...pendingBackgroundPreferences,
+                    ...payload,
+                };
+            }
             if (!backgroundPreferenceSavePromise) {
                 backgroundPreferenceSavePromise = Promise.resolve()
                     .then(flushBackgroundPreferenceSaves)
@@ -1791,21 +1883,10 @@
 
         async function hydratePreferencesBeforeTianyiUnlock() {
             if (preferencesHydrated || !bridge()) return;
+            const requestId = ++preferenceRequestSequence;
             try {
                 const prefs = await apiCall('get_preferences');
-                if (prefs && typeof prefs === 'object') {
-                    mergePreferencesWithAchievements(prefs);
-                    preferencesHydrated = true;
-                    persistStoredPreferences();
-                    syncTianyiThemeUnlockUI();
-                    updateAchievementSummary();
-                    applySavedTheme();
-                    applySavedBg();
-                    if (document.getElementById('view-tianyi')?.classList.contains('active')) {
-                        tianyiState.chatLoaded = false;
-                        initTianyiPage();
-                    }
-                }
+                applyRemotePreferences(prefs, requestId);
             } catch (e) {}
         }
 
@@ -1860,7 +1941,7 @@
             window.resetTianyiUnlock = resetTianyiThemeUnlockForTest;
         }
 
-        function setTheme(theme) {
+        function setTheme(theme, { persist = true } = {}) {
             const root = document.documentElement;
             const normalized = theme === 'tianyi' ? 'tianyi' : (theme === 'light' ? 'light' : 'dark');
             if (normalized === 'tianyi' && !isTianyiThemeUnlocked()) {
@@ -1871,8 +1952,10 @@
             else root.setAttribute('data-theme', normalized);
             state.preferences.theme = normalized;
             updateThemeIcons();
-            persistStoredPreferences();
-            savePreferencesInBackground({ theme: normalized });
+            if (persist) {
+                persistStoredPreferences();
+                savePreferencesInBackground({ theme: normalized });
+            }
         }
 
         function updateThemeIcons() {
@@ -1894,9 +1977,11 @@
         function applySavedTheme() {
             const s = state.preferences?.theme;
             if (s === 'tianyi') {
-                if (isTianyiThemeUnlocked()) setTheme('tianyi');
-                else setTheme('light');
-            } else if (s === 'light' || s === 'dark') setTheme(s);
+                if (isTianyiThemeUnlocked()) setTheme('tianyi', { persist: false });
+                else setTheme('light', { persist: false });
+            } else if (s === 'light' || s === 'dark') {
+                setTheme(s, { persist: false });
+            }
             else updateThemeIcons();
         }
 
@@ -2261,17 +2346,13 @@
             }
             initInFlight = true;
             const requestId = ++runtimeRequestSequence;
+            const preferenceRequestId = ++preferenceRequestSequence;
             try {
                 const payload = await apiCall('get_initial_state');
-                if (payload.preferences && typeof payload.preferences === 'object') {
-                    mergePreferencesWithAchievements(payload.preferences);
-                    preferencesHydrated = true;
-                    persistStoredPreferences();
-                    syncTianyiThemeUnlockUI();
-                    updateAchievementSummary();
-                    applySavedTheme();
-                    applySavedBg();
-                }
+                applyRemotePreferences(
+                    payload.preferences,
+                    preferenceRequestId,
+                );
                 if (payload.settings) renderSettings(payload.settings);
                 if (payload.runtime) applyRuntimeState(payload.runtime, requestId);
                 initialized = true;
