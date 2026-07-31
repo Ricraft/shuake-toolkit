@@ -232,6 +232,7 @@ def test_video_is_learned_and_returns_to_course_list():
 
     async def learning_loop(*args):
         learn_calls.append(args)
+        return True
 
     asyncio.run(
         run_national_course(
@@ -254,7 +255,10 @@ def test_video_is_learned_and_returns_to_course_list():
     assert is_course_list_url(page.url, _config().course_urls[0])
 
 
-def test_false_video_result_returns_to_list_then_fails_course():
+@pytest.mark.parametrize("learning_result", [False, None])
+def test_unconfirmed_video_result_returns_to_list_then_fails_course(
+    learning_result,
+):
     card = _video_card()
 
     async def scanner(_page):
@@ -267,7 +271,7 @@ def test_false_video_result_returns_to_list_then_fails_course():
         return True
 
     async def failed_learning(*_args):
-        return False
+        return learning_result
 
     with pytest.raises(RuntimeError, match="视频未确认完成"):
         asyncio.run(

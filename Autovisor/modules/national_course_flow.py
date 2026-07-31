@@ -297,7 +297,7 @@ async def run_national_course(
         lesson_elapsed = (clock() - lesson_start) / 60
         logger.write_log(f'"{title}" 本课学习用时: {lesson_elapsed:.1f}min\n')
         await return_to_course_list(page, course_url, logger)
-        if completed is False:
+        if completed is not True:
             raise RuntimeError(f"视频未确认完成: {title}")
         navigation.mark_attempted(lesson_key)
         logger.info("视频播放完成，已返回课程列表", shift=True)

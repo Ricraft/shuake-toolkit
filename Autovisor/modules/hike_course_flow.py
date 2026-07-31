@@ -139,7 +139,7 @@ async def run_hike_course(
             page,
             "恢复课程列表时登录状态失效",
         )
-        if completed is False:
+        if completed is not True:
             raise RuntimeError(f"视频未确认完成: {current_title}")
 
         refreshed_lessons, _summary = await scanner(page)

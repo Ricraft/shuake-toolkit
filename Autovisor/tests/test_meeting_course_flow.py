@@ -163,6 +163,7 @@ def test_no_video_list_uses_direct_player_flow():
 
     async def learning_loop(_page, start_time, *flags):
         calls.learns.append((start_time, flags))
+        return True
 
     config = SimpleNamespace(playbackRate=1.5)
     asyncio.run(
@@ -222,6 +223,7 @@ def test_speed_is_configured_on_first_successfully_opened_video():
 
     async def learning_loop(*_args):
         calls.learns += 1
+        return True
 
     logger = _Logger()
     with pytest.raises(RuntimeError, match="仍有 1 个视频"):
@@ -245,7 +247,10 @@ def test_speed_is_configured_on_first_successfully_opened_video():
     assert logger.warnings[-1] == "本轮完成 1/2 个视频，仍有 1 个未确认完成"
 
 
-def test_false_learning_result_is_not_reported_as_completed():
+@pytest.mark.parametrize("learning_result", [False, None])
+def test_unconfirmed_learning_result_is_not_reported_as_completed(
+    learning_result,
+):
     element = _VideoElement()
 
     async def scanner(_page):
@@ -259,7 +264,7 @@ def test_false_learning_result_is_not_reported_as_completed():
         ]
 
     async def failed_learning(*_args):
-        return False
+        return learning_result
 
     logger = _Logger()
     with pytest.raises(RuntimeError, match="仍有 1 个视频"):

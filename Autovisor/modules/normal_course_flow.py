@@ -377,7 +377,7 @@ async def run_normal_course(
             completed = await learning_loop(
                 page, start_time, is_new_version, False, False, False
             )
-            if completed is False:
+            if completed is not True:
                 raise RuntimeError(f"视频未确认完成: {title}")
         else:
             await review_loop(page, start_time, False)

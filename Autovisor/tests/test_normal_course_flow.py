@@ -241,7 +241,10 @@ def test_empty_normal_course_list_finishes_cleanly():
     assert logger.infos[-1] == "本页课程列表已遍历完毕。"
 
 
-def test_false_video_result_is_not_advanced_as_completed():
+@pytest.mark.parametrize("learning_result", [False, None])
+def test_unconfirmed_video_result_is_not_advanced_as_completed(
+    learning_result,
+):
     page = _Page()
     course = _ClickableCourse()
 
@@ -255,7 +258,7 @@ def test_false_video_result_is_not_advanced_as_completed():
         return []
 
     async def failed_learning(*_args):
-        return False
+        return learning_result
 
     async def title_reader(*_args):
         return "未完成视频"

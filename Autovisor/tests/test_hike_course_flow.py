@@ -97,6 +97,7 @@ def _dependencies(scan_results, *, click_results=None):
 
     async def learning_loop(_page, start_time, *flags):
         calls.learns.append((start_time, flags))
+        return True
 
     async def optimizer(_page, _config, *flags):
         calls.optimizes.append(flags)
@@ -175,12 +176,15 @@ def test_click_failure_skips_lesson_without_starting_learning():
     assert logger.warnings == ["未能定位卡片:课程-a, 本轮跳过."]
 
 
-def test_false_learning_result_fails_course_after_returning_to_list():
+@pytest.mark.parametrize("learning_result", [False, None])
+def test_unconfirmed_learning_result_fails_course_after_returning_to_list(
+    learning_result,
+):
     lesson = _lesson("a")
     calls, dependencies = _dependencies([([lesson], _summary(1, 1))])
 
     async def failed_learning(*_args):
-        return False
+        return learning_result
 
     dependencies["learning_loop"] = failed_learning
     page = _Page()

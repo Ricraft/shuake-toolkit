@@ -196,7 +196,7 @@ async def run_meeting_course(
             page,
             "见面课视频播放期间登录状态失效",
         )
-        if completed is False:
+        if completed is not True:
             raise RuntimeError("见面课视频未确认完成")
         logger.info("见面课已完成！", shift=True)
         return
@@ -273,7 +273,7 @@ async def run_meeting_course(
             page,
             "见面课视频播放期间登录状态失效",
         )
-        if completed is False:
+        if completed is not True:
             logger.warn(f"视频 '{video['title']}' 未确认完成", shift=True)
             continue
         completed_this_run += 1
