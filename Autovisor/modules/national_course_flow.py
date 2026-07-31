@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import time
-from urllib.parse import urlsplit
 
 from playwright._impl._errors import TargetClosedError
 
-from modules.course_portal import is_course_homepage_url, is_login_page
+from modules.course_portal import (
+    is_course_homepage_url,
+    is_course_list_url,
+    is_login_page,
+)
 from modules.course_session import CourseAuthenticationError
 from modules.lesson_navigation import (
     LessonNavigationState,
@@ -23,16 +26,6 @@ from modules.utils import (
     get_lesson_name,
     scan_national_wisdom_cards,
 )
-
-
-def is_course_list_url(current_url: str, course_url: str) -> bool:
-    current = urlsplit(current_url)
-    target = urlsplit(course_url)
-    return (
-        (current.hostname or "").lower() == (target.hostname or "").lower()
-        and current.path.rstrip("/") == target.path.rstrip("/")
-    )
-
 
 async def return_to_course_list(page, course_url, logger) -> None:
     try:

@@ -7,6 +7,14 @@ import asyncio
 from contextlib import suppress
 from enum import Enum
 
+from playwright._impl._errors import TargetClosedError
+
+from modules.course_portal import is_course_list_url
+from modules.course_session import (
+    CourseAuthenticationError,
+    ensure_course_authenticated,
+)
+
 
 START_BUTTON_SELECTOR = (
     "button:has-text('开始做题'), button:has-text('开始做'), "
@@ -97,16 +105,43 @@ class NationalTestSession:
             self.logger.info("测验处理后 force reload 清理CDP状态", shift=True)
             await self.page.reload(wait_until="domcontentloaded")
             await self.page.wait_for_timeout(1500)
-            if "study/index" not in self.page.url and "wisdom-mooc" not in self.page.url:
+            await ensure_course_authenticated(
+                self.page,
+                "测验结束后登录状态失效",
+            )
+            if not is_course_list_url(self.page.url, self.course_url):
                 await self.page.goto(self.course_url, wait_until="domcontentloaded")
                 await self.page.wait_for_timeout(1500)
+            await ensure_course_authenticated(
+                self.page,
+                "恢复课程列表时登录状态失效",
+            )
+            if not is_course_list_url(self.page.url, self.course_url):
+                raise RuntimeError(
+                    f"恢复后地址仍不是课程列表: {self.page.url[:100]}"
+                )
+        except (CourseAuthenticationError, TargetClosedError):
+            raise
         except Exception as reload_error:
             self.logger.write_log(f"测验页 reload 失败，改用课程地址恢复: {reload_error}\n")
             try:
                 await self.page.goto(self.course_url, wait_until="domcontentloaded")
                 await self.page.wait_for_timeout(1500)
+                await ensure_course_authenticated(
+                    self.page,
+                    "恢复课程列表时登录状态失效",
+                )
+                if not is_course_list_url(self.page.url, self.course_url):
+                    raise RuntimeError(
+                        f"恢复后地址仍不是课程列表: {self.page.url[:100]}"
+                    )
+            except (CourseAuthenticationError, TargetClosedError):
+                raise
             except Exception as goto_error:
                 self.logger.warn(f"返回课程列表失败: {goto_error}", shift=True)
+                raise RuntimeError(
+                    f"返回课程列表失败: {goto_error}"
+                ) from goto_error
 
     async def process(self) -> NationalTestOutcome:
         try:

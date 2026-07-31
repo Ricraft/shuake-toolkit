@@ -10,6 +10,7 @@ import pytest
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
+from modules.course_session import CourseAuthenticationError
 from modules.national_test_flow import NationalTestOutcome, NationalTestSession
 
 sys.path.remove(_AUTOVISOR_ROOT)
@@ -43,6 +44,9 @@ class _Button:
     async def click(self, timeout):
         self.clicked = True
 
+    async def is_visible(self):
+        return False
+
 
 class _Context:
     def __init__(self, new_page=None):
@@ -57,10 +61,23 @@ class _Context:
 
 
 class _Page:
-    def __init__(self, url, *, new_page=None, reload_error=None, button_count=0):
+    def __init__(
+        self,
+        url,
+        *,
+        new_page=None,
+        reload_error=None,
+        reload_url=None,
+        goto_error=None,
+        goto_url=None,
+        button_count=0,
+    ):
         self.url = url
         self.context = _Context(new_page)
         self.reload_error = reload_error
+        self.reload_url = reload_url
+        self.goto_error = goto_error
+        self.goto_url = goto_url
         self.button = _Button(button_count)
         self.load_states = []
         self.goto_calls = []
@@ -77,10 +94,14 @@ class _Page:
         self.reload_calls.append(wait_until)
         if self.reload_error:
             raise self.reload_error
+        if self.reload_url:
+            self.url = self.reload_url
 
     async def goto(self, url, wait_until):
         self.goto_calls.append((url, wait_until))
-        self.url = url
+        if self.goto_error:
+            raise self.goto_error
+        self.url = self.goto_url or url
 
     async def wait_for_timeout(self, _timeout):
         return None
@@ -214,6 +235,66 @@ def test_restore_falls_back_to_course_url_when_reload_fails():
     asyncio.run(session.restore_course_list())
 
     assert page.goto_calls == [(course_url, "domcontentloaded")]
+
+
+def test_restore_rejects_login_redirect_after_reload():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    page = _Page(
+        course_url,
+        reload_url="https://passport.zhihuishu.com/login",
+    )
+    session = NationalTestSession(
+        page, course_url, _Logger(), _Handler(), lambda *_args, **_kwargs: None
+    )
+
+    with pytest.raises(CourseAuthenticationError, match="登录状态失效"):
+        asyncio.run(session.restore_course_list())
+
+    assert page.goto_calls == []
+
+
+def test_restore_rejects_wrong_address_after_fallback():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    page = _Page(
+        "https://exam.zhihuishu.com/test",
+        reload_error=RuntimeError("reload failed"),
+        goto_url="https://exam.zhihuishu.com/still-here",
+    )
+    logger = _Logger()
+    session = NationalTestSession(
+        page, course_url, logger, _Handler(), lambda *_args, **_kwargs: None
+    )
+
+    with pytest.raises(RuntimeError, match="返回课程列表失败"):
+        asyncio.run(session.restore_course_list())
+
+    assert any("地址仍不是课程列表" in message for message in logger.warnings)
+
+
+def test_process_does_not_hide_course_restore_failure():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    page = _Page(
+        course_url,
+        reload_error=RuntimeError("reload failed"),
+        goto_error=RuntimeError("goto failed"),
+    )
+    handler = _Handler([{"id": 1}])
+
+    async def answer_handler(*_args, **_kwargs):
+        return True
+
+    session = NationalTestSession(
+        page, course_url, _Logger(), handler, answer_handler
+    )
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(RuntimeError, match="返回课程列表失败"):
+        asyncio.run(run_session())
+
+    assert handler.removed is True
 
 
 def test_cancel_removes_listener_and_cancels_page_waiter():

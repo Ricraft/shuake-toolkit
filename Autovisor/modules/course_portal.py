@@ -53,6 +53,16 @@ def is_course_homepage_url(url: str) -> bool:
     return (urlsplit(url).hostname or "").lower().rstrip(".") == "www.zhihuishu.com"
 
 
+def is_course_list_url(current_url: str, course_url: str) -> bool:
+    """Compare a current address with its course-list address by host and path."""
+    current = urlsplit(current_url)
+    target = urlsplit(course_url)
+    return (
+        (current.hostname or "").lower() == (target.hostname or "").lower()
+        and current.path.rstrip("/") == target.path.rstrip("/")
+    )
+
+
 async def is_login_page(page) -> bool:
     """Recognize login state from either the current URL or rendered login DOM."""
     if is_login_url(getattr(page, "url", "")):
