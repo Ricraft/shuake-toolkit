@@ -292,7 +292,13 @@ async def handle_test_page(
             is_multiple = "多选" in question_type
             action = await wait_action(page, is_multiple, timeout=180)
             if action not in {"closed", "error"}:
-                question["answer_applied"] = await selection_checker(page)
+                selection_state = await selection_checker(page)
+                if selection_state is None:
+                    active_logger.error(
+                        "[ERROR] 无法确认当前题作答状态，停止答题以防题号错位"
+                    )
+                    return False
+                question["answer_applied"] = bool(selection_state)
                 if (
                     action in {"next", "option_click", "submit", "timeout"}
                     and not question["answer_applied"]

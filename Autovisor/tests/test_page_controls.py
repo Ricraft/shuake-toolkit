@@ -131,6 +131,34 @@ def test_click_prev_button_reports_real_click_success():
     assert page.locator_instance.clicked is True
 
 
+def test_prev_button_fallback_uses_valid_playwright_text_engine():
+    class Page:
+        keyboard = _FailingKeyboard()
+
+        def __init__(self):
+            self.selectors = []
+
+        async def evaluate(self, _script):
+            return {
+                "href": "https://example.test/exam",
+                "question": "第二题",
+                "active": "2",
+            }
+
+        def locator(self, selector):
+            self.selectors.append(selector)
+            return _EmptyLocator()
+
+    page = Page()
+    result = asyncio.run(
+        controls.click_prev_button(page, logger_instance=_Logger())
+    )
+
+    assert result is False
+    assert "text=上一题" in page.selectors
+    assert all(not selector.startswith("text*=") for selector in page.selectors)
+
+
 def test_next_click_without_question_change_is_not_reported_as_success():
     class Keyboard:
         def __init__(self):
@@ -340,6 +368,88 @@ def test_has_selected_answer_uses_current_page_state():
     assert result is True
     assert 'input[type="radio"]' in page.script
     assert '[contenteditable="true"]' in page.script
+
+
+def test_has_selected_answer_returns_unknown_on_page_error():
+    class Page:
+        async def evaluate(self, _script):
+            raise RuntimeError("selection context destroyed")
+
+    result = asyncio.run(controls.has_selected_answer(Page()))
+
+    assert result is None
+
+
+def test_submit_exam_does_not_accept_disappearing_button_as_completion():
+    class DisappearingSubmit(_SubmitLocator):
+        async def click(self, **_kwargs):
+            self.clicked = True
+            self._count = 0
+            self._visible = False
+
+    page = _SubmitPage()
+    page.submit = DisappearingSubmit(count=1, visible=True)
+
+    result = asyncio.run(
+        controls.submit_exam(page, logger_instance=_Logger())
+    )
+
+    assert page.submit.clicked is True
+    assert result is False
+
+
+def test_submit_exam_reports_completion_probe_errors():
+    class BrokenResult(_SubmitLocator):
+        async def count(self):
+            raise RuntimeError("result probe failed")
+
+    class CaptureLogger(_Logger):
+        def __init__(self):
+            self.warnings = []
+
+        def warn(self, message, **_kwargs):
+            self.warnings.append(message)
+
+    page = _SubmitPage()
+    page.result = BrokenResult()
+    active_logger = CaptureLogger()
+
+    result = asyncio.run(
+        controls.submit_exam(page, logger_instance=active_logger)
+    )
+
+    assert result is False
+    assert any(
+        "result probe failed" in message
+        for message in active_logger.warnings
+    )
+
+
+def test_submission_completion_keeps_text_engines_out_of_css_groups():
+    class Page:
+        url = "https://example.test/exam"
+
+        def __init__(self):
+            self.selectors = []
+
+        def is_closed(self):
+            return False
+
+        def locator(self, selector):
+            self.selectors.append(selector)
+            if "," in selector and "text" in selector:
+                raise RuntimeError("invalid mixed selector")
+            if selector == "text='提交成功'":
+                return _SubmitLocator(count=1, visible=True)
+            return _SubmitLocator()
+
+    page = Page()
+    result = asyncio.run(
+        controls._submission_completed(page, page.url)
+    )
+
+    assert result is True
+    assert page.selectors[1] == "text='提交成功'"
 
 
 def test_wait_for_user_action_distinguishes_page_error_from_timeout():
@@ -639,3 +749,57 @@ def test_manual_answer_stops_when_page_listener_fails(monkeypatch):
     assert navigation_calls == []
     assert submit_calls == []
     assert any("页面监听异常" in message for message in logger.errors)
+
+
+def test_manual_answer_stops_when_selection_state_is_unknown(monkeypatch):
+    navigation_calls = []
+    submit_calls = []
+
+    class CaptureLogger(_Logger):
+        def __init__(self):
+            self.errors = []
+
+        def error(self, message, **_kwargs):
+            self.errors.append(message)
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def next_action(*_args, **_kwargs):
+        return "next"
+
+    async def unknown_selection(*_args, **_kwargs):
+        return None
+
+    async def next_page(*_args, **_kwargs):
+        navigation_calls.append(True)
+        return True
+
+    async def submit(*_args, **_kwargs):
+        submit_calls.append(True)
+        return True
+
+    monkeypatch.setattr(task_module, "inject_widget", no_op)
+    monkeypatch.setattr(
+        task_module,
+        "query_question_bank",
+        lambda *_args, **_kwargs: ("A", False),
+    )
+    monkeypatch.setattr(task_module, "wait_for_user_action", next_action)
+    monkeypatch.setattr(task_module, "has_selected_answer", unknown_selection)
+    monkeypatch.setattr(task_module, "click_next_button", next_page)
+    monkeypatch.setattr(task_module, "submit_exam", submit)
+
+    logger = CaptureLogger()
+    monkeypatch.setattr(task_module, "logger", logger)
+    result = asyncio.run(
+        task_module.handle_test_page(
+            _FlowPage(),
+            [_manual_question()],
+        )
+    )
+
+    assert result is False
+    assert navigation_calls == []
+    assert submit_calls == []
+    assert any("无法确认当前题作答状态" in message for message in logger.errors)

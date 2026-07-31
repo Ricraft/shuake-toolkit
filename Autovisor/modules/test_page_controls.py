@@ -89,8 +89,8 @@ _QUESTION_NAVIGATION_MARKER_JS = """
 """
 
 
-async def has_selected_answer(page: Page) -> bool:
-    """判断当前可见题目是否存在真实选中或填写的答案。"""
+async def has_selected_answer(page: Page) -> bool | None:
+    """返回当前题作答状态；页面异常时返回 None，禁止按未作答继续推进。"""
     try:
         return bool(
             await page.evaluate(
@@ -146,9 +146,9 @@ async def has_selected_answer(page: Page) -> bool:
             )
         )
     except TargetClosedError:
-        return False
+        return None
     except Exception:
-        return False
+        return None
 
 
 async def wait_for_page_option_click(
@@ -246,7 +246,7 @@ async def click_prev_button(page: Page, *, logger_instance=None) -> bool:
         page,
         (
             "text='上一题'",
-            "text*='上一题'",
+            "text=上一题",
             ".prev-btn",
             "button:has-text('上一题')",
             ".exam-btn-prev",
@@ -684,37 +684,28 @@ async def _click_question_navigation(
         return False
 
 
-async def _submission_completed(page: Page, submit_button, original_url: str) -> bool:
-    try:
-        if page.is_closed():
-            return True
-    except Exception:
-        pass
-    try:
-        if original_url and page.url != original_url:
-            return True
-    except Exception:
-        pass
-    try:
-        result = page.locator(
-            ".exam-result, .result-page, .score-page, .answer-result, "
-            "text='提交成功', text*='考试成绩', text*='作业成绩'"
-        ).first
+async def _submission_completed(page: Page, original_url: str) -> bool:
+    """只接受页面关闭、地址变化或明确结果元素，不使用按钮消失作证。"""
+    if page.is_closed():
+        return True
+    if original_url and page.url != original_url:
+        return True
+    for selector in (
+        ".exam-result, .result-page, .score-page, .answer-result, "
+        ".success-page, .el-message--success, .el-notification--success, "
+        "[data-status='submitted']",
+        "text='提交成功'",
+        "text=考试成绩",
+        "text=作业成绩",
+    ):
+        result = page.locator(selector).first
         if await result.count() > 0 and await result.is_visible():
             return True
-    except Exception:
-        pass
-    try:
-        if await submit_button.count() == 0 or not await submit_button.is_visible():
-            return True
-    except Exception:
-        pass
     return False
 
 
 async def _wait_for_submission_completion(
     page: Page,
-    submit_button,
     original_url: str,
     *,
     attempts: int = 30,
@@ -722,7 +713,7 @@ async def _wait_for_submission_completion(
 ) -> bool:
     """Poll bounded page evidence so slow submissions are not retried early."""
     for attempt in range(max(1, attempts)):
-        if await _submission_completed(page, submit_button, original_url):
+        if await _submission_completed(page, original_url):
             return True
         if attempt < attempts - 1:
             await page.wait_for_timeout(poll_interval_ms)
@@ -767,7 +758,6 @@ async def submit_exam(page: Page, *, logger_instance=None) -> bool:
 
         if not await _wait_for_submission_completion(
             page,
-            submit_button,
             original_url,
         ):
             active_logger.warn("[FAIL] 未检测到交卷完成状态")
