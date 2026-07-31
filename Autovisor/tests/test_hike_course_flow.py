@@ -245,6 +245,57 @@ def test_default_card_clicker_accepts_deep_scan_metadata():
     assert result is False
 
 
+def test_login_page_stops_hike_before_scanner_runs():
+    scanner_calls = 0
+
+    async def scanner(_page):
+        nonlocal scanner_calls
+        scanner_calls += 1
+        return [], _summary(0, 0)
+
+    with pytest.raises(CourseAuthenticationError, match="扫描时"):
+        asyncio.run(
+            run_hike_course(
+                _Page("https://login.zhihuishu.com/"),
+                SimpleNamespace(
+                    limitMaxTime=0,
+                    course_urls=["course"],
+                    remove_pause="js",
+                ),
+                _Logger(),
+                close_popup=lambda *_args: asyncio.sleep(0),
+                learning_loop=lambda *_args: asyncio.sleep(0, result=True),
+                scanner=scanner,
+            )
+        )
+
+    assert scanner_calls == 0
+
+
+def test_login_redirect_during_hike_scan_is_fatal():
+    page = _Page()
+
+    async def scanner(work_page):
+        work_page.url = "https://login.zhihuishu.com/"
+        return [], _summary(0, 0)
+
+    with pytest.raises(CourseAuthenticationError, match="扫描后"):
+        asyncio.run(
+            run_hike_course(
+                page,
+                SimpleNamespace(
+                    limitMaxTime=0,
+                    course_urls=["course"],
+                    remove_pause="js",
+                ),
+                _Logger(),
+                close_popup=lambda *_args: asyncio.sleep(0),
+                learning_loop=lambda *_args: asyncio.sleep(0, result=True),
+                scanner=scanner,
+            )
+        )
+
+
 @pytest.mark.parametrize("learning_result", [False, None])
 def test_unconfirmed_learning_result_fails_course_after_returning_to_list(
     learning_result,

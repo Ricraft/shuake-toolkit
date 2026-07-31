@@ -12,7 +12,10 @@ from modules.course_portal import (
     is_course_list_url,
     is_login_page,
 )
-from modules.course_session import CourseAuthenticationError
+from modules.course_session import (
+    CourseAuthenticationError,
+    ensure_course_authenticated,
+)
 from modules.lesson_navigation import (
     LessonNavigationState,
     SelectionReason,
@@ -104,7 +107,15 @@ async def run_national_course(
             raise RuntimeError(message)
 
         await close_popup(page, logger)
+        await ensure_course_authenticated(
+            page,
+            "全国共享课扫描时登录状态失效",
+        )
         all_cards, summary, is_in_iframe = await scanner(page)
+        await ensure_course_authenticated(
+            page,
+            "全国共享课扫描后登录状态失效",
+        )
         pending_lessons = pending_course_cards(all_cards)
         logger.info(
             f"整页统计: 总卡片 {summary['total']} | 未完成 {summary['pending']} | 已完成 {summary['done']}",

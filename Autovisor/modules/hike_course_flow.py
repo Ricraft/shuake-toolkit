@@ -40,7 +40,15 @@ async def run_hike_course(
     logger.info("开始运行时滚动扫描... (智慧共享课)", shift=True)
     empty_scan_count = 0
     while True:
+        await ensure_course_authenticated(
+            page,
+            "翻转课扫描时登录状态失效",
+        )
         pending_lessons, summary = await scanner(page)
+        await ensure_course_authenticated(
+            page,
+            "翻转课扫描后登录状态失效",
+        )
         logger.info(
             f"整页统计: 总卡片 {summary['total']} | 未完成 {summary['pending']} | 已完成 {summary['done']}",
             shift=True,
@@ -165,7 +173,15 @@ async def run_hike_course(
             raise RuntimeError(f"视频未确认完成: {current_title}")
 
         completed_card_ids.add(card_id)
+        await ensure_course_authenticated(
+            page,
+            "翻转课重新扫描时登录状态失效",
+        )
         refreshed_lessons, _summary = await scanner(page)
+        await ensure_course_authenticated(
+            page,
+            "翻转课重新扫描后登录状态失效",
+        )
         unresolved_lessons = [
             item
             for item in refreshed_lessons
@@ -175,7 +191,15 @@ async def run_hike_course(
             logger.info("所有课程已完成!", shift=True)
             return
 
+    await ensure_course_authenticated(
+        page,
+        "翻转课最终扫描时登录状态失效",
+    )
     refreshed_lessons, _summary = await scanner(page)
+    await ensure_course_authenticated(
+        page,
+        "翻转课最终扫描后登录状态失效",
+    )
     unresolved_lessons = [
         item
         for item in refreshed_lessons

@@ -179,6 +179,53 @@ def test_empty_scan_reports_failure_after_configured_limit():
     assert logger.warnings[-1] == "连续 2 次未检测到课程卡片，无法确认课程列表"
 
 
+def test_login_page_stops_national_course_before_scanner_runs():
+    scanner_calls = 0
+
+    async def scanner(_page):
+        nonlocal scanner_calls
+        scanner_calls += 1
+        return [], _summary(0, 0), False
+
+    with pytest.raises(CourseAuthenticationError, match="扫描时"):
+        asyncio.run(
+            run_national_course(
+                _Page("https://login.zhihuishu.com/"),
+                _config(),
+                _Logger(),
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+            )
+        )
+
+    assert scanner_calls == 0
+
+
+def test_login_redirect_during_national_scan_is_fatal():
+    page = _Page(_config().course_urls[0])
+
+    async def scanner(work_page):
+        work_page.url = "https://login.zhihuishu.com/"
+        return [], _summary(0, 0), False
+
+    with pytest.raises(CourseAuthenticationError, match="扫描后"):
+        asyncio.run(
+            run_national_course(
+                page,
+                _config(),
+                _Logger(),
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+            )
+        )
+
+
 def test_broken_card_reports_failure_after_limited_click_retries():
     card = _video_card()
 
