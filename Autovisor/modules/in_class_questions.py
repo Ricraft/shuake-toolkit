@@ -20,80 +20,57 @@ logger = Logger()
 
 async def _extract_question_title(page: Page) -> str:
     """从普通随堂题弹窗提取当前题目。"""
-    try:
-        title_element = await page.query_selector(".topic-title")
-        if title_element:
-            text = await title_element.text_content()
-            return text.strip() if text else ""
-    except TargetClosedError:
-        raise
-    except Exception:
-        pass
+    title_element = await page.query_selector(".topic-title")
+    if title_element:
+        text = (await title_element.text_content() or "").strip()
+        if text:
+            return text
     for selector in (".subject-title", ".question-title", ".el-dialog__body"):
-        try:
-            element = await page.query_selector(selector)
-            if element:
-                text = await element.text_content()
-                return text.strip()[:500] if text else ""
-        except TargetClosedError:
-            raise
-        except Exception:
-            continue
+        element = await page.query_selector(selector)
+        if element:
+            text = (await element.text_content() or "").strip()
+            if text:
+                return text[:500]
     return ""
 
 
 async def _extract_options(page: Page) -> list[str]:
     """从普通随堂题弹窗提取选项。"""
     options = []
-    try:
-        for item in await page.query_selector_all(".topic-item"):
-            text = await item.text_content()
-            if text:
-                options.append(text.strip())
-    except TargetClosedError:
-        raise
-    except Exception:
-        pass
+    for item in await page.query_selector_all(".topic-item"):
+        text = await item.text_content()
+        if text:
+            options.append(text.strip())
     return options
 
 
 async def _extract_wisdom_question(page_or_dialog) -> str:
     """从全国智慧课随堂练习提取题目。"""
-    try:
-        question = page_or_dialog.locator(".question-info").first
-        if await question.count() > 0:
-            text = await question.text_content()
-            return text.strip() if text else ""
-    except TargetClosedError:
-        raise
-    except Exception:
-        pass
+    question = page_or_dialog.locator(".question-info").first
+    if await question.count() > 0:
+        text = await question.text_content()
+        return text.strip() if text else ""
     return ""
 
 
 async def _extract_wisdom_options(page_or_dialog) -> list[str]:
     """从全国智慧课随堂练习提取带字母的选项。"""
     options = []
-    try:
-        items = page_or_dialog.locator(".option")
-        for index in range(await items.count()):
-            item = items.nth(index)
-            letter_element = item.locator(".class-question-select").first
-            answer_element = item.locator(".answer").first
-            letter = ""
-            answer = ""
-            if await letter_element.count() > 0:
-                letter = (await letter_element.text_content() or "").strip()
-            if await answer_element.count() > 0:
-                answer = (await answer_element.text_content() or "").strip()
-            if not answer:
-                answer = (await item.text_content() or "").strip()
-            if answer:
-                options.append(f"{letter}. {answer}" if letter else answer)
-    except TargetClosedError:
-        raise
-    except Exception:
-        pass
+    items = page_or_dialog.locator(".option")
+    for index in range(await items.count()):
+        item = items.nth(index)
+        letter_element = item.locator(".class-question-select").first
+        answer_element = item.locator(".answer").first
+        letter = ""
+        answer = ""
+        if await letter_element.count() > 0:
+            letter = (await letter_element.text_content() or "").strip()
+        if await answer_element.count() > 0:
+            answer = (await answer_element.text_content() or "").strip()
+        if not answer:
+            answer = (await item.text_content() or "").strip()
+        if answer:
+            options.append(f"{letter}. {answer}" if letter else answer)
     return options
 
 
@@ -181,14 +158,20 @@ async def _dismiss_wisdom_dialog(page: Page, dialog, active_logger) -> bool:
                 return True
     except TargetClosedError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        active_logger.warn(
+            "智慧课 - 关闭按钮操作失败，尝试 Escape: %s"
+            % str(exc)[:60]
+        )
     try:
         await page.keyboard.press("Escape")
         await page.wait_for_timeout(300)
     except TargetClosedError:
         raise
-    except Exception:
+    except Exception as exc:
+        active_logger.warn(
+            "智慧课 - Escape 关闭弹窗失败: %s" % str(exc)[:60]
+        )
         return False
     return not await _dialog_visible(dialog)
 

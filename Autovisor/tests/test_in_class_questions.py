@@ -4,6 +4,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -298,6 +300,103 @@ def test_question_extraction_propagates_closed_page():
         pass
     else:
         raise AssertionError("TargetClosedError should propagate")
+
+
+def test_standard_extraction_propagates_unknown_page_errors():
+    class Page:
+        async def query_selector(self, _selector):
+            raise RuntimeError("title context destroyed")
+
+        async def query_selector_all(self, _selector):
+            raise RuntimeError("options context destroyed")
+
+    with pytest.raises(RuntimeError, match="title context destroyed"):
+        asyncio.run(questions._extract_question_title(Page()))
+
+    with pytest.raises(RuntimeError, match="options context destroyed"):
+        asyncio.run(questions._extract_options(Page()))
+
+
+def test_wisdom_extraction_propagates_unknown_locator_errors():
+    class BrokenLocator:
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            raise RuntimeError("wisdom context destroyed")
+
+    class Dialog:
+        def locator(self, _selector):
+            return BrokenLocator()
+
+    with pytest.raises(RuntimeError, match="wisdom context destroyed"):
+        asyncio.run(questions._extract_wisdom_question(Dialog()))
+
+    with pytest.raises(RuntimeError, match="wisdom context destroyed"):
+        asyncio.run(questions._extract_wisdom_options(Dialog()))
+
+def test_listener_keeps_video_blocked_when_question_extraction_fails(
+    monkeypatch,
+):
+    class QuestionNumber:
+        async def click(self, **_kwargs):
+            return None
+
+    class Container:
+        async def query_selector_all(self, _selector):
+            return [QuestionNumber()]
+
+    class Page:
+        url = "https://study.zhihuishu.com/learning/videoList"
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        async def wait_for_load_state(self, _state):
+            return None
+
+        async def wait_for_selector(self, *_args, **_kwargs):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                return Container()
+            raise TargetClosedError("page closed")
+
+        async def query_selector(self, selector):
+            if selector == ".answer":
+                return None
+            if selector == ".topic-title":
+                raise RuntimeError("question DOM unavailable")
+            return None
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(questions.asyncio, "sleep", no_sleep)
+    event = asyncio.Event()
+    event.set()
+    query_calls = []
+    active_logger = _Logger()
+
+    asyncio.run(
+        questions.skip_questions(
+            Page(),
+            event,
+            query_answer=lambda *_args: query_calls.append(True),
+            logger_instance=active_logger,
+            poll_interval=0,
+        )
+    )
+
+    assert not event.is_set()
+    assert query_calls == []
+    assert any(
+        level == "warn" and "question DOM unavailable" in message
+        for level, message in active_logger.messages
+    )
 
 
 def test_wait_for_question_resolution_clears_stale_signal():
