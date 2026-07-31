@@ -26,6 +26,12 @@
         let settingsSavePendingCount = 0;
         let settingsSaveRequestSequence = 0;
         let latestSettingsSaveSequence = 0;
+        let qbSettingsSaveTail = Promise.resolve();
+        const qbSettingsSaveInFlight = new Map();
+        let qbSettingsSavePendingCount = 0;
+        let qbSettingsSaveRequestSequence = 0;
+        let latestQbSettingsSaveSequence = 0;
+        let qbSettingsStatusResetTimer = null;
         const PREFERENCES_STORAGE_KEY = 'launcher_preferences_v1';
         const ACHIEVEMENTS = {
             tianyi_theme: {
@@ -1535,28 +1541,98 @@
              syncQbAiField();
          }
 
-         async function saveQbSettings() {
-             try {
-                 const settings = gatherQbSettings();
-                 const result = await apiCall('save_qb_settings', settings);
-                 return result;
-             } catch (error) {
-                 if (!error?.silent) showToast('题库设置保存失败: ' + (error.message || ''), 'error');
-                 return { ok: false };
-             }
+         function cancelPendingQbAutoSave() {
+             if (!window._qbSaveTimer) return;
+             clearTimeout(window._qbSaveTimer);
+             window._qbSaveTimer = null;
          }
 
-         async function autoSaveQbSettings() {
-              // 防抖：等待输入停止后再保存
-              if (window._qbSaveTimer) clearTimeout(window._qbSaveTimer);
-              const statusEl = document.getElementById('qb-save-status');
-              if (statusEl) statusEl.textContent = '正在保存...';
-              window._qbSaveTimer = setTimeout(async () => {
-                  const result = await saveQbSettings();
-                  if (statusEl) statusEl.textContent = result?.ok ? '已自动保存' : '保存失败';
-                  setTimeout(() => { if (statusEl && statusEl.textContent === '已自动保存') statusEl.textContent = 'AI配置将自动保存'; }, 3000);
-              }, 800);
-          }
+         function syncQbSettingsSaveButton() {
+             const button = document.getElementById('qb-save-btn');
+             if (button) button.disabled = qbSettingsSavePendingCount > 0;
+         }
+
+         function setQbSettingsSaveStatus(message, sequence, reset = false) {
+             if (sequence !== latestQbSettingsSaveSequence) return;
+             const statusEl = document.getElementById('qb-save-status');
+             if (!statusEl) return;
+             if (qbSettingsStatusResetTimer) {
+                 clearTimeout(qbSettingsStatusResetTimer);
+                 qbSettingsStatusResetTimer = null;
+             }
+             statusEl.textContent = message;
+             if (!reset) return;
+             qbSettingsStatusResetTimer = setTimeout(() => {
+                 if (sequence === latestQbSettingsSaveSequence && statusEl.textContent === message) {
+                     statusEl.textContent = 'AI配置将自动保存';
+                 }
+                 qbSettingsStatusResetTimer = null;
+             }, 3000);
+         }
+
+         async function saveQbSettings(options = {}) {
+             const source = options.source || 'manual';
+             const sequence = Number.isInteger(options.requestSequence)
+                 ? options.requestSequence
+                 : ++qbSettingsSaveRequestSequence;
+             latestQbSettingsSaveSequence = Math.max(latestQbSettingsSaveSequence, sequence);
+             if (source !== 'auto') cancelPendingQbAutoSave();
+
+             const settings = gatherQbSettings();
+             const key = JSON.stringify(settings);
+             let record = qbSettingsSaveInFlight.get(key);
+             if (!record) {
+                 qbSettingsSavePendingCount += 1;
+                 syncQbSettingsSaveButton();
+                 const promise = qbSettingsSaveTail
+                     .then(() => apiCall('save_qb_settings', settings))
+                     .catch(error => ({
+                         ok: false,
+                         message: error?.message || '题库设置保存失败',
+                         silent: !!error?.silent,
+                     }))
+                     .finally(() => {
+                         if (qbSettingsSaveInFlight.get(key) === record) {
+                             qbSettingsSaveInFlight.delete(key);
+                         }
+                         qbSettingsSavePendingCount = Math.max(0, qbSettingsSavePendingCount - 1);
+                         syncQbSettingsSaveButton();
+                     });
+                 record = { promise };
+                 qbSettingsSaveInFlight.set(key, record);
+                 qbSettingsSaveTail = promise.then(() => {}, () => {});
+             }
+
+             const result = await record.promise;
+             if (sequence === latestQbSettingsSaveSequence) {
+                 const successText = source === 'auto' ? '已自动保存' : '配置已保存';
+                 setQbSettingsSaveStatus(
+                     result?.ok ? successText : '保存失败',
+                     sequence,
+                     !!result?.ok,
+                 );
+             }
+             return result;
+         }
+
+         async function manualSaveQbSettings() {
+             const result = await saveQbSettings();
+             if (result?.ok) showToast('题库配置已保存', 'success');
+             else if (!result?.silent) showToast(result?.message || '题库设置保存失败', 'error');
+             return result;
+         }
+
+         function autoSaveQbSettings() {
+             // 防抖开始时就登记新序号，阻止较早的慢响应覆盖当前状态。
+             cancelPendingQbAutoSave();
+             const sequence = ++qbSettingsSaveRequestSequence;
+             latestQbSettingsSaveSequence = sequence;
+             setQbSettingsSaveStatus('正在保存...', sequence);
+             window._qbSaveTimer = setTimeout(() => {
+                 window._qbSaveTimer = null;
+                 void saveQbSettings({ source: 'auto', requestSequence: sequence });
+             }, 800);
+         }
 
         function syncAutovisorMulti(checked) {
             const toggle = document.getElementById('dashboard-autovisor-multi');

@@ -958,7 +958,7 @@
                                         <span class="qb-action-desc">从文件恢复题库</span>
                                     </div>
                                 </button>
-                                <button class="qb-action-btn" onclick="saveQbSettings().then(r => r?.ok && showToast('题库配置已保存', 'success'))">
+                                <button class="qb-action-btn" id="qb-save-btn" onclick="manualSaveQbSettings()">
                                     <div class="qb-action-icon qb-action-save">
                                         <i class="fas fa-save"></i>
                                     </div>
