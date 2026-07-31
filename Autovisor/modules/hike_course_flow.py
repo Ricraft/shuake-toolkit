@@ -34,20 +34,35 @@ async def run_hike_course(
     title_reader=get_lesson_name,
     optimizer=optimize_page,
     clock=time.time,
+    empty_scan_limit: int = 3,
 ) -> None:
     """执行一次智慧共享课扫描，保持原有页面操作顺序。"""
     logger.info("开始运行时滚动扫描... (智慧共享课)", shift=True)
-    pending_lessons, summary = await scanner(page)
-    logger.info(
-        f"整页统计: 总卡片 {summary['total']} | 未完成 {summary['pending']} | 已完成 {summary['done']}",
-        shift=True,
-    )
-    if summary["sections"]:
-        top_sections = [
-            f"{section}:{stats['pending']}/{stats['total']}"
-            for section, stats in summary["sections"].items()
-        ]
-        logger.info(f"分组统计: {' | '.join(top_sections[:6])}")
+    empty_scan_count = 0
+    while True:
+        pending_lessons, summary = await scanner(page)
+        logger.info(
+            f"整页统计: 总卡片 {summary['total']} | 未完成 {summary['pending']} | 已完成 {summary['done']}",
+            shift=True,
+        )
+        if summary["sections"]:
+            top_sections = [
+                f"{section}:{stats['pending']}/{stats['total']}"
+                for section, stats in summary["sections"].items()
+            ]
+            logger.info(f"分组统计: {' | '.join(top_sections[:6])}")
+        if summary["total"] > 0:
+            break
+        empty_scan_count += 1
+        if empty_scan_count >= empty_scan_limit:
+            message = (
+                f"连续 {empty_scan_count} 次未检测到翻转课卡片，"
+                "无法确认课程列表"
+            )
+            logger.warn(message, shift=True)
+            raise RuntimeError(message)
+        logger.info("未检测到翻转课卡片，等待页面渲染后重试...", shift=True)
+        await page.wait_for_timeout(1500)
 
     if not pending_lessons:
         logger.info("没有未完成的课程，本轮结束。")
@@ -55,6 +70,7 @@ async def run_hike_course(
 
     target_course_url = course_url or config.course_urls[0]
     start_time = clock()
+    completed_card_ids: set[str] = set()
     for lesson in pending_lessons:
         title = lesson["title"]
         card_id = lesson["card_id"]
@@ -69,7 +85,13 @@ async def run_hike_course(
         logger.info(
             f"锁定蓝条未满节次: {lesson.get('section', '')} / {title} ({lesson['progress']}%)"
         )
-        if not await card_clicker(page, card_id, title, scope_id, top):
+        if not await card_clicker(
+            page,
+            card_id,
+            title,
+            scope_id=scope_id,
+            top=top,
+        ):
             logger.warn(f"未能定位卡片:{title}, 本轮跳过.", shift=True)
             continue
 
@@ -142,7 +164,28 @@ async def run_hike_course(
         if completed is not True:
             raise RuntimeError(f"视频未确认完成: {current_title}")
 
+        completed_card_ids.add(card_id)
         refreshed_lessons, _summary = await scanner(page)
-        if not refreshed_lessons:
+        unresolved_lessons = [
+            item
+            for item in refreshed_lessons
+            if item["card_id"] not in completed_card_ids
+        ]
+        if not unresolved_lessons:
             logger.info("所有课程已完成!", shift=True)
             return
+
+    refreshed_lessons, _summary = await scanner(page)
+    unresolved_lessons = [
+        item
+        for item in refreshed_lessons
+        if item["card_id"] not in completed_card_ids
+    ]
+    if unresolved_lessons:
+        titles = [item["title"] for item in unresolved_lessons]
+        message = (
+            f"翻转课仍有 {len(unresolved_lessons)} 个项目未确认完成: {titles}"
+        )
+        logger.warn(message, shift=True)
+        raise RuntimeError(message)
+    logger.info("所有课程已完成!", shift=True)

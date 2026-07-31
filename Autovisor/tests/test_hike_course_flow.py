@@ -12,6 +12,7 @@ sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules.hike_course_flow import run_hike_course
 from modules.course_session import CourseAuthenticationError
+from modules import utils as utils_module
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -84,7 +85,14 @@ def _dependencies(scan_results, *, click_results=None):
     async def scanner(_page):
         return next(scan_results)
 
-    async def card_clicker(_page, card_id, title, scope_id, top):
+    async def card_clicker(
+        _page,
+        card_id,
+        title,
+        *,
+        scope_id,
+        top,
+    ):
         calls.clicks.append((card_id, title, scope_id, top))
         return next(click_results, True)
 
@@ -112,8 +120,13 @@ def _dependencies(scan_results, *, click_results=None):
     }
 
 
-def test_empty_scan_finishes_without_clicking():
-    calls, dependencies = _dependencies([([], _summary(0, 0))])
+def test_empty_scan_reports_failure_after_bounded_retries():
+    calls, dependencies = _dependencies(
+        [
+            ([], _summary(0, 0)),
+            ([], _summary(0, 0)),
+        ]
+    )
     logger = _Logger()
     config = SimpleNamespace(
         limitMaxTime=0,
@@ -121,10 +134,19 @@ def test_empty_scan_finishes_without_clicking():
         remove_pause="js",
     )
 
-    asyncio.run(run_hike_course(_Page(), config, logger, **dependencies))
+    with pytest.raises(RuntimeError, match="无法确认课程列表"):
+        asyncio.run(
+            run_hike_course(
+                _Page(),
+                config,
+                logger,
+                empty_scan_limit=2,
+                **dependencies,
+            )
+        )
 
     assert calls.clicks == []
-    assert logger.infos[-1] == "没有未完成的课程，本轮结束。"
+    assert logger.warnings[-1] == "连续 2 次未检测到翻转课卡片，无法确认课程列表"
 
 
 def test_lessons_are_clicked_learned_and_rescanned_in_page_order():
@@ -162,18 +184,65 @@ def test_lessons_are_clicked_learned_and_rescanned_in_page_order():
     assert logger.infos[-1] == "所有课程已完成!"
 
 
-def test_click_failure_skips_lesson_without_starting_learning():
+def test_click_failure_reports_unfinished_lesson():
     lesson = _lesson("a")
     calls, dependencies = _dependencies(
-        [([lesson], _summary(1, 1))], click_results=[False]
+        [
+            ([lesson], _summary(1, 1)),
+            ([lesson], _summary(1, 1)),
+        ],
+        click_results=[False],
     )
     config = SimpleNamespace(limitMaxTime=0, course_urls=["course"], remove_pause="js")
     logger = _Logger()
 
-    asyncio.run(run_hike_course(_Page(), config, logger, **dependencies))
+    with pytest.raises(RuntimeError, match="仍有 1 个项目未确认完成"):
+        asyncio.run(run_hike_course(_Page(), config, logger, **dependencies))
 
     assert calls.learns == []
-    assert logger.warnings == ["未能定位卡片:课程-a, 本轮跳过."]
+    assert logger.warnings[0] == "未能定位卡片:课程-a, 本轮跳过."
+    assert "课程-a" in logger.warnings[-1]
+
+
+def test_confirmed_lesson_can_finish_when_page_progress_is_stale():
+    lesson = _lesson("a")
+    calls, dependencies = _dependencies(
+        [
+            ([lesson], _summary(1, 1)),
+            ([lesson], _summary(1, 1)),
+        ]
+    )
+    logger = _Logger()
+
+    asyncio.run(
+        run_hike_course(
+            _Page(),
+            SimpleNamespace(
+                limitMaxTime=0,
+                course_urls=["course"],
+                remove_pause="js",
+            ),
+            logger,
+            **dependencies,
+        )
+    )
+
+    assert len(calls.learns) == 1
+    assert logger.infos[-1] == "所有课程已完成!"
+
+
+def test_default_card_clicker_accepts_deep_scan_metadata():
+    result = asyncio.run(
+        utils_module.click_card_by_id(
+            _Page(),
+            "missing",
+            "缺失卡片",
+            scope_id="window",
+            top=240,
+        )
+    )
+
+    assert result is False
 
 
 @pytest.mark.parametrize("learning_result", [False, None])

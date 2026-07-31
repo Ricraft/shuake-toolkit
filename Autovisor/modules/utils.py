@@ -711,6 +711,9 @@ async def click_card_by_id(
     card_id: str,
     title: str | None = None,
     is_in_iframe: bool = False,
+    *,
+    scope_id: str | None = None,
+    top: float | int | None = None,
 ) -> bool:
     selector = f'[data-autovisor-card-id="{card_id}"]'
     
@@ -722,6 +725,26 @@ async def click_card_by_id(
                 if await frame.locator('.chapter-item').count() > 0:
                     context = frame
                     break
+        except Exception:
+            pass
+
+    if scope_id is not None and isinstance(top, (int, float)):
+        try:
+            await page.evaluate(
+                """([scopeId, cardTop]) => {
+                    const offset = Math.max(0, cardTop - 120);
+                    if (scopeId === 'window') {
+                        window.scrollTo(0, offset);
+                        return;
+                    }
+                    const root = document.querySelector(
+                        `[data-autovisor-scroll-id="${scopeId}"]`
+                    );
+                    if (root) root.scrollTop = offset;
+                }""",
+                [scope_id, top],
+            )
+            await page.wait_for_timeout(300)
         except Exception:
             pass
     
