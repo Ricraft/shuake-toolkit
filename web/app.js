@@ -826,38 +826,95 @@
             }
         }
 
-        async function handleCoreAction(core) {
+        const webActionInFlight = new Set();
+
+        function getWebActionKey(action, args = []) {
             try {
-                const running = core === 'yatori' ? !!state.runtime?.yatori_running : !!state.runtime?.autovisor_running;
-                const starting = !!state.runtime?.starting?.[core];
-                const action = (running || starting) ? 'stop' : 'start';
-                if (action === 'start') {
-                    const sr = await saveSettings(false);
-                    if (!sr?.ok) return sr || { ok: false, message: '保存配置失败' };
-                }
-                const result = await apiCall('perform_action', action, core);                                            
-                handleWebActionResult(result, '核心操作失败');
-                return result;
-            } catch (error) {
-                if (!error?.silent) showToast(error.message || '操作失败', 'error');
-                return { ok: false, message: error?.message || '操作失败' };
+                return JSON.stringify([String(action), ...args]);
+            } catch (_) {
+                return `${String(action)}::${args.map(value => String(value)).join('|')}`;
             }
+        }
+
+        async function runWebActionLocked(action, args, callback) {
+            const normalizedArgs = Array.isArray(args) ? args : [];
+            const key = getWebActionKey(action, normalizedArgs);
+            if (webActionInFlight.has(key)) {
+                const message = '该操作正在执行，请稍候';
+                showToast(message, 'info');
+                return { ok: false, busy: true, message };
+            }
+
+            webActionInFlight.add(key);
+            try {
+                return await callback();
+            } finally {
+                webActionInFlight.delete(key);
+            }
+        }
+
+        async function requestWebAction(action, args = [], fallbackMessage = '操作失败') {
+            return runWebActionLocked(action, args, async () => {
+                try {
+                    const result = await apiCall('perform_action', action, ...args);
+                    handleWebActionResult(result, fallbackMessage);
+                    return result;
+                } catch (error) {
+                    if (!error?.silent) {
+                        showToast(error.message || fallbackMessage, 'error');
+                    }
+                    return {
+                        ok: false,
+                        message: error?.message || fallbackMessage,
+                        silent: !!error?.silent,
+                    };
+                }
+            });
+        }
+
+        async function handleCoreAction(core) {
+            const running = core === 'yatori' ? !!state.runtime?.yatori_running : !!state.runtime?.autovisor_running;
+            const starting = !!state.runtime?.starting?.[core];
+            const action = (running || starting) ? 'stop' : 'start';
+            return runWebActionLocked(action, [core], async () => {
+                try {
+                    if (action === 'start') {
+                        const sr = await saveSettings(false);
+                        if (!sr?.ok) return sr || { ok: false, message: '保存配置失败' };
+                    }
+                    const result = await apiCall('perform_action', action, core);
+                    handleWebActionResult(result, '核心操作失败');
+                    return result;
+                } catch (error) {
+                    if (!error?.silent) showToast(error.message || '操作失败', 'error');
+                    return { ok: false, message: error?.message || '操作失败' };
+                }
+            });
         }
 
         async function toggleQuestionBank() {
-            try {
-                const result = await apiCall('perform_action', 'toggle_question_bank');
-                handleWebActionResult(result, '题库操作失败');
-                return result;
-            } catch (error) {
-                showToast(error.message || '题库操作失败', 'error');
-                return { ok: false, message: error?.message || '题库操作失败' };
-            }
+            const result = await requestWebAction(
+                'toggle_question_bank',
+                [],
+                '题库操作失败',
+            );
+            if (result) return result;
+            return { ok: false, message: '题库操作失败' };
         }
 
         async function saveAndPerform(action) {
-            try { const sr = await saveSettings(false); if (!sr?.ok) return; const result = await apiCall('perform_action', action); handleWebActionResult(result, '操作失败'); }
-            catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }
+            return runWebActionLocked(action, [], async () => {
+                try {
+                    const sr = await saveSettings(false);
+                    if (!sr?.ok) return sr;
+                    const result = await apiCall('perform_action', action);
+                    handleWebActionResult(result, '操作失败');
+                    return result;
+                } catch (error) {
+                    if (!error?.silent) showToast(error.message || '操作失败', 'error');
+                    return { ok: false, message: error?.message || '操作失败' };
+                }
+            });
         }
 
         function handleWebActionResult(result, fallbackMessage = '操作失败') {
@@ -878,23 +935,29 @@
         }
 
         async function performAction(action, ...args) {
-            try { const result = await apiCall('perform_action', action, ...args); handleWebActionResult(result); }
-            catch (error) { if (!error?.silent) showToast(error.message || '操作失败', 'error'); }
+            return requestWebAction(action, args);
         }
 
         let yatoriUpdateConfirming = false;
 
         async function openYatoriUpdateDialog() {
-            try {
-                showToast('正在检查 Yatori 更新...', 'info');
-                const result = await apiCall('perform_action', 'show_update_dialog');
-                if (!handleWebActionResult(result, '无法检查 Yatori 更新')) return;
-                if (result?.updateDialog) {
-                    showYatoriUpdateModal(result.updateDialog);
+            return runWebActionLocked('show_update_dialog', [], async () => {
+                try {
+                    showToast('正在检查 Yatori 更新...', 'info');
+                    const result = await apiCall('perform_action', 'show_update_dialog');
+                    if (!handleWebActionResult(result, '无法检查 Yatori 更新')) return result;
+                    if (result?.updateDialog) {
+                        showYatoriUpdateModal(result.updateDialog);
+                    }
+                    return result;
+                } catch (error) {
+                    if (!error?.silent) showToast(error.message || '无法检查 Yatori 更新', 'error');
+                    return {
+                        ok: false,
+                        message: error?.message || '无法检查 Yatori 更新',
+                    };
                 }
-            } catch (error) {
-                if (!error?.silent) showToast(error.message || '无法检查 Yatori 更新', 'error');
-            }
+            });
         }
 
         function setText(id, value) {
