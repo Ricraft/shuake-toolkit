@@ -78,6 +78,7 @@ async def run_national_course(
     clock=time.time,
     empty_scan_limit: int = 5,
     click_retry_limit: int = 3,
+    max_loop: int = 200,
 ) -> None:
     logger.info("开始运行时滚动扫描... (全国智慧共享课)", shift=True)
     await page.wait_for_timeout(2000)
@@ -95,9 +96,12 @@ async def run_national_course(
 
     while True:
         loop_count += 1
-        if loop_count > 200:
-            logger.warn("循环次数超限(200)，强制退出", shift=True)
-            return
+        if loop_count > max_loop:
+            message = (
+                f"全国共享课循环次数超限({max_loop})，仍有项目未确认完成"
+            )
+            logger.warn(message, shift=True)
+            raise RuntimeError(message)
 
         await close_popup(page, logger)
         all_cards, summary, is_in_iframe = await scanner(page)
@@ -111,11 +115,12 @@ async def run_national_course(
             if summary["total"] == 0:
                 empty_scan_count += 1
                 if empty_scan_count >= empty_scan_limit:
-                    logger.warn(
-                        f"连续 {empty_scan_count} 次未检测到课程卡片，停止本轮",
-                        shift=True,
+                    message = (
+                        f"连续 {empty_scan_count} 次未检测到课程卡片，"
+                        "无法确认课程列表"
                     )
-                    return
+                    logger.warn(message, shift=True)
+                    raise RuntimeError(message)
                 logger.info("未检测到课程卡片，可能页面还在加载，重试中...", shift=True)
                 await page.wait_for_timeout(3000)
                 continue
@@ -139,10 +144,24 @@ async def run_national_course(
         lesson = selection.lesson
         if lesson is None:
             if selection.reason is SelectionReason.NO_CANDIDATES:
-                logger.info("所有未完成项均已处理或跳过，退出", shift=True)
-            else:
-                logger.info("所有剩余测验均已达到重试上限，退出", shift=True)
-            return
+                skipped_lessons = [
+                    item
+                    for item in pending_lessons
+                    if item["key"] in navigation.skipped_keys
+                ]
+                if skipped_lessons:
+                    titles = [item["title"] for item in skipped_lessons]
+                    message = (
+                        f"仍有 {len(skipped_lessons)} 个未完成项因失败被跳过: "
+                        f"{titles}"
+                    )
+                    logger.warn(message, shift=True)
+                    raise RuntimeError(message)
+                logger.info("所有未完成项均已确认处理，退出", shift=True)
+                return
+            message = "所有剩余测验均已达到重试上限，仍未确认完成"
+            logger.warn(message, shift=True)
+            raise RuntimeError(message)
         if selection.reason is SelectionReason.ROUND_RESET:
             logger.info("所有可尝试项均尝试过，清空记录重新开始", shift=True)
 

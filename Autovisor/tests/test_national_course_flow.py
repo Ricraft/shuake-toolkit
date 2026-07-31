@@ -151,7 +151,7 @@ def test_completed_scan_exits_without_clicking():
     assert clicks == []
 
 
-def test_empty_scan_stops_after_configured_limit():
+def test_empty_scan_reports_failure_after_configured_limit():
     scans = 0
 
     async def scanner(_page):
@@ -160,25 +160,26 @@ def test_empty_scan_stops_after_configured_limit():
         return [], _summary(0, 0), False
 
     logger = _Logger()
-    asyncio.run(
-        run_national_course(
-            _Page(_config().course_urls[0]),
-            _config(),
-            logger,
-            close_popup=_close_popup,
-            learning_loop=_noop,
-            handler_factory=lambda: None,
-            answer_handler=None,
-            scanner=scanner,
-            empty_scan_limit=2,
+    with pytest.raises(RuntimeError, match="无法确认课程列表"):
+        asyncio.run(
+            run_national_course(
+                _Page(_config().course_urls[0]),
+                _config(),
+                logger,
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+                empty_scan_limit=2,
+            )
         )
-    )
 
     assert scans == 2
-    assert logger.warnings[-1] == "连续 2 次未检测到课程卡片，停止本轮"
+    assert logger.warnings[-1] == "连续 2 次未检测到课程卡片，无法确认课程列表"
 
 
-def test_broken_card_is_skipped_after_limited_click_retries():
+def test_broken_card_reports_failure_after_limited_click_retries():
     card = _video_card()
 
     async def scanner(_page):
@@ -192,23 +193,51 @@ def test_broken_card_is_skipped_after_limited_click_retries():
         return False
 
     logger = _Logger()
-    asyncio.run(
-        run_national_course(
-            _Page(_config().course_urls[0]),
-            _config(),
-            logger,
-            close_popup=_close_popup,
-            learning_loop=_noop,
-            handler_factory=lambda: None,
-            answer_handler=None,
-            scanner=scanner,
-            card_clicker=clicker,
-            click_retry_limit=3,
+    with pytest.raises(RuntimeError, match="因失败被跳过"):
+        asyncio.run(
+            run_national_course(
+                _Page(_config().course_urls[0]),
+                _config(),
+                logger,
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+                card_clicker=clicker,
+                click_retry_limit=3,
+            )
         )
-    )
 
     assert clicks == 3
     assert any("连续定位失败 3 次" in warning for warning in logger.warnings)
+
+
+def test_national_loop_limit_reports_unfinished_course():
+    card = _video_card()
+
+    async def scanner(_page):
+        return [card], _summary(1, 1), False
+
+    async def clicker(*_args):
+        return False
+
+    with pytest.raises(RuntimeError, match="循环次数超限\\(2\\)"):
+        asyncio.run(
+            run_national_course(
+                _Page(_config().course_urls[0]),
+                _config(),
+                _Logger(),
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: None,
+                answer_handler=None,
+                scanner=scanner,
+                card_clicker=clicker,
+                click_retry_limit=10,
+                max_loop=2,
+            )
+        )
 
 
 def test_video_is_learned_and_returns_to_course_list():
@@ -420,3 +449,54 @@ def test_confirmed_test_submission_is_not_repeated_on_stale_scan():
 
     assert process_calls == 1
     assert scans == 2
+
+
+def test_exhausted_test_retries_report_unfinished_course():
+    card = {
+        "key": "test-1",
+        "card_id": "test-card-1",
+        "title": "章节测试",
+        "section": "第一章",
+        "progress": 0,
+        "type": "test",
+    }
+    process_calls = 0
+
+    async def scanner(_page):
+        return [card], _summary(1, 1), False
+
+    async def clicker(*_args):
+        return True
+
+    class _FailedSession:
+        def __init__(self, *_args):
+            pass
+
+        def prepare(self):
+            pass
+
+        async def process(self):
+            nonlocal process_calls
+            process_calls += 1
+            return NationalTestOutcome.ANSWER_FAILED
+
+        async def cancel(self):
+            pass
+
+    with pytest.raises(RuntimeError, match="测验均已达到重试上限"):
+        asyncio.run(
+            run_national_course(
+                _Page(_config().course_urls[0]),
+                _config(),
+                _Logger(),
+                close_popup=_close_popup,
+                learning_loop=_noop,
+                handler_factory=lambda: object(),
+                answer_handler=None,
+                scanner=scanner,
+                card_clicker=clicker,
+                test_session_factory=_FailedSession,
+            )
+        )
+
+    assert process_calls == 5

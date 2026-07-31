@@ -258,6 +258,7 @@ async def run_normal_course(
     time_limit_checker=check_normal_course_time_limit,
     test_session_factory=NormalTestSession,
     clock=time.time,
+    max_loop: int = 200,
 ) -> None:
     target_course_url = course_url or config.course_urls[0]
     await wait_for_authenticated_selector(
@@ -283,7 +284,6 @@ async def run_normal_course(
     start_time = clock()
     current_index = 0
     loop_count = 0
-    max_loop = 200
     test_retry_limit = 5
     test_attempts: dict[int, int] = {}
     confirmed_tests: set[tuple[int, str]] = set()
@@ -291,8 +291,9 @@ async def run_normal_course(
     while True:
         loop_count += 1
         if loop_count > max_loop:
-            logger.warn(f"循环次数超限({max_loop})，强制退出")
-            break
+            message = f"普通课循环次数超限({max_loop})，仍有项目未确认完成"
+            logger.warn(message)
+            raise RuntimeError(message)
 
         await close_popup(page, logger)
         await ensure_course_authenticated(page, "普通课处理期间登录状态失效")

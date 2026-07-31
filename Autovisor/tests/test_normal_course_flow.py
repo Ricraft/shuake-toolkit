@@ -268,6 +268,51 @@ def test_empty_normal_course_list_finishes_cleanly():
     assert logger.infos[-1] == "本页课程列表已遍历完毕。"
 
 
+def test_normal_course_loop_limit_reports_unfinished_course():
+    page = _Page()
+
+    class _UnreadableCompletionCourse(_ClickableCourse):
+        def locator(self, selector):
+            if selector == ".time_icofinish":
+                raise RuntimeError("detached")
+            return super().locator(selector)
+
+    course = _UnreadableCompletionCourse()
+
+    async def class_provider(*_args, **_kwargs):
+        return [course]
+
+    with pytest.raises(RuntimeError, match="循环次数超限\\(2\\)"):
+        asyncio.run(
+            run_normal_course(
+                page,
+                SimpleNamespace(
+                    remove_pause="js",
+                    course_urls=["course"],
+                    limitMaxTime=0,
+                ),
+                _Logger(),
+                close_popup=lambda *_args: asyncio.sleep(0, result=False),
+                learning_loop=lambda *_args: asyncio.sleep(0, result=True),
+                review_loop=None,
+                handler_factory=lambda: _Handler(),
+                answer_handler=None,
+                class_provider=class_provider,
+                test_scanner=lambda *_args: asyncio.sleep(0, result=[]),
+                title_reader=lambda *_args: asyncio.sleep(
+                    0,
+                    result="未完成课时",
+                ),
+                time_limit_checker=lambda *_args, **_kwargs: asyncio.sleep(
+                    0,
+                    result=False,
+                ),
+                clock=lambda: 0,
+                max_loop=2,
+            )
+        )
+
+
 @pytest.mark.parametrize("learning_result", [False, None])
 def test_unconfirmed_video_result_is_not_advanced_as_completed(
     learning_result,
