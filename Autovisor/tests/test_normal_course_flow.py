@@ -496,8 +496,67 @@ def test_answered_test_is_not_repeated_when_completion_state_is_stale():
     )
 
     assert session_calls == [course]
-    assert "测验提交后状态未刷新，本轮不重复作答" in logger.warnings
+    assert "测验确认完成后状态未刷新，本轮不重复处理" in logger.warnings
     assert page.goto_calls == [("second-course", "domcontentloaded")]
+
+
+def test_completed_test_does_not_skip_next_item_when_pending_list_shrinks():
+    page = _Page()
+    logger = _Logger()
+    courses = [
+        _ClickableCourse(
+            class_name="chapter-test",
+            title="第一章测验",
+        ),
+        _ClickableCourse(
+            class_name="chapter-test",
+            title="第二章测验",
+        ),
+    ]
+    completed = []
+
+    async def close_popup(*_args):
+        return False
+
+    async def class_provider(*_args, **_kwargs):
+        return [course for course in courses if not course.completed]
+
+    async def optimizer(*_args):
+        return None
+
+    class _CompletedSession:
+        def __init__(self, *_args):
+            return None
+
+        async def process(self, selected_course):
+            completed.append(selected_course.title)
+            selected_course.completed = True
+            return NormalTestOutcome.COMPLETED
+
+    asyncio.run(
+        run_normal_course(
+            page,
+            SimpleNamespace(
+                remove_pause="js",
+                course_urls=["course"],
+                limitMaxTime=0,
+            ),
+            logger,
+            close_popup=close_popup,
+            learning_loop=None,
+            review_loop=None,
+            handler_factory=lambda: _Handler(),
+            answer_handler=None,
+            class_provider=class_provider,
+            test_scanner=lambda *_args: asyncio.sleep(0, result=[]),
+            optimizer=optimizer,
+            test_session_factory=_CompletedSession,
+            clock=lambda: 0,
+        )
+    )
+
+    assert completed == ["第一章测验", "第二章测验"]
+    assert all(course.completed for course in courses)
 
 
 def test_failed_test_submission_retries_before_advancing():

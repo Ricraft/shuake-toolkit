@@ -286,7 +286,7 @@ async def run_normal_course(
     max_loop = 200
     test_retry_limit = 5
     test_attempts: dict[int, int] = {}
-    answered_tests: set[tuple[int, str]] = set()
+    confirmed_tests: set[tuple[int, str]] = set()
 
     while True:
         loop_count += 1
@@ -334,14 +334,14 @@ async def run_normal_course(
 
             if await course.locator("b.finish").count() > 0:
                 logger.info("测验已完成，跳过")
-                answered_tests.discard(test_marker)
+                confirmed_tests.discard(test_marker)
                 test_attempts.pop(current_index, None)
                 current_index += 1
                 continue
 
-            if test_marker in answered_tests:
-                logger.warn("测验提交后状态未刷新，本轮不重复作答")
-                answered_tests.discard(test_marker)
+            if test_marker in confirmed_tests:
+                logger.warn("测验确认完成后状态未刷新，本轮不重复处理")
+                confirmed_tests.discard(test_marker)
                 test_attempts.pop(current_index, None)
                 current_index += 1
                 continue
@@ -373,9 +373,12 @@ async def run_normal_course(
                 is_new_version=is_new_version,
                 optimizer=optimizer,
             )
-            if outcome is NormalTestOutcome.ANSWERED:
+            if outcome in {
+                NormalTestOutcome.ANSWERED,
+                NormalTestOutcome.COMPLETED,
+            }:
                 test_attempts.pop(current_index, None)
-                answered_tests.add(test_marker)
+                confirmed_tests.add(test_marker)
                 logger.info("继续处理下一个课程...")
                 continue
 
@@ -390,8 +393,6 @@ async def run_normal_course(
                     )
                 continue
 
-            if outcome is NormalTestOutcome.COMPLETED:
-                test_attempts.pop(current_index, None)
             current_index += 1
             continue
 
