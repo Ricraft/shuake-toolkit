@@ -9,7 +9,6 @@ import subprocess
 import threading
 import os
 import sys
-import glob
 import re
 from datetime import datetime
 
@@ -23,6 +22,7 @@ from src.application_bootstrap import (
 from src.autovisor_dependency_manager import AutovisorDependencyManager
 from src.config_service import ConfigService
 from src.core_launch_service import CoreLaunchService
+from src.core_runtime_locator import CoreRuntimeLocator
 from src.course_api_service import CourseAPIService
 from src.course_catalog import CourseCatalogService
 from src.desktop_platform_service import DesktopPlatformService
@@ -107,68 +107,54 @@ class UnifiedLauncher:
     def get_preferences_file_path(cls, base_dir):
         return os.path.join(base_dir, cls.WEB_PREFERENCES_FILE)
 
+    def _get_core_runtime_locator(self, base_dir=None):
+        resolved_base_dir = os.path.abspath(base_dir or self.get_base_dir())
+        locator = getattr(self, "_core_runtime_locator", None)
+        expected_entries = (
+            tuple(self.YATORI_ENTRY_FILES),
+            tuple(self.AUTOVISOR_EXECUTABLE_ENTRY_FILES),
+            tuple(self.AUTOVISOR_SCRIPT_ENTRY_FILES),
+        )
+        if (
+            locator is None
+            or os.path.normcase(locator.base_dir)
+            != os.path.normcase(resolved_base_dir)
+            or (
+                locator.yatori_entry_files,
+                locator.autovisor_executable_entry_files,
+                locator.autovisor_script_entry_files,
+            )
+            != expected_entries
+        ):
+            locator = CoreRuntimeLocator(
+                resolved_base_dir,
+                yatori_entry_files=self.YATORI_ENTRY_FILES,
+                autovisor_executable_entry_files=(
+                    self.AUTOVISOR_EXECUTABLE_ENTRY_FILES
+                ),
+                autovisor_script_entry_files=self.AUTOVISOR_SCRIPT_ENTRY_FILES,
+            )
+            self._core_runtime_locator = locator
+        return locator
+
     def _directory_has_any_file(self, directory, file_names):
-        return os.path.isdir(directory) and any(
-            os.path.exists(os.path.join(directory, name)) for name in file_names
+        return self._get_core_runtime_locator().directory_has_any_file(
+            directory,
+            file_names,
         )
 
     def _find_runtime_path(self, base_dir, standard_dir, patterns, required_files):
-        candidates = [os.path.join(base_dir, standard_dir)]
-        for pattern in patterns:
-            candidates.extend(sorted(glob.glob(pattern)))
-
-        seen = set()
-        for candidate in candidates:
-            normalized = os.path.normpath(candidate)
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            if self._directory_has_any_file(normalized, required_files):
-                return normalized
-
-        return os.path.join(base_dir, standard_dir)
-
-    def find_yatori_path(self, base_dir):
-        return self._find_runtime_path(
-            base_dir,
-            "Yatori",
-            [
-                os.path.join(base_dir, "yatori-go-console*", "yatori-go-console*", "command"),
-                os.path.join(base_dir, "yatori-go-console*", "command"),
-                os.path.join(base_dir, "yatori-go-console*"),
-            ],
-            self.YATORI_ENTRY_FILES,
+        return self._get_core_runtime_locator(base_dir).find_runtime_path(
+            standard_dir,
+            patterns,
+            required_files,
         )
 
+    def find_yatori_path(self, base_dir):
+        return self._get_core_runtime_locator(base_dir).find_yatori_path()
+
     def find_autovisor_path(self, base_dir):
-        candidates = [
-            os.path.join(base_dir, "Autovisor"),
-            os.path.join(base_dir, "AUto"),
-            os.path.join(base_dir, "Auto"),
-        ]
-        for prefix in ("Autovisor", "AUto", "Auto"):
-            candidates.extend(
-                [
-                    os.path.join(base_dir, f"{prefix}*", f"{prefix}*"),
-                    os.path.join(base_dir, f"{prefix}*"),
-                ]
-            )
-
-        seen = set()
-        for pattern in candidates:
-            if "*" in pattern:
-                matched = sorted(glob.glob(pattern))
-            else:
-                matched = [pattern]
-            for candidate in matched:
-                normalized = os.path.normpath(candidate)
-                if normalized in seen:
-                    continue
-                seen.add(normalized)
-                if self._directory_has_any_file(normalized, self.AUTOVISOR_ENTRY_FILES):
-                    return normalized
-
-        return os.path.join(base_dir, "Autovisor")
+        return self._get_core_runtime_locator(base_dir).find_autovisor_path()
 
     def _get_yatori_display_version(self):
         if self.core_manager:
@@ -335,35 +321,15 @@ class UnifiedLauncher:
         )
 
     def _get_yatori_command(self):
-        exe_path = os.path.join(self.yatori_path, 'yatori-go-console.exe')
-        if os.path.exists(exe_path):
-            return [exe_path], exe_path
-
-        bat_path = os.path.join(self.yatori_path, 'start.bat')
-        if os.path.exists(bat_path):
-            return ['cmd', '/c', bat_path], bat_path
-
-        return None, None
+        return self._get_core_runtime_locator().get_yatori_command(
+            self.yatori_path
+        )
 
     def _get_autovisor_entry_path(self, multi_mode):
-        # EXE 优先（含全部依赖，开箱即用）
-        for entry_name in self.AUTOVISOR_EXECUTABLE_ENTRY_FILES:
-            entry_path = os.path.join(self.autovisor_path, entry_name)
-            if os.path.exists(entry_path):
-                return entry_path, entry_name, entry_name.lower().endswith('.exe'), True
-        # 回退到脚本模式
-        ordered_entries = list(self.AUTOVISOR_SCRIPT_ENTRY_FILES)
-        preferred = 'Autovisor_Multi.py' if multi_mode else 'Autovisor.py'
-        if preferred in ordered_entries:
-            ordered_entries.remove(preferred)
-        ordered_entries.insert(0, preferred)
-
-        for entry_name in ordered_entries:
-            entry_path = os.path.join(self.autovisor_path, entry_name)
-            if os.path.exists(entry_path):
-                return entry_path, entry_name, preferred == entry_name, entry_path.lower().endswith('.exe')
-
-        return None, preferred, False, False
+        return self._get_core_runtime_locator().get_autovisor_entry_path(
+            self.autovisor_path,
+            multi_mode,
+        )
 
     def _get_autovisor_dependency_manager(self):
         manager = getattr(self, 'autovisor_dependencies', None)
