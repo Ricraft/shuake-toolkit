@@ -5,12 +5,15 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules import tasks as task_module
 from modules import test_page_controls as controls
+from modules.course_session import CourseAuthenticationError
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -449,7 +452,56 @@ def test_submission_completion_keeps_text_engines_out_of_css_groups():
     )
 
     assert result is True
-    assert page.selectors[1] == "text='提交成功'"
+    assert page.selectors[-1] == "text='提交成功'"
+    assert all(
+        not ("," in selector and "text=" in selector)
+        for selector in page.selectors
+    )
+
+
+def test_submit_exam_propagates_login_redirect_as_authentication_failure():
+    class RedirectingSubmit(_SubmitLocator):
+        def __init__(self, page):
+            super().__init__(count=1, visible=True)
+            self.page = page
+
+        async def click(self, **_kwargs):
+            self.clicked = True
+            self.page.url = "https://login.zhihuishu.com/?origin=exam"
+
+    page = _SubmitPage()
+    page.submit = RedirectingSubmit(page)
+
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="交卷期间登录状态失效",
+    ):
+        asyncio.run(
+            controls.submit_exam(page, logger_instance=_Logger())
+        )
+
+
+def test_submit_exam_rejects_close_before_visible_confirmation_is_clicked():
+    class ClosingConfirmation(_SubmitLocator):
+        async def click(self, **_kwargs):
+            raise controls.TargetClosedError("page closed before confirm")
+
+    page = _SubmitPage()
+    confirmation = ClosingConfirmation(count=1, visible=True)
+    original_locator = page.locator
+
+    def locator(selector):
+        if "el-button--primary:has-text" in selector:
+            return confirmation
+        return original_locator(selector)
+
+    page.locator = locator
+    result = asyncio.run(
+        controls.submit_exam(page, logger_instance=_Logger())
+    )
+
+    assert page.submit.clicked is True
+    assert result is False
 
 
 def test_wait_for_user_action_distinguishes_page_error_from_timeout():

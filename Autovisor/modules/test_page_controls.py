@@ -10,6 +10,10 @@ from playwright._impl._errors import TargetClosedError
 from playwright.async_api import Page
 
 from modules.answer_strategy import build_answer_actions
+from modules.course_session import (
+    CourseAuthenticationError,
+    ensure_course_authenticated,
+)
 from modules.logger import Logger
 
 
@@ -685,9 +689,10 @@ async def _click_question_navigation(
 
 
 async def _submission_completed(page: Page, original_url: str) -> bool:
-    """只接受页面关闭、地址变化或明确结果元素，不使用按钮消失作证。"""
+    """只接受可信完成证据，并在地址变化判定前排除登录失效。"""
     if page.is_closed():
         return True
+    await ensure_course_authenticated(page, "交卷期间登录状态失效")
     if original_url and page.url != original_url:
         return True
     for selector in (
@@ -720,10 +725,36 @@ async def _wait_for_submission_completion(
     return False
 
 
+async def _find_visible_confirmation_button(
+    page: Page,
+    selectors: tuple[str, ...],
+    *,
+    attempts: int = 10,
+    poll_interval_ms: int = 100,
+):
+    """即时开始短轮询，避免确认框出现后在固定睡眠期间被页面关闭掩盖。"""
+    last_error = None
+    for attempt in range(max(1, attempts)):
+        for selector in selectors:
+            try:
+                button = page.locator(selector).first
+                if await button.count() > 0 and await button.is_visible():
+                    return button, last_error
+            except TargetClosedError:
+                raise
+            except Exception as exc:
+                last_error = exc
+        if attempt < attempts - 1:
+            await page.wait_for_timeout(poll_interval_ms)
+    return None, last_error
+
+
 async def submit_exam(page: Page, *, logger_instance=None) -> bool:
     """提交作业，并以页面结果而不是单次点击作为成功依据。"""
     active_logger = logger_instance or logger
     submit_clicked = False
+    confirmation_seen = False
+    confirmed = False
     try:
         original_url = page.url
         submit_button = page.locator(
@@ -735,26 +766,31 @@ async def submit_exam(page: Page, *, logger_instance=None) -> bool:
         await submit_button.click(timeout=5000)
         submit_clicked = True
         active_logger.info("[OK] 点击提交作业按钮")
-        await page.wait_for_timeout(1000)
 
-        confirmed = False
-        for selector in (
-            "button.el-button--primary:has-text('确定')",
-            ".el-message-box__btns button.el-button--primary",
-            ".el-message-box__confirm",
-            ".confirm-btn",
-        ):
-            try:
-                confirm_button = page.locator(selector).first
-                if await confirm_button.count() > 0 and await confirm_button.is_visible():
-                    await confirm_button.click(timeout=3000)
-                    active_logger.info("[OK] 点击确认按钮")
-                    confirmed = True
-                    break
-            except Exception:
-                continue
-        if not confirmed:
-            active_logger.warn("[WARN] 未找到确认按钮，等待页面自行提交")
+        confirm_button, confirmation_error = (
+            await _find_visible_confirmation_button(
+                page,
+                (
+                    "button.el-button--primary:has-text('确定')",
+                    ".el-message-box__btns button.el-button--primary",
+                    ".el-message-box__confirm",
+                    ".confirm-btn",
+                ),
+            )
+        )
+        if confirm_button is not None:
+            confirmation_seen = True
+            await confirm_button.click(timeout=3000)
+            active_logger.info("[OK] 点击确认按钮")
+            confirmed = True
+        else:
+            if confirmation_error:
+                active_logger.warn(
+                    "[WARN] 确认按钮检查失败，等待页面自行提交: %s"
+                    % str(confirmation_error)[:60]
+                )
+            else:
+                active_logger.warn("[WARN] 未找到确认按钮，等待页面自行提交")
 
         if not await _wait_for_submission_completion(
             page,
@@ -779,8 +815,14 @@ async def submit_exam(page: Page, *, logger_instance=None) -> bool:
             except Exception:
                 continue
         return True
+    except CourseAuthenticationError:
+        active_logger.warn("[FAIL] 交卷期间登录状态失效")
+        raise
     except TargetClosedError:
-        # 提交点击后页面主动关闭可视为流程完成；点击前关闭则是失败。
+        if confirmation_seen and not confirmed:
+            active_logger.warn("[FAIL] 确认交卷前页面已关闭，无法确认提交成功")
+            return False
+        # 未出现确认框时，提交点击触发页面主动关闭仍作为完成证据。
         return submit_clicked
     except Exception as exc:
         active_logger.warn("[FAIL] 提交失败：%s" % str(exc)[:50])
