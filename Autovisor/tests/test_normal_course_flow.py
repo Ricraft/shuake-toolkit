@@ -214,6 +214,28 @@ def test_time_limit_is_checked_without_global_config_state():
     assert page.default_timeouts == []
 
 
+def test_completion_message_does_not_read_stale_course_locator():
+    class _StaleCourse:
+        async def get_attribute(self, _name):
+            raise RuntimeError("detached")
+
+    logger = _Logger()
+    result = asyncio.run(
+        check_normal_course_time_limit(
+            _Page(),
+            0,
+            [_StaleCourse()],
+            "第一课",
+            SimpleNamespace(limitMaxTime=0),
+            logger,
+            clock=lambda: 30,
+        )
+    )
+
+    assert result is False
+    assert '"第一课" 已完成!' in logger.infos
+
+
 def test_empty_normal_course_list_finishes_cleanly():
     page = _Page()
     logger = _Logger()
@@ -404,6 +426,26 @@ def test_completion_marker_read_failure_keeps_index_for_rescan():
 
     assert result == 2
     assert "保留索引重新扫描" in logger.warnings[-1]
+
+
+def test_detached_stable_course_handle_keeps_index_before_locator_retargets():
+    class _DetachedHandle:
+        async def evaluate(self, _script):
+            return False
+
+    result = asyncio.run(
+        next_normal_course_index(
+            _Page(),
+            _ClickableCourse(completed=False),
+            1,
+            learning=True,
+            is_new_version=True,
+            logger=_Logger(),
+            course_handle=_DetachedHandle(),
+        )
+    )
+
+    assert result == 1
 
 
 def test_answered_test_is_not_repeated_when_completion_state_is_stale():

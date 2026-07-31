@@ -159,7 +159,7 @@ async def restore_normal_course_list(
 async def check_normal_course_time_limit(
     page,
     start_time,
-    all_class,
+    _all_class,
     title,
     config,
     logger,
@@ -172,13 +172,9 @@ async def check_normal_course_time_limit(
         logger.info("即将进入下门课程!")
         return True
 
-    class_name = await all_class[-1].get_attribute("class")
-    if "current_play" in class_name:
-        logger.info("已学完本课程全部内容!", shift=True)
-        print("==" * 10)
-    else:
-        logger.info(f'"{title}" 已完成!', shift=True)
-        logger.info(f"本次课程已学习:{time_period:.1f} min")
+    # 列表可能在完成后删除或重排节点；下一轮重扫负责判断是否全部完成。
+    logger.info(f'"{title}" 已完成!', shift=True)
+    logger.info(f"本次课程已学习:{time_period:.1f} min")
     return False
 
 
@@ -190,13 +186,30 @@ async def next_normal_course_index(
     learning: bool,
     is_new_version: bool,
     logger,
+    course_handle=None,
 ) -> int:
     """Advance against either a stable review list or a shrinking pending list."""
     if not learning:
         return current_index + 1
 
     try:
-        if is_new_version:
+        if course_handle is not None:
+            if not await course_handle.evaluate(
+                "(element) => element.isConnected"
+            ):
+                return current_index
+            if is_new_version:
+                progress = await course_handle.query_selector(".progress-num")
+                marker_updated = (
+                    progress is not None
+                    and (await progress.text_content() or "").strip() == "100%"
+                )
+            else:
+                marker_updated = (
+                    await course_handle.query_selector(".time_icofinish")
+                    is not None
+                )
+        elif is_new_version:
             progress = course.locator(".progress-num").first
             marker_updated = (
                 await progress.count() > 0
@@ -417,24 +430,57 @@ async def run_normal_course(
             state="attached",
         )
         await page.evaluate(config.remove_pause)
-        if learning:
-            completed = await learning_loop(
-                page, start_time, is_new_version, False, False, False
+        course_handle = None
+        try:
+            locator_factory = getattr(page, "locator", None)
+            stable_course = (
+                locator_factory(".current_play").first
+                if callable(locator_factory)
+                else course
             )
-            if completed is not True:
-                raise RuntimeError(f"视频未确认完成: {title}")
-        else:
-            await review_loop(page, start_time, False)
-        await ensure_course_authenticated(page, "视频播放期间登录状态失效")
+            element_handle_factory = getattr(
+                stable_course,
+                "element_handle",
+                None,
+            )
+            if callable(element_handle_factory):
+                try:
+                    course_handle = await element_handle_factory()
+                except Exception as exc:
+                    try:
+                        await ensure_course_authenticated(
+                            page,
+                            "定位课时节点时登录状态失效",
+                        )
+                    except CourseAuthenticationError as auth_error:
+                        raise auth_error from exc
+                    logger.warn(
+                        f"保存课时节点引用失败: {str(exc)[:50]}，使用定位器回退"
+                    )
 
-        current_index = await next_normal_course_index(
-            page,
-            course,
-            current_index,
-            learning=learning,
-            is_new_version=is_new_version,
-            logger=logger,
-        )
+            if learning:
+                completed = await learning_loop(
+                    page, start_time, is_new_version, False, False, False
+                )
+                if completed is not True:
+                    raise RuntimeError(f"视频未确认完成: {title}")
+            else:
+                await review_loop(page, start_time, False)
+            await ensure_course_authenticated(page, "视频播放期间登录状态失效")
+
+            current_index = await next_normal_course_index(
+                page,
+                course,
+                current_index,
+                learning=learning,
+                is_new_version=is_new_version,
+                logger=logger,
+                course_handle=course_handle,
+            )
+        finally:
+            if course_handle is not None:
+                with suppress(Exception):
+                    await course_handle.dispose()
 
         if await time_limit_checker(
             page,
