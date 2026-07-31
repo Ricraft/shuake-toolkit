@@ -8,6 +8,9 @@ import time
 from contextlib import suppress
 from enum import Enum
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright._impl._errors import TargetClosedError
+
 from modules.course_session import (
     CourseAuthenticationError,
     ensure_course_authenticated,
@@ -54,7 +57,7 @@ class NormalTestSession:
             self.logger.info(f"检测到新页面打开: {self.new_page.url}")
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (PlaywrightTimeoutError, TimeoutError):
             self.logger.write_log("未检测到新页面\n")
 
     async def cleanup(self) -> None:
@@ -79,21 +82,65 @@ class NormalTestSession:
             self.logger.info("点击测验项...")
             try:
                 await course.click()
+            except (CourseAuthenticationError, TargetClosedError):
+                raise
             except Exception as exc:
+                try:
+                    await ensure_course_authenticated(
+                        self.page,
+                        "点击普通课测验后登录状态失效",
+                    )
+                except CourseAuthenticationError as auth_error:
+                    raise auth_error from exc
                 self.logger.warn(f"点击测验项失败: {str(exc)[:50]}，跳过")
                 return NormalTestOutcome.CLICK_FAILED
 
             if self.new_page_task:
-                with suppress(Exception):
-                    await self.new_page_task
+                await self.new_page_task
 
             work_page = self.new_page or self.page
             self.logger.info(f"工作页面URL: {work_page.url}")
-            await work_page.wait_for_load_state("domcontentloaded")
-            await work_page.wait_for_timeout(2000)
+            await ensure_course_authenticated(
+                work_page,
+                "普通课测验页面登录状态失效",
+            )
+            try:
+                await work_page.wait_for_load_state("domcontentloaded")
+                await work_page.wait_for_timeout(2000)
+            except (CourseAuthenticationError, TargetClosedError):
+                raise
+            except Exception as exc:
+                try:
+                    await ensure_course_authenticated(
+                        work_page,
+                        "加载普通课测验页面时登录状态失效",
+                    )
+                except CourseAuthenticationError as auth_error:
+                    raise auth_error from exc
+                raise
+            await ensure_course_authenticated(
+                work_page,
+                "加载普通课测验页面时登录状态失效",
+            )
 
             self.logger.info("等待题目数据...")
-            got_questions = await self.handler.wait_for_questions(timeout=20)
+            try:
+                got_questions = await self.handler.wait_for_questions(timeout=20)
+            except (CourseAuthenticationError, TargetClosedError):
+                raise
+            except Exception as exc:
+                try:
+                    await ensure_course_authenticated(
+                        work_page,
+                        "等待普通课测验题目时登录状态失效",
+                    )
+                except CourseAuthenticationError as auth_error:
+                    raise auth_error from exc
+                raise
+            await ensure_course_authenticated(
+                work_page,
+                "等待普通课测验题目时登录状态失效",
+            )
             if got_questions and self.handler.questions_data:
                 if self.handler.is_completed:
                     self.logger.info("测验已完成（API确认），跳过")
@@ -101,10 +148,26 @@ class NormalTestSession:
                 self.logger.info(
                     f"开始处理测验，共 {len(self.handler.questions_data)} 题"
                 )
-                answered = await self.answer_handler(
+                try:
+                    answered = await self.answer_handler(
+                        work_page,
+                        self.handler.questions_data,
+                        auto_submit=True,
+                    )
+                except (CourseAuthenticationError, TargetClosedError):
+                    raise
+                except Exception as exc:
+                    try:
+                        await ensure_course_authenticated(
+                            work_page,
+                            "普通课测验答题期间登录状态失效",
+                        )
+                    except CourseAuthenticationError as auth_error:
+                        raise auth_error from exc
+                    raise
+                await ensure_course_authenticated(
                     work_page,
-                    self.handler.questions_data,
-                    auto_submit=True,
+                    "普通课测验答题期间登录状态失效",
                 )
                 if answered:
                     return NormalTestOutcome.ANSWERED

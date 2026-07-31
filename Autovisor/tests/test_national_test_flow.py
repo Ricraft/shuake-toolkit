@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from playwright._impl._errors import TargetClosedError
 
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -49,12 +50,15 @@ class _Button:
 
 
 class _Context:
-    def __init__(self, new_page=None):
+    def __init__(self, new_page=None, wait_error=None):
         self.new_page = new_page
+        self.wait_error = wait_error
 
     async def wait_for_event(self, event, timeout):
         assert event == "page"
         assert timeout == 8000
+        if self.wait_error:
+            raise self.wait_error
         if self.new_page is None:
             raise TimeoutError("no page")
         return self.new_page
@@ -71,9 +75,10 @@ class _Page:
         goto_error=None,
         goto_url=None,
         button_count=0,
+        context_error=None,
     ):
         self.url = url
-        self.context = _Context(new_page)
+        self.context = _Context(new_page, context_error)
         self.reload_error = reload_error
         self.reload_url = reload_url
         self.goto_error = goto_error
@@ -117,6 +122,7 @@ class _Handler:
         self.wait_result = wait_result
         self.setup_context = None
         self.removed = False
+        self.wait_calls = 0
 
     def setup_listener(self, context):
         self.setup_context = context
@@ -126,6 +132,7 @@ class _Handler:
 
     async def wait_for_questions(self, timeout):
         assert timeout == 20
+        self.wait_calls += 1
         return self.wait_result
 
 
@@ -223,6 +230,116 @@ def test_missing_questions_returns_no_questions_and_triggers_start_button():
     assert outcome is NationalTestOutcome.NO_QUESTIONS
     assert page.button.clicked is True
     assert logger.warnings == ["没有题目数据，跳过答题"]
+
+
+def test_login_popup_stops_before_waiting_for_questions():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    login_page = _Page("https://login.zhihuishu.com/?from=exam")
+    page = _Page(course_url, new_page=login_page)
+    handler = _Handler([{"id": 1}])
+    answer_calls = []
+
+    async def answer_handler(*_args, **_kwargs):
+        answer_calls.append(True)
+        return True
+
+    session = NationalTestSession(
+        page,
+        course_url,
+        _Logger(),
+        handler,
+        answer_handler,
+    )
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(CourseAuthenticationError, match="测验页面登录状态失效"):
+        asyncio.run(run_session())
+
+    assert handler.wait_calls == 0
+    assert answer_calls == []
+    assert handler.removed is True
+    assert login_page.closed is True
+    assert page.reload_calls == ["domcontentloaded"]
+
+
+def test_context_wait_preserves_page_closed_error():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    page = _Page(
+        course_url,
+        context_error=TargetClosedError("context closed"),
+    )
+    handler = _Handler()
+    session = NationalTestSession(page, course_url, _Logger(), handler, None)
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(TargetClosedError, match="context closed"):
+        asyncio.run(run_session())
+
+    assert handler.removed is True
+    assert page.reload_calls == ["domcontentloaded"]
+
+
+def test_start_button_redirect_is_restored_as_authentication_error():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    test_page = _Page("https://exam.zhihuishu.com/test")
+
+    class _RedirectingButton(_Button):
+        async def click(self, timeout):
+            assert timeout == 5000
+            test_page.url = "https://login.zhihuishu.com/?from=start"
+            raise RuntimeError("execution context destroyed")
+
+    test_page.button = _RedirectingButton(count=1)
+    page = _Page(course_url, new_page=test_page)
+    handler = _Handler()
+    session = NationalTestSession(page, course_url, _Logger(), handler, None)
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(CourseAuthenticationError, match="打开全国共享课测验题目"):
+        asyncio.run(run_session())
+
+    assert handler.wait_calls == 0
+    assert handler.removed is True
+    assert test_page.closed is True
+
+
+def test_answer_redirect_is_restored_as_authentication_error():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    test_page = _Page("https://exam.zhihuishu.com/test")
+    page = _Page(course_url, new_page=test_page)
+    handler = _Handler([{"id": 1}])
+
+    async def redirecting_answer(work_page, *_args, **_kwargs):
+        work_page.url = "https://login.zhihuishu.com/?from=answer"
+        raise RuntimeError("execution context destroyed")
+
+    session = NationalTestSession(
+        page,
+        course_url,
+        _Logger(),
+        handler,
+        redirecting_answer,
+    )
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(CourseAuthenticationError, match="测验答题期间"):
+        asyncio.run(run_session())
+
+    assert handler.removed is True
+    assert test_page.closed is True
+    assert page.reload_calls == ["domcontentloaded"]
 
 
 def test_restore_falls_back_to_course_url_when_reload_fails():

@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 from enum import Enum
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright._impl._errors import TargetClosedError
 
 from modules.course_portal import is_course_list_url
@@ -55,14 +55,13 @@ class NationalTestSession:
             self.logger.info(f"检测到新页面打开: {self.new_page.url}")
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (PlaywrightTimeoutError, TimeoutError):
             self.logger.write_log("未检测到新页面\n")
 
     async def _await_new_page(self) -> None:
         if not self.new_page_task:
             return
-        with suppress(Exception):
-            await self.new_page_task
+        await self.new_page_task
 
     async def _close_new_page(self) -> None:
         if not self.new_page:
@@ -91,10 +90,39 @@ class NationalTestSession:
                 self.logger.info("找到开始做题按钮，点击...")
                 await start_button.click(timeout=5000)
                 await work_page.wait_for_load_state("networkidle")
+        except (CourseAuthenticationError, TargetClosedError):
+            raise
         except Exception as exc:
+            try:
+                await ensure_course_authenticated(
+                    work_page,
+                    "打开全国共享课测验题目时登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
             self.logger.write_log(f"未找到开始做题按钮: {exc}\n")
 
-        got_questions = await self.handler.wait_for_questions(timeout=20)
+        await ensure_course_authenticated(
+            work_page,
+            "打开全国共享课测验题目时登录状态失效",
+        )
+        try:
+            got_questions = await self.handler.wait_for_questions(timeout=20)
+        except (CourseAuthenticationError, TargetClosedError):
+            raise
+        except Exception as exc:
+            try:
+                await ensure_course_authenticated(
+                    work_page,
+                    "等待全国共享课测验题目时登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
+            raise
+        await ensure_course_authenticated(
+            work_page,
+            "等待全国共享课测验题目时登录状态失效",
+        )
         if got_questions:
             self.logger.info("成功捕获题目数据")
         return got_questions
@@ -148,7 +176,27 @@ class NationalTestSession:
             await self._await_new_page()
             work_page = self.new_page or self.page
             self.logger.info(f"工作页面URL: {work_page.url}")
-            await work_page.wait_for_load_state("networkidle")
+            await ensure_course_authenticated(
+                work_page,
+                "全国共享课测验页面登录状态失效",
+            )
+            try:
+                await work_page.wait_for_load_state("networkidle")
+            except (CourseAuthenticationError, TargetClosedError):
+                raise
+            except Exception as exc:
+                try:
+                    await ensure_course_authenticated(
+                        work_page,
+                        "加载全国共享课测验页面时登录状态失效",
+                    )
+                except CourseAuthenticationError as auth_error:
+                    raise auth_error from exc
+                raise
+            await ensure_course_authenticated(
+                work_page,
+                "加载全国共享课测验页面时登录状态失效",
+            )
             self.logger.info(f"页面加载完成，URL: {work_page.url}")
 
             if self.handler.questions_data:
@@ -165,10 +213,26 @@ class NationalTestSession:
                     return NationalTestOutcome.COMPLETED
 
             if self.handler.questions_data:
-                answered = await self.answer_handler(
+                try:
+                    answered = await self.answer_handler(
+                        work_page,
+                        self.handler.questions_data,
+                        auto_submit=True,
+                    )
+                except (CourseAuthenticationError, TargetClosedError):
+                    raise
+                except Exception as exc:
+                    try:
+                        await ensure_course_authenticated(
+                            work_page,
+                            "全国共享课测验答题期间登录状态失效",
+                        )
+                    except CourseAuthenticationError as auth_error:
+                        raise auth_error from exc
+                    raise
+                await ensure_course_authenticated(
                     work_page,
-                    self.handler.questions_data,
-                    auto_submit=True,
+                    "全国共享课测验答题期间登录状态失效",
                 )
                 if answered:
                     return NationalTestOutcome.ANSWERED

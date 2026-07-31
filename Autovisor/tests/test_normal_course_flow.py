@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from playwright._impl._errors import TargetClosedError
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
@@ -40,25 +41,44 @@ class _Logger:
 
 
 class _Context:
-    def __init__(self, *, wait_forever=False):
+    def __init__(self, *, wait_forever=False, new_page=None, wait_error=None):
         self.wait_forever = wait_forever
+        self.new_page = new_page
+        self.wait_error = wait_error
 
     async def wait_for_event(self, _event, timeout):
         assert timeout == 8000
         if self.wait_forever:
             await asyncio.Event().wait()
+        if self.wait_error:
+            raise self.wait_error
+        if self.new_page is not None:
+            return self.new_page
         raise TimeoutError("no new page")
 
 
 class _Page:
-    def __init__(self, *, wait_forever=False, redirect_url=None):
-        self.context = _Context(wait_forever=wait_forever)
-        self.url = "https://studyvideoh5.zhihuishu.com/course"
+    def __init__(
+        self,
+        *,
+        wait_forever=False,
+        redirect_url=None,
+        new_page=None,
+        context_error=None,
+        url="https://studyvideoh5.zhihuishu.com/course",
+    ):
+        self.context = _Context(
+            wait_forever=wait_forever,
+            new_page=new_page,
+            wait_error=context_error,
+        )
+        self.url = url
         self.redirect_url = redirect_url
         self.default_timeouts = []
         self.waits = []
         self.evaluations = []
         self.goto_calls = []
+        self.closed = False
 
     async def wait_for_load_state(self, _state):
         return None
@@ -78,6 +98,9 @@ class _Page:
 
     def set_default_timeout(self, timeout):
         self.default_timeouts.append(timeout)
+
+    async def close(self):
+        self.closed = True
 
 
 class _Handler:
@@ -189,6 +212,71 @@ def test_test_session_reports_false_answer_result_as_failure():
 
     assert outcome is NormalTestOutcome.ANSWER_FAILED
     assert "测验答题或提交未确认成功" in logger.warnings
+    assert handler.removed is True
+
+
+def test_test_session_rejects_login_popup_before_waiting_for_questions():
+    login_page = _Page(url="https://login.zhihuishu.com/?from=exam")
+    page = _Page(new_page=login_page)
+    handler = _Handler([{"id": 1}])
+    answer_calls = []
+
+    async def answer_handler(*_args, **_kwargs):
+        answer_calls.append(True)
+        return True
+
+    session = NormalTestSession(page, _Logger(), handler, answer_handler)
+
+    with pytest.raises(CourseAuthenticationError, match="测验页面登录状态失效"):
+        asyncio.run(session.process(_ClickableCourse()))
+
+    assert answer_calls == []
+    assert handler.removed is True
+    assert login_page.closed is True
+
+
+def test_test_session_preserves_closed_context_error():
+    page = _Page(context_error=TargetClosedError("context closed"))
+    handler = _Handler([{"id": 1}])
+    session = NormalTestSession(page, _Logger(), handler, None)
+
+    with pytest.raises(TargetClosedError, match="context closed"):
+        asyncio.run(session.process(_ClickableCourse()))
+
+    assert handler.removed is True
+
+
+def test_test_session_converts_click_redirect_to_authentication_error():
+    page = _Page(wait_forever=True)
+    handler = _Handler()
+
+    class _RedirectingCourse:
+        async def click(self):
+            page.url = "https://login.zhihuishu.com/?from=course"
+            raise RuntimeError("execution context destroyed")
+
+    session = NormalTestSession(page, _Logger(), handler, None)
+
+    with pytest.raises(CourseAuthenticationError, match="点击普通课测验后"):
+        asyncio.run(session.process(_RedirectingCourse()))
+
+    assert handler.removed is True
+    assert session.new_page_task.done()
+
+
+def test_test_session_converts_answer_redirect_to_authentication_error():
+    page = _Page()
+    handler = _Handler([{"id": 1}])
+
+    async def redirecting_answer(work_page, *_args, **_kwargs):
+        work_page.url = "https://login.zhihuishu.com/?from=answer"
+        raise RuntimeError("execution context destroyed")
+
+    session = NormalTestSession(page, _Logger(), handler, redirecting_answer)
+
+    with pytest.raises(CourseAuthenticationError, match="测验答题期间"):
+        asyncio.run(session.process(_ClickableCourse()))
+
     assert handler.removed is True
 
 
