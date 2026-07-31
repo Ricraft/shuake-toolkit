@@ -1207,16 +1207,17 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertEqual(calls, [{"autoStart": True}])
         self.assertFalse(launcher.web_preferences["autoStart"])
 
-    def test_frontend_preference_failure_restores_checkbox_and_reports_error(self):
+    def test_frontend_preference_failure_keeps_latest_local_value_in_queue(self):
         frontend = (
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("if (!result?.ok) throw new Error", frontend)
-        self.assertIn("state.preferences[key] = previous", frontend)
-        self.assertIn("input.checked = !!previous", frontend)
-        self.assertIn("showToast(error?.message||'偏好设置保存失败', 'error')", frontend)
-        self.assertIn("偏好仅临时保存在当前页面", frontend)
+        self.assertIn("savePreferencesInBackground({ [key]: value })", frontend)
+        self.assertIn("if (result?.ok === false)", frontend)
+        self.assertNotIn("state.preferences[key] = previous", frontend)
+        self.assertNotIn("input.checked = !!previous", frontend)
+        self.assertIn("当前页面设置已保留", frontend)
+        self.assertIn("偏好已保存在当前页面", frontend)
 
 
 if __name__ == "__main__":

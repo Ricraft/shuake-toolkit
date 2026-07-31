@@ -1731,55 +1731,19 @@
         }
 
         async function savePreference(key, value) {
-            const previous = state.preferences[key];
             state.preferences[key] = value;
-            const requestId = markLocalPreferenceMutation();
             persistStoredPreferences();
-            if (!bridge()) {
-                showToast('后端未连接，偏好仅临时保存在当前页面', 'warning');
-                return { ok: false, localOnly: true };
+            const result = await savePreferencesInBackground({ [key]: value });
+            if (result?.localOnly) {
+                showToast('后端未连接，偏好已保存在当前页面', 'warning');
             }
-            try {
-                const result = await apiCall('save_preference', { [key]: value });
-                if (!result?.ok) throw new Error(result?.message || '偏好设置保存失败');
-                if (result.preferences) {
-                    applyRemotePreferences(result.preferences, requestId);
-                }
-                return result;
-            } catch (error) {
-                state.preferences[key] = previous;
-                persistStoredPreferences();
-                syncPreferenceControls();
-                const input = document.getElementById(PREFERENCE_CONTROL_IDS[key]);
-                if (input) input.checked = !!previous;
-                if (!error?.silent) {
-                    showToast(error?.message||'偏好设置保存失败', 'error');
-                }
-                return {
-                    ok: false,
-                    message: error?.message || '偏好设置保存失败',
-                };
-            }
+            return result;
         }
 
         async function savePreferenceSilent(key, value) {
             state.preferences[key] = value;
-            const requestId = markLocalPreferenceMutation();
             persistStoredPreferences();
-            if (!bridge()) return { ok: false, localOnly: true };
-            try {
-                const result = await apiCall('save_preference', { [key]: value });
-                if (result?.preferences) {
-                    applyRemotePreferences(
-                        result.preferences,
-                        requestId,
-                        { refreshUi: false },
-                    );
-                }
-                return result || { ok: true };
-            } catch (e) {
-                return { ok: false, message: e?.message || '保存失败' };
-            }
+            return savePreferencesInBackground({ [key]: value });
         }
 
         async function flushBackgroundPreferenceSaves() {
@@ -2690,6 +2654,7 @@
         const TIANYI_CHAT_SAVE_MAX = 60;
         const TIANYI_CHAT_TEXT_MAX = 2000;
         const tianyiState = { history: [], chat: [], busy: false, commandBusy: false, greeted: false, chatLoaded: false };
+        let tianyiConfigSavePendingCount = 0;
 
         function normalizeTianyiSavedChat(raw) {
             if (!Array.isArray(raw)) return [];
@@ -2727,15 +2692,25 @@
         }
 
         function persistTianyiChatHistoryNow() {
+            cancelPendingTianyiChatSave();
             const history = normalizeTianyiSavedChat(tianyiState.chat);
             state.preferences[TIANYI_CHAT_PREF_KEY] = history;
             persistStoredPreferences();
             return savePreferenceSilent(TIANYI_CHAT_PREF_KEY, history);
         }
 
+        function cancelPendingTianyiChatSave() {
+            if (!window._tianyiChatSaveTimer) return;
+            clearTimeout(window._tianyiChatSaveTimer);
+            window._tianyiChatSaveTimer = null;
+        }
+
         function scheduleTianyiChatSave() {
-            if (window._tianyiChatSaveTimer) clearTimeout(window._tianyiChatSaveTimer);
-            window._tianyiChatSaveTimer = setTimeout(() => persistTianyiChatHistoryNow(), 500);
+            cancelPendingTianyiChatSave();
+            window._tianyiChatSaveTimer = setTimeout(() => {
+                window._tianyiChatSaveTimer = null;
+                void persistTianyiChatHistoryNow();
+            }, 500);
         }
 
         function initTianyiPage() {
@@ -2791,22 +2766,65 @@
             updateTianyiBadge();
         }
 
-        async function saveTianyiConfig(show = false) {
-            const cfg = {
+        function gatherTianyiPreferenceConfig() {
+            return {
                 aiType: document.getElementById('tianyi-ai-type')?.value || 'SILICON',
                 aiUrl: document.getElementById('tianyi-ai-url')?.value || '',
                 aiModel: document.getElementById('tianyi-ai-model')?.value || '',
                 apiKey: document.getElementById('tianyi-ai-api-key')?.value || '',
             };
-            const result = await savePreference(TIANYI_PREF_KEY, cfg);
+        }
+
+        function stageTianyiConfig() {
+            const cfg = gatherTianyiPreferenceConfig();
+            state.preferences[TIANYI_PREF_KEY] = cfg;
+            persistStoredPreferences();
             updateTianyiBadge();
-            if (show) showToast(result?.ok === false ? '保存失败' : '天依的模型配置已保存', result?.ok === false ? 'error' : 'success');
-            return result;
+            return cfg;
+        }
+
+        function cancelPendingTianyiConfigSave() {
+            if (!window._tianyiSaveTimer) return;
+            clearTimeout(window._tianyiSaveTimer);
+            window._tianyiSaveTimer = null;
+        }
+
+        function syncTianyiConfigSaveButton() {
+            const button = document.getElementById('tianyi-save-config-btn');
+            if (!button) return;
+            const busy = tianyiConfigSavePendingCount > 0;
+            button.disabled = busy;
+            button.innerHTML = busy
+                ? '<i class="fas fa-circle-notch fa-spin"></i> 保存中...'
+                : '<i class="fas fa-floppy-disk"></i> 保存配置';
+        }
+
+        async function saveTianyiConfig(show = false) {
+            if (show) cancelPendingTianyiConfigSave();
+            const cfg = stageTianyiConfig();
+            tianyiConfigSavePendingCount += 1;
+            syncTianyiConfigSaveButton();
+            try {
+                const result = await savePreferencesInBackground({ [TIANYI_PREF_KEY]: cfg });
+                if (show) {
+                    if (result?.ok) showToast('天依的模型配置已保存', 'success');
+                    else if (result?.localOnly) showToast('后端未连接，配置已保存在当前页面', 'warning');
+                    else showToast(result?.message || '保存失败', 'error');
+                }
+                return result;
+            } finally {
+                tianyiConfigSavePendingCount = Math.max(0, tianyiConfigSavePendingCount - 1);
+                syncTianyiConfigSaveButton();
+            }
         }
 
         function autoSaveTianyiConfig() {
-            if (window._tianyiSaveTimer) clearTimeout(window._tianyiSaveTimer);
-            window._tianyiSaveTimer = setTimeout(() => saveTianyiConfig(false), 800);
+            stageTianyiConfig();
+            cancelPendingTianyiConfigSave();
+            window._tianyiSaveTimer = setTimeout(() => {
+                window._tianyiSaveTimer = null;
+                void saveTianyiConfig(false);
+            }, 800);
         }
 
         function syncTianyiAiField() {

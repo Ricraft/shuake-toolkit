@@ -40,6 +40,7 @@ def test_fire_and_forget_preferences_use_the_tracked_queue():
     unsafe_pattern = "try { apiCall('save_preference'"
 
     assert unsafe_pattern not in FRONTEND
+    assert FRONTEND.count("apiCall('save_preference'") == 1
     assert "achievementSaveQueue" not in FRONTEND
     assert FRONTEND.count("savePreferencesInBackground(") >= 8
     assert "savePreferencesInBackground({ theme: normalized })" in FRONTEND

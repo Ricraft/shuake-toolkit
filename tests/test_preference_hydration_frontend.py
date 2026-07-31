@@ -78,8 +78,8 @@ def test_local_preference_changes_fence_older_remote_reads():
 
     assert "++preferenceRequestSequence" in marker_source
     assert "preferenceAppliedSequence = requestId" in marker_source
-    assert "const requestId = markLocalPreferenceMutation()" in save_source
-    assert "applyRemotePreferences(result.preferences, requestId)" in save_source
+    assert "savePreferencesInBackground({ [key]: value })" in save_source
+    assert "state.preferences[key] = previous" not in save_source
     assert "markLocalPreferenceMutation()" in background_source
 
 
