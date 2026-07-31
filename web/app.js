@@ -15,7 +15,9 @@
         let runtimeAppliedSequence = 0;
         let currentBgType = 'none';
         let lastObservedRuntimeEventKey = null;
-        let achievementSaveQueue = Promise.resolve();
+        let pendingBackgroundPreferences = {};
+        let backgroundPreferenceSavePromise = null;
+        let backgroundPreferenceWarningShown = false;
         const PREFERENCES_STORAGE_KEY = 'launcher_preferences_v1';
         const ACHIEVEMENTS = {
             tianyi_theme: {
@@ -150,7 +152,7 @@
         function switchConsoleTab(el) { document.querySelectorAll('.pill-tab[data-log-tab]').forEach(e => e.classList.remove('active')); el.classList.add('active'); state.currentLogTab = el.dataset.logTab; renderConsole(); }
         function unwrapState(r) { return r?.state?.runtime || r?.state || r?.runtime || null; }
         function renderConsole() { const b = document.getElementById('console-output'); if (!b) return; if (!state.runtime||!state.runtime.logs) { b.textContent = '等待日志输出...'; return; } const tab = state.currentLogTab||'system'; const raw = state.runtime.logs[tab]; const logs = Array.isArray(raw)?raw:String(raw||'').split(/\r?\n/).filter(Boolean); b.textContent = logs.length?logs.join('\n'):`暂无 ${tab} 日志`; b.scrollTop = b.scrollHeight; }
-        function exportLogs() { const logs = state.runtime?.logs; if (!logs) { showToast('没有可导出的日志', 'warning'); return; } const tab = state.currentLogTab||'system'; const LABELS = { system: '系统', yatori: 'Yatori', autovisor: 'Autovisor' }; let parts = [`=== ${LABELS[tab]||tab} 日志 ===`, '']; const raw = logs[tab]; const lines = Array.isArray(raw)?raw:String(raw||'').split(/\r?\n/).filter(Boolean); parts = parts.concat(lines); const text = parts.join('\n'); apiCall('export_logs', tab, text).then(r => { if (r?.ok) showToast(r.message||'日志已导出', 'success'); else showToast(r?.message||'导出失败', 'error'); }); }
+        function exportLogs() { const logs = state.runtime?.logs; if (!logs) { showToast('没有可导出的日志', 'warning'); return; } const tab = state.currentLogTab||'system'; const LABELS = { system: '系统', yatori: 'Yatori', autovisor: 'Autovisor' }; let parts = [`=== ${LABELS[tab]||tab} 日志 ===`, '']; const raw = logs[tab]; const lines = Array.isArray(raw)?raw:String(raw||'').split(/\r?\n/).filter(Boolean); parts = parts.concat(lines); const text = parts.join('\n'); apiCall('export_logs', tab, text).then(r => { if (r?.ok) showToast(r.message||'日志已导出', 'success'); else showToast(r?.message||'导出失败', 'error'); }).catch(error => { if (!error?.silent) showToast(error?.message||'导出失败', 'error'); }); }
 
         function renderAutovisorActivity(activity) { const panel = document.getElementById('autovisor-activity'); if (!panel) return; if (!activity || activity.phase === 'idle') { panel.hidden = true; return; } panel.hidden = false; panel.dataset.phase = activity.phase||'idle'; const label = document.getElementById('autovisor-activity-label'); const detail = document.getElementById('autovisor-activity-detail'); const percent = document.getElementById('autovisor-activity-percent'); const track = document.getElementById('autovisor-progress-track'); const bar = document.getElementById('autovisor-progress-bar'); if (label) label.textContent = activity.label||'运行中'; const parts = []; if (activity.course_index && activity.course_total) parts.push(`第 ${activity.course_index}/${activity.course_total} 门`); if (activity.course) parts.push(activity.course); if (activity.phase === 'failed' && activity.last_error) parts.push(activity.last_error); if (detail) { detail.textContent = parts.join(' · ')||'等待更多运行信息'; detail.title = detail.textContent; } const raw = Number(activity.progress_percent); const hasProgress = activity.progress_percent !== null && activity.progress_percent !== '' && Number.isFinite(raw); const value = hasProgress?Math.max(0, Math.min(100, raw)):0; if (percent) percent.textContent = hasProgress?`${value}%`:''; if (track) track.hidden = !hasProgress; if (bar) bar.style.width = `${value}%`; }
 
@@ -1524,6 +1526,63 @@
             }
         }
 
+        async function flushBackgroundPreferenceSaves() {
+            let lastResult = { ok: true };
+            while (Object.keys(pendingBackgroundPreferences).length) {
+                const payload = pendingBackgroundPreferences;
+                pendingBackgroundPreferences = {};
+                if (!bridge()) {
+                    lastResult = { ok: false, localOnly: true };
+                    continue;
+                }
+                try {
+                    const result = await apiCall('save_preference', payload);
+                    if (result?.ok === false) {
+                        throw new Error(result.message || '偏好设置同步失败');
+                    }
+                    backgroundPreferenceWarningShown = false;
+                    lastResult = result || { ok: true };
+                } catch (error) {
+                    lastResult = {
+                        ok: false,
+                        message: error?.message || '偏好设置同步失败',
+                    };
+                    if (!backgroundPreferenceWarningShown) {
+                        backgroundPreferenceWarningShown = true;
+                        showToast(
+                            '后端暂时无法同步偏好，当前页面设置已保留',
+                            'warning',
+                        );
+                    }
+                }
+            }
+            return lastResult;
+        }
+
+        function savePreferencesInBackground(payload) {
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+                return Promise.resolve({
+                    ok: false,
+                    message: '偏好设置格式无效',
+                });
+            }
+            pendingBackgroundPreferences = {
+                ...pendingBackgroundPreferences,
+                ...payload,
+            };
+            if (!backgroundPreferenceSavePromise) {
+                backgroundPreferenceSavePromise = Promise.resolve()
+                    .then(flushBackgroundPreferenceSaves)
+                    .finally(() => {
+                        backgroundPreferenceSavePromise = null;
+                        if (Object.keys(pendingBackgroundPreferences).length) {
+                            savePreferencesInBackground({});
+                        }
+                    });
+            }
+            return backgroundPreferenceSavePromise;
+        }
+
         if (typeof window !== 'undefined') { window.launcherAPI = { requestExit: function() { if (!exitConfirmed) showExitModal(); }, getTheme: function() { return getCurrentTheme(); } }; }
 
         function getCurrentTheme() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
@@ -1651,14 +1710,10 @@
         function queueAchievementSave(extra = {}) {
             const snapshot = JSON.parse(JSON.stringify(normalizeAchievementStore()));
             persistStoredPreferences();
-            if (!bridge()) return;
-            achievementSaveQueue = achievementSaveQueue
-                .catch(() => {})
-                .then(() => apiCall('save_preference', {
-                    achievements: snapshot,
-                    ...extra,
-                }))
-                .catch(() => {});
+            savePreferencesInBackground({
+                achievements: snapshot,
+                ...extra,
+            });
         }
 
         function showAchievementToast(id) {
@@ -1761,15 +1816,11 @@
             persistStoredPreferences();
             syncTianyiThemeUnlockUI();
             unlockAchievement('tianyi_theme');
-            if (bridge()) {
-                try {
-                    apiCall('save_preference', {
-                        tianyiThemeUnlocked: true,
-                        tianyiAchievementShown: true,
-                        achievements: normalizeAchievementStore(),
-                    });
-                } catch (e) {}
-            }
+            savePreferencesInBackground({
+                tianyiThemeUnlocked: true,
+                tianyiAchievementShown: true,
+                achievements: normalizeAchievementStore(),
+            });
         }
 
         function resetTianyiThemeUnlockForTest() {
@@ -1793,18 +1844,14 @@
             updateAchievementSummary();
             updatePreferencesBg(state.preferences.bgType || 'none');
             showToast('洛天依解锁状态已重置，可以重新点击左侧洛天依测试', 'success');
-            if (bridge()) {
-                try {
-                    apiCall('save_preference', {
-                        tianyiThemeUnlocked: false,
-                        tianyiAchievementShown: false,
-                        achievements: state.preferences.achievements,
-                        theme: state.preferences.theme,
-                        bgType: state.preferences.bgType || 'none',
-                        bgUrl: state.preferences.bgUrl || ''
-                    });
-                } catch (e) {}
-            }
+            savePreferencesInBackground({
+                tianyiThemeUnlocked: false,
+                tianyiAchievementShown: false,
+                achievements: state.preferences.achievements,
+                theme: state.preferences.theme,
+                bgType: state.preferences.bgType || 'none',
+                bgUrl: state.preferences.bgUrl || ''
+            });
         }
 
         if (typeof window !== 'undefined') {
@@ -1825,8 +1872,7 @@
             state.preferences.theme = normalized;
             updateThemeIcons();
             persistStoredPreferences();
-            if (!bridge()) return;
-            try { apiCall('save_preference', { theme: normalized }); } catch (e) {}
+            savePreferencesInBackground({ theme: normalized });
         }
 
         function updateThemeIcons() {
@@ -1957,8 +2003,7 @@
             applyGlassBlur(blurValue);
             // 保存偏好
             persistStoredPreferences();
-            if (!bridge()) return;
-            try { apiCall('save_preference', { glassBlur: blurValue }); } catch (e) {}
+            savePreferencesInBackground({ glassBlur: blurValue });
         }
 
         function updateOverlayStrength(value) {
@@ -1971,8 +2016,7 @@
             document.body.style.setProperty('--overlay-alpha', String(alpha));
             document.body.style.setProperty('--overlay-blur', blurPx + 'px');
             persistStoredPreferences();
-            if (!bridge()) return;
-            try { apiCall('save_preference', { overlayStrength: strength }); } catch (e) {}
+            savePreferencesInBackground({ overlayStrength: strength });
         }
 
         function applyOverlayStrengthFromPrefs() {
@@ -2020,9 +2064,10 @@
                 clearCustomBackgroundInputs();
             }
             persistStoredPreferences();
-            if (bridge()) {
-                try { apiCall('save_preference', { bgType: type, bgUrl: state.preferences.bgUrl || '' }); } catch (e) {}
-            }
+            savePreferencesInBackground({
+                bgType: type,
+                bgUrl: state.preferences.bgUrl || '',
+            });
             syncBgModalState();
             const prefGrid = document.getElementById('bg-preview-grid');
             if (prefGrid) { prefGrid.querySelectorAll('.bg-preview-item').forEach(item => item.classList.toggle('active', item.dataset.bg === type)); }
@@ -2141,9 +2186,11 @@
              document.body.style.removeProperty('--overlay-alpha');
              document.body.style.removeProperty('--overlay-blur');
              persistStoredPreferences();
-             if (bridge()) {
-                 try { apiCall('save_preference', { bgType: 'none', bgUrl: '', glassBlur: 16 }); } catch (e) {}
-             }
+             savePreferencesInBackground({
+                 bgType: 'none',
+                 bgUrl: '',
+                 glassBlur: 16,
+             });
             syncBgModalState();
             const prefGrid = document.getElementById('bg-preview-grid');
             if (prefGrid) { prefGrid.querySelectorAll('.bg-preview-item').forEach(item => item.classList.toggle('active', item.dataset.bg === 'none')); }
