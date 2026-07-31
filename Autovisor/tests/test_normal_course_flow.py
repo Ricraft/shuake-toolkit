@@ -14,6 +14,7 @@ from modules.normal_course_flow import (
     NormalTestOutcome,
     NormalTestSession,
     check_normal_course_time_limit,
+    next_normal_course_index,
     restore_normal_course_list,
     run_normal_course,
 )
@@ -125,6 +126,10 @@ class _ClickableCourse:
             return _TextLocator(self.title)
         if selector == "b.finish":
             return _TextLocator("", count=1 if self.completed else 0)
+        if selector == ".time_icofinish":
+            return _TextLocator("", count=1 if self.completed else 0)
+        if selector == ".progress-num":
+            return _TextLocator("100%" if self.completed else "50%")
         return _TextLocator("", count=0)
 
 
@@ -286,6 +291,119 @@ def test_unconfirmed_video_result_is_not_advanced_as_completed(
         )
 
     assert course.clicked is True
+
+
+def test_completed_video_does_not_skip_next_item_when_pending_list_shrinks():
+    page = _Page()
+    courses = [
+        _ClickableCourse(title="第一课"),
+        _ClickableCourse(title="第二课"),
+    ]
+    learned = []
+
+    async def close_popup(*_args):
+        return False
+
+    async def class_provider(*_args, **_kwargs):
+        return [course for course in courses if not course.completed]
+
+    async def learning_loop(*_args):
+        course = next(
+            item for item in courses if item.clicked and not item.completed
+        )
+        learned.append(course.title)
+        course.completed = True
+        return True
+
+    async def title_reader(*_args):
+        return next(
+            item.title for item in courses if item.clicked and not item.completed
+        )
+
+    async def no_time_limit(*_args, **_kwargs):
+        return False
+
+    asyncio.run(
+        run_normal_course(
+            page,
+            SimpleNamespace(
+                remove_pause="js",
+                course_urls=["course"],
+                limitMaxTime=0,
+            ),
+            _Logger(),
+            close_popup=close_popup,
+            learning_loop=learning_loop,
+            review_loop=None,
+            handler_factory=lambda: _Handler(),
+            answer_handler=None,
+            class_provider=class_provider,
+            test_scanner=lambda *_args: asyncio.sleep(0, result=[]),
+            title_reader=title_reader,
+            time_limit_checker=no_time_limit,
+            clock=lambda: 0,
+        )
+    )
+
+    assert learned == ["第一课", "第二课"]
+    assert all(course.completed for course in courses)
+
+
+def test_confirmed_video_advances_when_completion_marker_is_delayed():
+    page = _Page()
+    course = _ClickableCourse(completed=False)
+
+    result = asyncio.run(
+        next_normal_course_index(
+            page,
+            course,
+            3,
+            learning=True,
+            is_new_version=False,
+            logger=_Logger(),
+        )
+    )
+
+    assert result == 4
+
+
+@pytest.mark.parametrize("is_new_version", [False, True])
+def test_updated_completion_marker_keeps_index_for_shrinking_list(
+    is_new_version,
+):
+    result = asyncio.run(
+        next_normal_course_index(
+            _Page(),
+            _ClickableCourse(completed=True),
+            3,
+            learning=True,
+            is_new_version=is_new_version,
+            logger=_Logger(),
+        )
+    )
+
+    assert result == 3
+
+
+def test_completion_marker_read_failure_keeps_index_for_rescan():
+    class _BrokenCourse(_ClickableCourse):
+        def locator(self, _selector):
+            raise RuntimeError("detached")
+
+    logger = _Logger()
+    result = asyncio.run(
+        next_normal_course_index(
+            _Page(),
+            _BrokenCourse(),
+            2,
+            learning=True,
+            is_new_version=False,
+            logger=logger,
+        )
+    )
+
+    assert result == 2
+    assert "保留索引重新扫描" in logger.warnings[-1]
 
 
 def test_answered_test_is_not_repeated_when_completion_state_is_stale():

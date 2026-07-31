@@ -182,6 +182,50 @@ async def check_normal_course_time_limit(
     return False
 
 
+async def next_normal_course_index(
+    page,
+    course,
+    current_index: int,
+    *,
+    learning: bool,
+    is_new_version: bool,
+    logger,
+) -> int:
+    """Advance against either a stable review list or a shrinking pending list."""
+    if not learning:
+        return current_index + 1
+
+    try:
+        if is_new_version:
+            progress = course.locator(".progress-num").first
+            marker_updated = (
+                await progress.count() > 0
+                and (await progress.text_content() or "").strip() == "100%"
+            )
+        else:
+            marker_updated = (
+                await course.locator(".time_icofinish").count() > 0
+            )
+    except Exception as exc:
+        try:
+            await ensure_course_authenticated(
+                page,
+                "确认课时完成状态时登录状态失效",
+            )
+        except CourseAuthenticationError as auth_error:
+            raise auth_error from exc
+        logger.warn(
+            f"读取课时完成标记失败: {str(exc)[:50]}，保留索引重新扫描"
+        )
+        return current_index
+
+    if marker_updated:
+        # 未完成列表会在下一轮移除本课时；保留索引才能选中移位后的下一项。
+        return current_index
+    # 完成标记可能延迟刷新，本轮已确认视频完成，推进以免重复播放同一项。
+    return current_index + 1
+
+
 async def run_normal_course(
     page,
     config,
@@ -383,12 +427,14 @@ async def run_normal_course(
             await review_loop(page, start_time, False)
         await ensure_course_authenticated(page, "视频播放期间登录状态失效")
 
-        try:
-            if "current_play" in await all_class[current_index].get_attribute("class"):
-                current_index += 1
-        except Exception as exc:
-            logger.warn(f"获取课程状态失败: {str(exc)[:50]}，强制推进")
-            current_index += 1
+        current_index = await next_normal_course_index(
+            page,
+            course,
+            current_index,
+            learning=learning,
+            is_new_version=is_new_version,
+            logger=logger,
+        )
 
         if await time_limit_checker(
             page,
