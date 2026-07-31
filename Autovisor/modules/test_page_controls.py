@@ -15,6 +15,79 @@ from modules.logger import Logger
 
 logger = Logger()
 
+_QUESTION_NAVIGATION_MARKER_JS = """
+() => {
+    const normalize = value => String(value || '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    const isVisible = element => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && rect.width > 0
+            && rect.height > 0;
+    };
+    const selectors = [
+        '.examPaper_subject',
+        '.subject_node',
+        '.examquestions',
+        '.question-item',
+        '.question-info',
+        '.topic-title'
+    ];
+    const viewportHeight = window.innerHeight || 1;
+    const candidates = [];
+    for (const selector of selectors) {
+        Array.from(document.querySelectorAll(selector)).forEach((element, index) => {
+            if (!isVisible(element)) return;
+            const rect = element.getBoundingClientRect();
+            const overlap = Math.max(
+                0,
+                Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0)
+            );
+            const text = normalize(element.innerText || element.textContent);
+            if (text) {
+                candidates.push({
+                    marker: `${selector}:${index}:${text.slice(0, 1000)}`,
+                    overlap,
+                    distance: Math.abs(
+                        (rect.top + rect.bottom) / 2 - viewportHeight / 2
+                    )
+                });
+            }
+        });
+    }
+    candidates.sort(
+        (left, right) =>
+            right.overlap - left.overlap || left.distance - right.distance
+    );
+    const activeSelectors = [
+        '.question-number.active',
+        '.number.active',
+        '.answer-card .active',
+        '.answerCard .active',
+        '.el-tabs__item.is-active',
+        '[aria-current="step"]',
+        '[aria-current="true"]'
+    ];
+    let active = '';
+    for (const selector of activeSelectors) {
+        const element = document.querySelector(selector);
+        if (isVisible(element)) {
+            active = `${selector}:${normalize(element.textContent)}`;
+            break;
+        }
+    }
+    return {
+        href: window.location.href,
+        question: candidates.length ? candidates[0].marker : '',
+        active
+    };
+}
+"""
+
 
 async def has_selected_answer(page: Page) -> bool:
     """判断当前可见题目是否存在真实选中或填写的答案。"""
@@ -168,26 +241,20 @@ async def wait_for_user_action(
 
 
 async def click_prev_button(page: Page, *, logger_instance=None) -> bool:
-    """按多个候选选择器点击上一题并返回真实结果。"""
-    active_logger = logger_instance or logger
-    selectors = (
-        "text='上一题'",
-        "text*='上一题'",
-        ".prev-btn",
-        "button:has-text('上一题')",
-        ".exam-btn-prev",
+    """点击上一题，并以页面题目变化作为成功依据。"""
+    return await _click_question_navigation(
+        page,
+        (
+            "text='上一题'",
+            "text*='上一题'",
+            ".prev-btn",
+            "button:has-text('上一题')",
+            ".exam-btn-prev",
+        ),
+        key="ArrowLeft",
+        label="上一题",
+        logger_instance=logger_instance,
     )
-    for selector in selectors:
-        try:
-            button = page.locator(selector).first
-            if await button.count() > 0:
-                await button.click(timeout=2000)
-                active_logger.info("[OK] 点击上一题")
-                return True
-        except Exception:
-            continue
-    active_logger.warn("[FAIL] 未找到或无法点击上一题按钮")
-    return False
 
 
 async def wait_for_widget_next_button(
@@ -493,28 +560,127 @@ async def answer_question(
 
 
 async def click_next_button(page: Page, *, logger_instance=None) -> bool:
-    """点击下一题；所有选择器失败后尝试键盘右箭头。"""
-    active_logger = logger_instance or logger
-    selectors = (
-        "button:has-text('下一题')",
-        ".switch-btn-box button:last-child",
-        ".next-btn, [class*='next']",
+    """点击下一题，并以页面题目变化作为成功依据。"""
+    return await _click_question_navigation(
+        page,
+        (
+            "button:has-text('下一题')",
+            ".switch-btn-box button:last-child",
+            ".next-btn, [class*='next']",
+        ),
+        key="ArrowRight",
+        label="下一题",
+        logger_instance=logger_instance,
     )
+
+
+async def _read_question_navigation_marker(page: Page) -> dict[str, str]:
+    marker = await page.evaluate(_QUESTION_NAVIGATION_MARKER_JS)
+    if not isinstance(marker, dict):
+        raise RuntimeError("题目导航标记格式无效")
+    return {
+        "href": str(marker.get("href") or ""),
+        "question": str(marker.get("question") or ""),
+        "active": str(marker.get("active") or ""),
+    }
+
+
+def _question_navigation_changed(
+    before: dict[str, str],
+    after: dict[str, str],
+) -> bool:
+    return any(
+        before[field] and after[field] and before[field] != after[field]
+        for field in ("href", "question", "active")
+    )
+
+
+async def _wait_for_question_navigation(
+    page: Page,
+    before: dict[str, str],
+    *,
+    attempts: int = 8,
+    poll_interval_ms: int = 250,
+) -> bool:
+    for _attempt in range(max(1, attempts)):
+        await page.wait_for_timeout(poll_interval_ms)
+        after = await _read_question_navigation_marker(page)
+        if _question_navigation_changed(before, after):
+            return True
+    return False
+
+
+async def _click_question_navigation(
+    page: Page,
+    selectors: tuple[str, ...],
+    *,
+    key: str,
+    label: str,
+    logger_instance=None,
+) -> bool:
+    """执行一次导航动作；动作成功后不再重复点击，只等待页面证据。"""
+    active_logger = logger_instance or logger
+    try:
+        before = await _read_question_navigation_marker(page)
+    except TargetClosedError:
+        active_logger.warn("[FAIL] 页面已关闭，无法点击%s" % label)
+        return False
+    except Exception as exc:
+        active_logger.warn(
+            "[FAIL] 无法读取%s前的题目状态: %s"
+            % (label, str(exc)[:60])
+        )
+        return False
+
+    last_error = None
     for selector in selectors:
         try:
             button = page.locator(selector).first
             if await button.count() > 0:
                 await button.click(timeout=3000)
-                active_logger.info("[OK] 点击下一题")
-                return True
-        except Exception:
+                try:
+                    changed = await _wait_for_question_navigation(page, before)
+                except TargetClosedError:
+                    active_logger.warn(
+                        "[FAIL] 点击%s后页面关闭，无法确认题目变化" % label
+                    )
+                    return False
+                except Exception as exc:
+                    active_logger.warn(
+                        "[FAIL] 点击%s后无法验证题目变化: %s"
+                        % (label, str(exc)[:60])
+                    )
+                    return False
+                if changed:
+                    active_logger.info("[OK] 点击%s，题目已切换" % label)
+                    return True
+                active_logger.warn(
+                    "[FAIL] 已点击%s，但题目未发生变化" % label
+                )
+                return False
+        except TargetClosedError:
+            active_logger.warn("[FAIL] 页面已关闭，无法点击%s" % label)
+            return False
+        except Exception as exc:
+            last_error = exc
             continue
+
     try:
-        await page.keyboard.press("ArrowRight")
-        active_logger.info("[OK] 使用键盘下一题")
-        return True
+        await page.keyboard.press(key)
+        changed = await _wait_for_question_navigation(page, before)
+        if changed:
+            active_logger.info("[OK] 使用键盘%s，题目已切换" % label)
+            return True
+        active_logger.warn("[FAIL] 使用键盘%s后题目未发生变化" % label)
+        return False
+    except TargetClosedError:
+        active_logger.warn("[FAIL] 页面已关闭，无法点击%s" % label)
+        return False
     except Exception as exc:
-        active_logger.warn("[FAIL] 点击下一题失败: %s" % str(exc)[:50])
+        reason = exc if exc else last_error
+        active_logger.warn(
+            "[FAIL] 点击%s失败: %s" % (label, str(reason)[:60])
+        )
         return False
 
 

@@ -68,6 +68,13 @@ def test_click_next_button_reports_failure_when_all_fallbacks_fail():
     class Page:
         keyboard = _FailingKeyboard()
 
+        async def evaluate(self, _script):
+            return {
+                "href": "https://example.test/exam",
+                "question": "第一题",
+                "active": "1",
+            }
+
         def locator(self, _selector):
             return _EmptyLocator()
 
@@ -79,6 +86,59 @@ def test_click_next_button_reports_failure_when_all_fallbacks_fail():
 
 
 def test_click_prev_button_reports_real_click_success():
+    class Locator:
+        def __init__(self, page):
+            self.page = page
+            self.clicked = False
+
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            return 1
+
+        async def click(self, **_kwargs):
+            self.clicked = True
+            self.page.question = "第一题"
+
+    class Page:
+        question = "第二题"
+
+        def __init__(self):
+            self.keyboard = _FailingKeyboard()
+            self.locator_instance = Locator(self)
+
+        async def evaluate(self, _script):
+            return {
+                "href": "https://example.test/exam",
+                "question": self.question,
+                "active": "",
+            }
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        def locator(self, _selector):
+            return self.locator_instance
+
+    page = Page()
+    result = asyncio.run(
+        controls.click_prev_button(page, logger_instance=_Logger())
+    )
+
+    assert result is True
+    assert page.locator_instance.clicked is True
+
+
+def test_next_click_without_question_change_is_not_reported_as_success():
+    class Keyboard:
+        def __init__(self):
+            self.calls = []
+
+        async def press(self, key):
+            self.calls.append(key)
+
     class Locator:
         clicked = False
 
@@ -92,18 +152,65 @@ def test_click_prev_button_reports_real_click_success():
         async def click(self, **_kwargs):
             self.clicked = True
 
-    locator = Locator()
+    class Page:
+        keyboard = Keyboard()
+        locator_instance = Locator()
+
+        async def evaluate(self, _script):
+            return {
+                "href": "https://example.test/exam",
+                "question": "第一题",
+                "active": "1",
+            }
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
+        def locator(self, _selector):
+            return self.locator_instance
+
+    page = Page()
+    result = asyncio.run(
+        controls.click_next_button(page, logger_instance=_Logger())
+    )
+
+    assert result is False
+    assert page.locator_instance.clicked is True
+    assert page.keyboard.calls == []
+
+
+def test_keyboard_navigation_requires_and_accepts_question_change():
+    class Keyboard:
+        def __init__(self, page):
+            self.page = page
+
+        async def press(self, _key):
+            self.page.question = "第二题"
 
     class Page:
+        question = "第一题"
+
+        def __init__(self):
+            self.keyboard = Keyboard(self)
+
+        async def evaluate(self, _script):
+            return {
+                "href": "https://example.test/exam",
+                "question": self.question,
+                "active": "",
+            }
+
+        async def wait_for_timeout(self, _milliseconds):
+            return None
+
         def locator(self, _selector):
-            return locator
+            return _EmptyLocator()
 
     result = asyncio.run(
-        controls.click_prev_button(Page(), logger_instance=_Logger())
+        controls.click_next_button(Page(), logger_instance=_Logger())
     )
 
     assert result is True
-    assert locator.clicked is True
 
 
 class _SubmitLocator:
