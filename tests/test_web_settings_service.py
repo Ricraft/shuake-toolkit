@@ -1,3 +1,4 @@
+import threading
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -230,3 +231,112 @@ def test_malformed_yatori_nested_data_returns_stable_validation_error(
     assert result["ok"] is False
     assert result["message"] == "Yatori 账号 1 的课程设置格式无效"
     assert launcher.calls == []
+
+
+def test_failed_transaction_cannot_restore_over_a_later_save(tmp_path):
+    launcher = make_launcher(tmp_path)
+    first_save_started = threading.Event()
+    release_first_save = threading.Event()
+    second_done = threading.Event()
+    results = {}
+    original_save_yatori = launcher._save_yatori_config_data
+
+    def controlled_save_yatori(data):
+        account = data["users"][0]["account"]
+        if account == "first":
+            launcher.paths[0].write_text("first-partial", encoding="utf-8")
+            first_save_started.set()
+            assert release_first_save.wait(timeout=2)
+            raise RuntimeError("first save failed")
+        original_save_yatori(data)
+        launcher.paths[0].write_text("second-yatori", encoding="utf-8")
+
+    launcher._save_yatori_config_data = controlled_save_yatori
+    first_payload = valid_payload()
+    first_payload["yatori"]["users"][0]["account"] = "first"
+    second_payload = valid_payload()
+    second_payload["yatori"]["users"][0]["account"] = "second"
+    first_service = WebSettingsService(launcher)
+    second_service = WebSettingsService(launcher)
+
+    first = threading.Thread(
+        target=lambda: results.update(
+            first=first_service.save(first_payload)
+        )
+    )
+
+    def save_second():
+        results["second"] = second_service.save(second_payload)
+        second_done.set()
+
+    second = threading.Thread(target=save_second)
+    first.start()
+    assert first_save_started.wait(timeout=2)
+    second.start()
+    assert not second_done.wait(timeout=0.05)
+    release_first_save.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert results["first"]["ok"] is False
+    assert results["second"]["ok"] is True
+    assert [path.read_text(encoding="utf-8") for path in launcher.paths] == [
+        "second-yatori",
+        "new-autovisor",
+        "new-qb",
+    ]
+
+
+def test_save_uses_detached_loaded_config_and_payload_snapshots(tmp_path):
+    launcher = make_launcher(tmp_path)
+    shared_yatori = launcher._load_yatori_config_data()
+    launcher._load_yatori_config_data = lambda: shared_yatori
+    payload = valid_payload()
+    payload["yatori"]["users"][0]["coursesCustom"]["includeCourses"] = [
+        "original-course"
+    ]
+    payload["autovisor"]["accounts"][0]["course_urls"] = [
+        "https://onlineweb.zhihuishu.com/onlinestuh5"
+    ]
+    original_payload = deepcopy(payload)
+    original_save_yatori = launcher._save_yatori_config_data
+    original_save_autovisor = launcher._save_autovisor_config_data
+
+    def mutate_yatori(data):
+        data["users"][0]["coursesCustom"]["includeCourses"].append(
+            "callback-mutation"
+        )
+        original_save_yatori(data)
+
+    def mutate_autovisor(data):
+        data["accounts"][0]["course_urls"].append(
+            "https://onlineweb.zhihuishu.com/callback-mutation"
+        )
+        original_save_autovisor(data)
+
+    launcher._save_yatori_config_data = mutate_yatori
+    launcher._save_autovisor_config_data = mutate_autovisor
+
+    result = WebSettingsService(launcher).save(payload)
+
+    assert result["ok"] is True
+    assert payload == original_payload
+    assert shared_yatori["users"][0]["account"] == "old"
+    assert shared_yatori["setting"]["basicSetting"] == {"unknown": "keep"}
+
+
+def test_failed_prepare_does_not_mutate_loaded_yatori_cache(tmp_path):
+    launcher = make_launcher(tmp_path)
+    shared_yatori = launcher._load_yatori_config_data()
+    launcher._load_yatori_config_data = lambda: shared_yatori
+    payload = valid_payload()
+    payload["yatori"]["setting"]["basicSetting"]["logLevel"] = "TRACE"
+    payload["yatori"]["users"][0]["coursesCustom"] = "invalid"
+
+    result = WebSettingsService(launcher).save(payload)
+
+    assert result["ok"] is False
+    assert shared_yatori["setting"]["basicSetting"] == {"unknown": "keep"}
+    assert shared_yatori["users"][0]["account"] == "old"

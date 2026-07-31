@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from threading import RLock
+
 from src.atomic_io import capture_file_state, restore_file_state
 
 
@@ -21,6 +24,10 @@ class WebSettingsService:
 
     def __init__(self, launcher):
         self.launcher = launcher
+        self._lock = launcher.__dict__.setdefault(
+            "_web_settings_transaction_lock",
+            RLock(),
+        )
 
     def _log(self, message):
         try:
@@ -62,7 +69,7 @@ class WebSettingsService:
         launcher = self.launcher
         raw_accounts = autovisor_data.get("accounts")
         if not raw_accounts:
-            raw_accounts = [launcher._default_autovisor_account(1)]
+            raw_accounts = [deepcopy(launcher._default_autovisor_account(1))]
         if not isinstance(raw_accounts, list):
             raise SettingsValidationError(
                 "Autovisor 账号列表格式无效"
@@ -74,7 +81,7 @@ class WebSettingsService:
                 raise SettingsValidationError(
                     f"Autovisor 账号 {index} 的配置格式无效"
                 )
-            account = dict(raw_account)
+            account = deepcopy(raw_account)
             account["limit_speed"] = launcher._normalize_autovisor_speed(
                 account.get("limit_speed", "1.0"),
                 "1.0",
@@ -105,9 +112,9 @@ class WebSettingsService:
 
     def _merge_yatori(self, yatori_data):
         launcher = self.launcher
-        merged = launcher._load_yatori_config_data()
+        merged = deepcopy(launcher._load_yatori_config_data())
         if not isinstance(merged, dict):
-            merged = launcher._default_yatori_config()
+            merged = deepcopy(launcher._default_yatori_config())
         merged.setdefault("setting", {})
         if not isinstance(merged["setting"], dict):
             merged["setting"] = {}
@@ -125,7 +132,7 @@ class WebSettingsService:
             if not isinstance(existing_section, dict):
                 existing_section = {}
                 merged["setting"][section_name] = existing_section
-            existing_section.update(incoming_section)
+            existing_section.update(deepcopy(incoming_section))
 
         existing_users = (
             merged.get("users")
@@ -134,7 +141,7 @@ class WebSettingsService:
         )
         incoming_users = yatori_data.get("users")
         if not incoming_users:
-            incoming_users = [launcher._default_yatori_user(1)]
+            incoming_users = [deepcopy(launcher._default_yatori_user(1))]
         if not isinstance(incoming_users, list):
             raise SettingsValidationError("Yatori 账号列表格式无效")
 
@@ -150,10 +157,10 @@ class WebSettingsService:
                 and isinstance(existing_users[index - 1], dict)
                 else {}
             )
-            merged_user = dict(existing)
+            merged_user = deepcopy(existing)
             merged_user.update(
                 {
-                    key: value
+                    key: deepcopy(value)
                     for key, value in incoming_user.items()
                     if key != "coursesCustom"
                 }
@@ -166,13 +173,13 @@ class WebSettingsService:
             existing_courses = existing.get("coursesCustom")
             if not isinstance(existing_courses, dict):
                 existing_courses = {}
-            merged_courses = dict(existing_courses)
-            merged_courses.update(incoming_courses)
+            merged_courses = deepcopy(existing_courses)
+            merged_courses.update(deepcopy(incoming_courses))
             merged_user["coursesCustom"] = merged_courses
             merged_users.append(merged_user)
 
         merged["users"] = (
-            merged_users or [launcher._default_yatori_user(1)]
+            merged_users or [deepcopy(launcher._default_yatori_user(1))]
         )
         return merged
 
@@ -194,7 +201,7 @@ class WebSettingsService:
             qb_data if isinstance(qb_data, dict) else None,
         )
 
-    def save(self, payload):
+    def _save_transaction(self, payload):
         launcher = self.launcher
         try:
             yatori_data, autovisor_data, qb_data = (
@@ -263,3 +270,11 @@ class WebSettingsService:
 
         self._log("启动器配置已保存")
         return self._with_state({"ok": True})
+
+    def save(self, payload):
+        with self._lock:
+            try:
+                payload_snapshot = deepcopy(payload)
+            except Exception as exc:
+                return self._failure(f"配置数据无法复制: {exc}")
+            return self._save_transaction(payload_snapshot)
