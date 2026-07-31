@@ -5,9 +5,12 @@ import traceback
 from typing import List
 from playwright.async_api import Page, Locator
 from playwright.async_api import TimeoutError
+from playwright._impl._errors import TargetClosedError
 from pygetwindow import Win32Window
 
 from modules.configs import Config
+from modules.course_errors import CourseAuthenticationError
+from modules.course_portal import is_course_homepage_url, is_login_page
 import time
 import pygetwindow as gw
 from modules.logger import Logger
@@ -534,9 +537,34 @@ def summarize_cards(cards: list[dict]) -> dict:
             section_state["pending"] += 1
     return summary
 
-async def _find_national_wisdom_context(page: Page):
+async def _ensure_national_scan_authenticated(page: Page) -> None:
+    if await is_login_page(page) or is_course_homepage_url(
+        getattr(page, "url", "")
+    ):
+        raise CourseAuthenticationError(
+            "全国共享课等待课程列表时登录状态失效"
+        )
+
+
+async def _raise_national_auth_if_needed(
+    page: Page,
+    error: Exception,
+) -> None:
+    try:
+        await _ensure_national_scan_authenticated(page)
+    except CourseAuthenticationError as auth_error:
+        raise auth_error from error
+
+
+async def _find_national_wisdom_context(
+    page: Page,
+    *,
+    max_attempts: int = 15,
+    retry_delay_ms: int = 2000,
+):
     """查找全国智慧共享课的课程列表所在上下文（主页面或 iframe Frame）"""
-    for attempt in range(15):
+    for attempt in range(max_attempts):
+        await _ensure_national_scan_authenticated(page)
         for frame in page.frames:
             try:
                 if await frame.locator('.chapter-item').count() > 0:
@@ -544,16 +572,23 @@ async def _find_national_wisdom_context(page: Page):
                         logger.info(f"课程列表加载完成 (第 {attempt + 1} 次尝试)")
                     logger.info("检测到课程列表在 iframe 中，切换上下文")
                     return frame, True
+            except TargetClosedError:
+                raise
             except Exception:
                 continue
         try:
             if await page.locator('.chapter-item').count() > 0:
                 logger.info("课程列表在主页面中")
                 return page, False
+        except TargetClosedError:
+            raise
         except Exception:
             pass
-        logger.write_log(f"等待课程列表加载... ({attempt + 1}/15)\n")
-        await page.wait_for_timeout(2000)
+        logger.write_log(
+            f"等待课程列表加载... ({attempt + 1}/{max_attempts})\n"
+        )
+        await page.wait_for_timeout(retry_delay_ms)
+        await _ensure_national_scan_authenticated(page)
     logger.warn("超时未检测到课程列表，使用主页面作为上下文")
     return page, False
 
@@ -564,6 +599,7 @@ async def scan_national_wisdom_cards(page: Page, max_rounds: int = 30) -> tuple[
     
     # 查找课程列表所在上下文（主页面或 iframe Frame）
     context, is_in_iframe = await _find_national_wisdom_context(page)
+    await _ensure_national_scan_authenticated(page)
     
     # DOM 强制展开所有折叠章节
     try:
@@ -575,7 +611,10 @@ async def scan_national_wisdom_cards(page: Page, max_rounds: int = 30) -> tuple[
                 return items.length > 0;
             }''', timeout=5000)
         await page.wait_for_timeout(500)
+    except (CourseAuthenticationError, TargetClosedError):
+        raise
     except Exception as e:
+        await _raise_national_auth_if_needed(page, e)
         logger.write_log(f"展开章节失败: {repr(e)}\n")
     
     # 诊断：展开后 item-box 为什么不可见
@@ -585,16 +624,32 @@ async def scan_national_wisdom_cards(page: Page, max_rounds: int = 30) -> tuple[
             for s in diag["skipped"]:
                 logger.write_log(f"  [跳过] {s['name']} → {s['reason']}\n")
         logger.write_log(f"诊断: {diag['total']}个.item-box | {diag['visible']}个可见 | {len(diag.get('skipped',[]))}个被跳过\n")
+    except (CourseAuthenticationError, TargetClosedError):
+        raise
     except Exception as e:
+        await _raise_national_auth_if_needed(page, e)
         logger.write_log(f"诊断失败: {repr(e)}\n")
     
     # 滚动到顶部
-    await context.evaluate("window.scrollTo(0, 0)")
+    try:
+        await context.evaluate("window.scrollTo(0, 0)")
+    except TargetClosedError:
+        raise
+    except Exception as exc:
+        await _raise_national_auth_if_needed(page, exc)
+        raise
     await page.wait_for_timeout(500)
     
     # 滚动扫描
     for round_num in range(max_rounds):
-        result = await context.evaluate(NATIONAL_WISDOM_CARD_SCAN_JS)
+        await _ensure_national_scan_authenticated(page)
+        try:
+            result = await context.evaluate(NATIONAL_WISDOM_CARD_SCAN_JS)
+        except TargetClosedError:
+            raise
+        except Exception as exc:
+            await _raise_national_auth_if_needed(page, exc)
+            raise
         cards = result["cards"]
         
         for card in cards:
@@ -612,11 +667,24 @@ async def scan_national_wisdom_cards(page: Page, max_rounds: int = 30) -> tuple[
             break
         
         step = max(300, int(viewport_height * 0.8))
-        await context.evaluate("(step) => window.scrollBy(0, step)", step)
+        try:
+            await context.evaluate("(step) => window.scrollBy(0, step)", step)
+        except TargetClosedError:
+            raise
+        except Exception as exc:
+            await _raise_national_auth_if_needed(page, exc)
+            raise
         await page.wait_for_timeout(800)
+        await _ensure_national_scan_authenticated(page)
     
     # 回到顶部
-    await context.evaluate("window.scrollTo(0, 0)")
+    try:
+        await context.evaluate("window.scrollTo(0, 0)")
+    except TargetClosedError:
+        raise
+    except Exception as exc:
+        await _raise_national_auth_if_needed(page, exc)
+        raise
     await page.wait_for_timeout(300)
     
     cards = list(merged.values())

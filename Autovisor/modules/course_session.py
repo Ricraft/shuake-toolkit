@@ -6,19 +6,15 @@ from __future__ import annotations
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from modules.course_portal import is_course_homepage_url, is_login_page
+from modules.course_errors import (
+    CourseAuthenticationError,
+    CourseNavigationError,
+)
 from modules.course_types import CourseProfile
 from modules.utils import optimize_page
 
 
 COURSE_OPEN_TIMEOUT_MS = 30_000
-
-
-class CourseNavigationError(RuntimeError):
-    """A course-specific navigation failure that may not affect later courses."""
-
-
-class CourseAuthenticationError(CourseNavigationError):
-    """The course navigation lost authentication and the whole queue must stop."""
 
 
 async def ensure_course_authenticated(page, message: str) -> None:

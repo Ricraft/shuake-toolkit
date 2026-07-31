@@ -13,6 +13,11 @@ sys.path.insert(0, _AUTOVISOR_ROOT)
 from modules.national_course_flow import is_course_list_url, run_national_course
 from modules.course_session import CourseAuthenticationError
 from modules.national_test_flow import NationalTestOutcome
+from modules.utils import (
+    _find_national_wisdom_context,
+    scan_national_wisdom_cards,
+)
+from playwright._impl._errors import TargetClosedError
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -222,6 +227,77 @@ def test_login_redirect_during_national_scan_is_fatal():
                 handler_factory=lambda: None,
                 answer_handler=None,
                 scanner=scanner,
+            )
+        )
+
+
+def test_context_wait_stops_after_delayed_login_redirect():
+    class _DelayedLoginPage(_Page):
+        def __init__(self):
+            super().__init__(_config().course_urls[0])
+            self.frames = []
+            self.waits = 0
+
+        async def wait_for_timeout(self, _timeout):
+            self.waits += 1
+            self.url = "https://login.zhihuishu.com/"
+
+    page = _DelayedLoginPage()
+    with pytest.raises(CourseAuthenticationError, match="等待课程列表"):
+        asyncio.run(
+            _find_national_wisdom_context(
+                page,
+                max_attempts=15,
+                retry_delay_ms=1,
+            )
+        )
+
+    assert page.waits == 1
+
+
+def test_context_wait_preserves_page_closed_error():
+    class _ClosedFrame:
+        def locator(self, _selector):
+            return self
+
+        async def count(self):
+            raise TargetClosedError("closed")
+
+    class _ClosedPage(_Page):
+        frames = [_ClosedFrame()]
+
+    with pytest.raises(TargetClosedError):
+        asyncio.run(
+            _find_national_wisdom_context(
+                _ClosedPage(_config().course_urls[0]),
+                max_attempts=15,
+                retry_delay_ms=1,
+            )
+        )
+
+
+def test_scan_script_error_after_login_redirect_preserves_auth_error():
+    class _ChapterLocator:
+        async def count(self):
+            return 1
+
+    class _RedirectingScriptPage(_Page):
+        frames = []
+
+        def locator(self, selector):
+            if selector == ".chapter-item":
+                return _ChapterLocator()
+            return super().locator(selector)
+
+        async def evaluate(self, _script, _argument=None):
+            self.url = "https://login.zhihuishu.com/"
+            raise RuntimeError("execution context destroyed")
+
+    with pytest.raises(CourseAuthenticationError, match="等待课程列表"):
+        asyncio.run(
+            scan_national_wisdom_cards(
+                _RedirectingScriptPage(_config().course_urls[0]),
+                max_rounds=1,
             )
         )
 
