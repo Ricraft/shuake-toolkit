@@ -33,6 +33,7 @@ from src.process_supervisor import ProcessSupervisor
 from src.preferences_service import PreferencesService
 from src.practice_mode_service import PracticeModeService
 from src.python_runtime import find_python_executable
+from src.question_bank_action_service import QuestionBankActionService
 from src.runtime_coordinator import RuntimeCoordinator
 from src.runtime_process_service import RuntimeProcessService
 from src.scheduled_task_service import ScheduledTaskService
@@ -1065,6 +1066,21 @@ class UnifiedLauncher:
     def save_qb_settings_from_web(self, payload):
         return self.question_bank.update_settings(payload)
 
+    def _get_question_bank_action_service(self):
+        service = getattr(self, "_question_bank_action_service", None)
+        if service is None:
+            service = QuestionBankActionService(
+                get_controller=lambda: getattr(self, "question_bank", None),
+                get_window=lambda: getattr(self, "web_window", None),
+                dialog_available=lambda: webview is not None,
+                open_dialog_type=FD_OPEN,
+                save_dialog_type=FD_SAVE,
+                show_info=self._show_info,
+                show_error=self._show_error,
+            )
+            self._question_bank_action_service = service
+        return service
+
     def _get_course_catalog_service(self):
         service = getattr(self, '_course_catalog_service', None)
         base_dir = self.get_base_dir()
@@ -1111,74 +1127,16 @@ class UnifiedLauncher:
         return self.question_bank.stop()
 
     def _import_question_bank(self):
-        """Choose a JSON file in WebView and delegate the import."""
-        if not self.question_bank.available:
-            message = "题库服务器不可用"
-            self._show_error("导入失败", message)
-            return {'ok': False, 'message': message}
-        file_path = ""
-        if self.web_window and webview:
-            selection = self.web_window.create_file_dialog(
-                FD_OPEN,
-                file_types=("JSON 文件 (*.json)", "所有文件 (*.*)"),
-            )
-            if selection:
-                file_path = selection[0]
-        if not file_path:
-            return {'ok': True, 'cancelled': True}
-        result = self.question_bank.import_questions(file_path)
-        if result.get("ok"):
-            self._show_info("导入成功", result["message"])
-            result = dict(result)
-            result.update({'toast': result['message'], 'toastType': 'success'})
-        else:
-            self._show_error("导入失败", result.get("message", "未知错误"))
-        return result
+        return self._get_question_bank_action_service().import_questions()
 
     def _export_question_bank(self):
-        """Choose a JSON destination in WebView and delegate the export."""
-        if not self.question_bank.available:
-            message = "题库服务器不可用"
-            self._show_error("导出失败", message)
-            return {'ok': False, 'message': message}
-        file_path = ""
-        if self.web_window and webview:
-            selection = self.web_window.create_file_dialog(
-                FD_SAVE,
-                file_types=("JSON 文件 (*.json)", "所有文件 (*.*)"),
-            )
-            if selection:
-                file_path = selection[0]
-                if not file_path.lower().endswith(".json"):
-                    file_path += ".json"
-        if not file_path:
-            return {'ok': True, 'cancelled': True}
-        result = self.question_bank.export_questions(file_path)
-        if result.get("ok"):
-            self._show_info("导出成功", result["message"])
-            result = dict(result)
-            result.update({'toast': result['message'], 'toastType': 'success'})
-        else:
-            self._show_error("导出失败", result.get("message", "未知错误"))
-        return result
+        return self._get_question_bank_action_service().export_questions()
 
     def _clear_question_bank(self):
-        result = self.question_bank.clear_questions()
-        if result.get("ok"):
-            self._show_info("清空成功", result["message"])
-            result = dict(result)
-            result.update({'toast': result['message'], 'toastType': 'success'})
-        else:
-            self._show_error("清空失败", result.get("message", "未知错误"))
-        return result
+        return self._get_question_bank_action_service().clear_questions()
 
     def _deduplicate_question_bank(self):
-        result = self.question_bank.deduplicate_questions()
-        if result.get("ok"):
-            self._show_info("去重完成", result["message"])
-        else:
-            self._show_error("去重失败", result.get("message", "未知错误"))
-        return bool(result.get("ok")), result.get("message", "去重失败")
+        return self._get_question_bank_action_service().deduplicate_questions()
 
     def _deduplicate_db_direct(self):
         return self.question_bank._deduplicate_database()
