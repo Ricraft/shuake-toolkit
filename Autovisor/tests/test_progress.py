@@ -10,7 +10,12 @@ _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules.diagnostics import RateLimitedDiagnostics
-from modules.progress import get_course_progress, show_course_progress
+from modules.progress import (
+    _parse_percentage,
+    get_course_progress,
+    show_course_progress,
+    show_progress,
+)
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -28,6 +33,48 @@ def test_progress_display_clamps_invalid_ranges(capsys):
 
     show_course_progress("完成进度:", "not-ready")
     assert " 0%" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("已签到 100/1000，进度 10%", 10),
+        ("签到 8/10", 80),
+        ("签到进度 80", 80),
+        ("完成 120%", 100),
+    ],
+)
+def test_percentage_parser_prefers_explicit_units_and_ratios(
+    text,
+    expected,
+):
+    assert _parse_percentage(text) == expected
+
+
+def test_percentage_parser_rejects_ambiguous_bare_numbers():
+    with pytest.raises(ValueError, match="多个无单位数字"):
+        _parse_percentage("总计 100 人，已签到 80 人")
+
+
+def test_unknown_download_size_displays_bytes_without_division_by_zero(capsys):
+    show_progress("下载进度:", current=1234, total=0)
+
+    output = capsys.readouterr().out
+    assert "已下载 1234 bytes" in output
+
+
+@pytest.mark.parametrize(
+    ("current", "expected"),
+    [(200, "100%"), (-10, "0%")],
+)
+def test_known_download_progress_clamps_percentage(
+    current,
+    expected,
+    capsys,
+):
+    show_progress("下载进度:", current=current, total=100)
+
+    assert expected in capsys.readouterr().out
 
 
 class _TextLocator:
@@ -68,6 +115,31 @@ def test_meeting_progress_accepts_decorated_percentage_text():
 
     assert result == "100%"
     assert page.evaluate_calls == 0
+
+
+class _AmbiguousMeetingProgressPage:
+    def locator(self, _selector):
+        return _TextLocator("总计 100 人，已签到 80 人")
+
+    async def evaluate(self, _script):
+        return {
+            "duration": 100,
+            "currentTime": 50,
+            "ended": False,
+            "paused": False,
+            "readyState": 4,
+        }
+
+
+def test_meeting_progress_uses_video_when_sign_in_text_is_ambiguous():
+    result = asyncio.run(
+        get_course_progress(
+            _AmbiguousMeetingProgressPage(),
+            is_meeting_class=True,
+        )
+    )
+
+    assert result == "50%"
 
 
 class _BrokenMeetingProgressPage:

@@ -14,11 +14,31 @@ progress_diagnostics = RateLimitedDiagnostics(logger)
 
 
 def _parse_percentage(value) -> int:
-    """Extract and clamp a percentage from text such as ``签到 80%``."""
-    match = re.search(r"-?\d+(?:\.\d+)?", str(value or ""))
-    if not match:
+    """安全解析百分比：优先显式 ``%``，其次比例，最后单一裸数字。"""
+    text = str(value or "")
+    percent_match = re.search(r"(-?\d+(?:\.\d+)?)\s*%", text)
+    if percent_match:
+        progress = float(percent_match.group(1))
+        return max(0, min(100, int(progress)))
+
+    ratio_match = re.search(
+        r"(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)",
+        text,
+    )
+    if ratio_match:
+        numerator = float(ratio_match.group(1))
+        denominator = float(ratio_match.group(2))
+        if denominator <= 0:
+            raise ValueError("进度比例分母必须大于零")
+        progress = numerator / denominator * 100
+        return max(0, min(100, int(progress)))
+
+    numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
+    if not numbers:
         raise ValueError("进度文本中没有数字")
-    return max(0, min(100, int(float(match.group(0)))))
+    if len(numbers) != 1:
+        raise ValueError("进度文本包含多个无单位数字")
+    return max(0, min(100, int(float(numbers[0]))))
 
 
 def _progress_from_video_state(
@@ -313,7 +333,27 @@ def show_course_progress(desc, cur_time=None, limit_time=0, is_meeting_class=Fal
 
 # 打印通用版进度条
 def show_progress(desc, current, total, suffix="", width=30):
-    percent = int(current / total * 100)
+    try:
+        current_value = float(current)
+        total_value = float(total)
+    except (TypeError, ValueError):
+        current_value = 0
+        total_value = 0
+    if not math.isfinite(total_value) or total_value <= 0:
+        downloaded = (
+            max(0, int(current_value))
+            if math.isfinite(current_value)
+            else 0
+        )
+        print(
+            f"\r{desc} 已下载 {downloaded} bytes\t{suffix}".ljust(50),
+            end="",
+            flush=True,
+        )
+        return
+    if not math.isfinite(current_value):
+        current_value = 0
+    percent = max(0, min(100, int(current_value / total_value * 100)))
     length = int(percent * width // 100)
     progress = ("█" * length).ljust(width, " ")
     print(f"\r{desc} |{progress}| {percent}%\t{suffix}".ljust(50), end="", flush=True)
