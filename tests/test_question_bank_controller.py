@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -39,11 +40,14 @@ class QuestionBankControllerTests(unittest.TestCase):
         configure_auto_save_setting = kwargs.pop(
             "configure_auto_save_setting", lambda **_kwargs: None
         )
+        configure_models = kwargs.pop(
+            "configure_models", lambda **_kwargs: None
+        )
         controller = QuestionBankController(
             base_dir,
             log=logs.append,
             server_factory=_FakeServer,
-            configure_models=lambda **_kwargs: None,
+            configure_models=configure_models,
             configure_auto_save_setting=configure_auto_save_setting,
             port_checker=port_checker,
             sleep=lambda _seconds: None,
@@ -190,6 +194,106 @@ class QuestionBankControllerTests(unittest.TestCase):
             self.assertEqual(controller.get_settings(), original)
             self.assertFalse(controller.config_path.exists())
             self.assertEqual(len(calls), 2)
+
+    def test_failed_ai_runtime_config_rolls_back_memory_and_file(self):
+        calls = []
+
+        def flaky_models(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("model callback failed")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller, logs = self.make_controller(
+                temp_dir,
+                configure_models=flaky_models,
+            )
+            original = controller.get_settings()
+
+            result = controller.update_settings(
+                {
+                    "port": 8083,
+                    "ai_enabled": True,
+                    "ai_model": "new-model",
+                    "ai_api_key": "secret",
+                }
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertIn("model callback failed", result["message"])
+            self.assertEqual(controller.get_settings(), original)
+            self.assertFalse(controller.config_path.exists())
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(any("AI配置应用失败" in line for line in logs))
+
+    def test_failed_update_cannot_roll_back_over_later_concurrent_save(self):
+        first_callback_started = threading.Event()
+        release_first_callback = threading.Event()
+        second_done = threading.Event()
+        armed = {"value": False}
+        failed_once = {"value": False}
+        results = {}
+
+        def controlled_auto_save(*, enabled):
+            if (
+                armed["value"]
+                and enabled is False
+                and not failed_once["value"]
+            ):
+                failed_once["value"] = True
+                first_callback_started.set()
+                self.assertTrue(release_first_callback.wait(timeout=2))
+                raise RuntimeError("first callback failed")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller, _logs = self.make_controller(
+                temp_dir,
+                configure_auto_save_setting=controlled_auto_save,
+            )
+            armed["value"] = True
+
+            def update_first():
+                results["first"] = controller.update_settings(
+                    {
+                        "port": 8083,
+                        "ai_enabled": False,
+                        "ai_model": "first",
+                        "auto_save": False,
+                    }
+                )
+
+            def update_second():
+                results["second"] = controller.update_settings(
+                    {
+                        "port": 8083,
+                        "ai_enabled": False,
+                        "ai_model": "second",
+                        "auto_save": True,
+                    }
+                )
+                second_done.set()
+
+            first = threading.Thread(target=update_first)
+            second = threading.Thread(target=update_second)
+            first.start()
+            self.assertTrue(first_callback_started.wait(timeout=2))
+            second.start()
+            self.assertFalse(second_done.wait(timeout=0.05))
+            release_first_callback.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertFalse(results["first"]["ok"])
+            self.assertTrue(results["second"]["ok"])
+            self.assertEqual(controller.ai_model, "second")
+            self.assertTrue(controller.auto_save)
+            saved = json.loads(
+                controller.config_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(saved["ai_model"], "second")
+            self.assertTrue(saved["auto_save"])
 
     def test_unreachable_started_server_is_cleaned_up(self):
         with tempfile.TemporaryDirectory() as temp_dir:

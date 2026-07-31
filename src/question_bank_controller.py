@@ -18,6 +18,7 @@ import urllib.request
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
+from threading import RLock
 
 from src.atomic_io import atomic_dump_json, capture_file_state, restore_file_state
 
@@ -69,6 +70,7 @@ class QuestionBankController:
         self.available = bool(
             QUESTION_BANK_AVAILABLE if available is None else available
         ) and self.server_factory is not None
+        self._lock = RLock()
 
         self.server = None
         self.running = False
@@ -95,7 +97,41 @@ class QuestionBankController:
     def config_path(self) -> Path:
         return self.base_dir / "data" / "qb_config.json"
 
+    @property
+    def server(self):
+        with self._lock:
+            return self._server
+
+    @server.setter
+    def server(self, value) -> None:
+        with self._lock:
+            self._server = value
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._running
+
+    @running.setter
+    def running(self, value) -> None:
+        with self._lock:
+            self._running = bool(value)
+
+    @property
+    def port(self) -> int:
+        with self._lock:
+            return self._port
+
+    @port.setter
+    def port(self, value) -> None:
+        with self._lock:
+            self._port = int(value)
+
     def load_settings(self) -> None:
+        with self._lock:
+            self._load_settings()
+
+    def _load_settings(self) -> None:
         """Load persisted settings without overwriting a damaged file."""
         try:
             if not self.config_path.exists():
@@ -127,7 +163,11 @@ class QuestionBankController:
         except Exception as exc:
             self.log(f"[QB] 加载题库设置失败: {exc}")
 
-    def apply_ai_config(self) -> None:
+    def apply_ai_config(self, *, strict: bool = False) -> None:
+        with self._lock:
+            self._apply_ai_config(strict=strict)
+
+    def _apply_ai_config(self, *, strict: bool = False) -> None:
         if not self.available:
             return
         try:
@@ -151,8 +191,14 @@ class QuestionBankController:
             )
         except Exception as exc:
             self.log(f"[QB] AI配置应用失败: {exc}")
+            if strict:
+                raise
 
     def save_settings(self) -> bool:
+        with self._lock:
+            return self._save_settings()
+
+    def _save_settings(self) -> bool:
         try:
             atomic_dump_json(
                 self.config_path,
@@ -174,18 +220,23 @@ class QuestionBankController:
             return False
 
     def get_settings(self) -> dict:
-        return {
-            "auto_start": self.auto_start,
-            "ai_enabled": self.ai_enabled,
-            "ai_type": self.ai_type,
-            "ai_url": self.ai_url,
-            "ai_model": self.ai_model,
-            "ai_api_key": self.ai_api_key,
-            "auto_save": self.auto_save,
-            "port": self.port,
-        }
+        with self._lock:
+            return {
+                "auto_start": self.auto_start,
+                "ai_enabled": self.ai_enabled,
+                "ai_type": self.ai_type,
+                "ai_url": self.ai_url,
+                "ai_model": self.ai_model,
+                "ai_api_key": self.ai_api_key,
+                "auto_save": self.auto_save,
+                "port": self.port,
+            }
 
     def update_settings(self, payload) -> dict:
+        with self._lock:
+            return self._update_settings(payload)
+
+    def _update_settings(self, payload) -> dict:
         if not isinstance(payload, dict):
             return {"ok": False, "message": "题库设置格式错误"}
         try:
@@ -216,7 +267,7 @@ class QuestionBankController:
 
         restart_attempted = False
         try:
-            self.apply_ai_config()
+            self.apply_ai_config(strict=True)
             if self.available:
                 self.configure_auto_save_setting(enabled=self.auto_save)
             if was_running and port != previous["port"]:
@@ -270,11 +321,14 @@ class QuestionBankController:
             details.append(f"旧设置文件恢复失败: {exc}")
 
         try:
-            self.apply_ai_config()
-            if self.available:
-                self.configure_auto_save_setting(enabled=self.auto_save)
+            self.apply_ai_config(strict=True)
         except Exception as exc:
             details.append(f"旧运行配置恢复失败: {exc}")
+        if self.available:
+            try:
+                self.configure_auto_save_setting(enabled=self.auto_save)
+            except Exception as exc:
+                details.append(f"旧自动保存配置恢复失败: {exc}")
 
         if restart_server and was_running:
             try:
@@ -289,6 +343,10 @@ class QuestionBankController:
         return {"ok": False, "message": f"{failure_message}{suffix}"}
 
     def auto_start_if_enabled(self) -> bool:
+        with self._lock:
+            return self._auto_start_if_enabled()
+
+    def _auto_start_if_enabled(self) -> bool:
         if not self.available:
             return False
         self.prepare_environment()
@@ -296,12 +354,17 @@ class QuestionBankController:
         return not self.auto_start or self.start(silent=True)
 
     def toggle(self) -> bool:
-        if self.running:
-            self.stop()
-            return False
-        return self.start()
+        with self._lock:
+            if self.running:
+                self.stop()
+                return False
+            return self.start()
 
     def start(self, silent: bool = False) -> bool:
+        with self._lock:
+            return self._start(silent=silent)
+
+    def _start(self, silent: bool = False) -> bool:
         if not self.available:
             if not silent:
                 self.log("题库服务器模块未找到，请确保 题库服务器.py 在 src 目录下")
@@ -359,6 +422,10 @@ class QuestionBankController:
         return False
 
     def stop(self) -> None:
+        with self._lock:
+            self._stop()
+
+    def _stop(self) -> None:
         if self.server and self.running:
             try:
                 self.server.stop()
@@ -370,14 +437,16 @@ class QuestionBankController:
         self.log("题库服务器已停止")
 
     def get_stats(self):
-        if self.running and self.server:
-            return self.server.get_stats()
-        return None
+        with self._lock:
+            if self.running and self.server:
+                return self.server.get_stats()
+            return None
 
     def get_query_url(self) -> str | None:
-        if self.running and self.server:
-            return f"{self.server.url}/query"
-        return None
+        with self._lock:
+            if self.running and self.server:
+                return f"{self.server.url}/query"
+            return None
 
     @property
     def database_path(self) -> Path:
