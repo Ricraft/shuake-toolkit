@@ -2204,14 +2204,23 @@
             hideBgModal();
         }
 
+        function markBackendDisconnected(message) {
+            backendConnected = false;
+            initialized = false;
+            backendWaitStartedAt = Date.now();
+            backendHintShown = false;
+            setBackendStatus(message);
+            if (runtimeTimer) {
+                clearInterval(runtimeTimer);
+                runtimeTimer = null;
+            }
+            scheduleInitRetry(300);
+        }
+
         async function refreshRuntime() {
             if (runtimeRefreshInFlight || document.hidden) return;
             if (!bridge()) {
-                backendConnected = false;
-                initialized = false;
-                setBackendStatus('后端连接中断，正在重连...');
-                if (runtimeTimer) { clearInterval(runtimeTimer); runtimeTimer = null; }
-                scheduleInitRetry(300);
+                markBackendDisconnected('后端连接中断，正在重连...');
                 return;
             }
             runtimeRefreshInFlight = true;
@@ -2220,8 +2229,7 @@
                 const runtime = await apiCall('get_runtime_state');
                 applyRuntimeState(runtime, requestId);
             } catch (error) {
-                backendConnected = false;
-                setBackendStatus('后端连接中断，正在重试...');
+                markBackendDisconnected('后端连接中断，正在重新初始化...');
             } finally {
                 runtimeRefreshInFlight = false;
             }
@@ -2268,6 +2276,7 @@
                 if (payload.runtime) applyRuntimeState(payload.runtime, requestId);
                 initialized = true;
                 backendConnected = true;
+                setBackendStatus('Python 后端已连接');
                 backendInitErrorShown = false;
                 showToast('HTML UI 已连接 Python 后端', 'success');
                 startRuntimePolling();
