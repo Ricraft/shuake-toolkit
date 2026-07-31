@@ -33,6 +33,12 @@
         let latestQbSettingsSaveSequence = 0;
         let qbSettingsStatusResetTimer = null;
         const PREFERENCES_STORAGE_KEY = 'launcher_preferences_v1';
+        const CUSTOM_BACKGROUND_MAX_FILE_BYTES = 2 * 1024 * 1024;
+        const CUSTOM_BACKGROUND_MAX_REMOTE_URL_LENGTH = 8192;
+        const CUSTOM_BACKGROUND_MAX_DATA_URL_LENGTH = Math.ceil(
+            CUSTOM_BACKGROUND_MAX_FILE_BYTES * 4 / 3,
+        ) + 256;
+        const CUSTOM_BACKGROUND_DATA_URL_PATTERN = /^data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,/i;
         const ACHIEVEMENTS = {
             tianyi_theme: {
                 title: '洛水天依',
@@ -2157,20 +2163,46 @@
         }
 
         function setBackground(type, element) {
-            const grid = element.closest('.bg-preview-grid');
-            if (grid) { grid.querySelectorAll('.bg-preview-item').forEach(item => item.classList.remove('active')); element.classList.add('active'); }
             if (isTianyiWallpaperBg(type)) {
                 if (!isTianyiThemeUnlocked()) {
                     showToast('洛天依壁纸还未解锁，先去左侧点一下洛天依吧', 'warning');
                     return;
                 }
             }
+            const grid = element.closest('.bg-preview-grid');
+            if (grid) { grid.querySelectorAll('.bg-preview-item').forEach(item => item.classList.remove('active')); element.classList.add('active'); }
             applyBackground(type);
             updatePreferencesBg(type);
         }
 
         function setBackgroundFromModal(type, element) {
             setBackground(type, element);
+        }
+
+        function validateCustomBackgroundSource(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return { ok: false, message: '请输入图片 URL' };
+            if (raw.startsWith('data:')) {
+                if (!CUSTOM_BACKGROUND_DATA_URL_PATTERN.test(raw)) {
+                    return { ok: false, message: '仅支持 PNG、JPEG、GIF、WebP、BMP 或 AVIF 图片' };
+                }
+                if (raw.length > CUSTOM_BACKGROUND_MAX_DATA_URL_LENGTH) {
+                    return { ok: false, message: '本地背景图片不能超过 2 MB' };
+                }
+                return { ok: true, url: raw };
+            }
+            if (raw.length > CUSTOM_BACKGROUND_MAX_REMOTE_URL_LENGTH) {
+                return { ok: false, message: '图片 URL 过长' };
+            }
+            try {
+                const parsed = new URL(raw);
+                if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+                    return { ok: false, message: '图片 URL 仅支持 HTTP 或 HTTPS' };
+                }
+                return { ok: true, url: parsed.href };
+            } catch (error) {
+                return { ok: false, message: '图片 URL 格式无效' };
+            }
         }
 
         function applyBackground(type) {
@@ -2188,8 +2220,11 @@
                 body.classList.add('has-custom-bg');
             }
             else if (type === 'custom') {
-                const url = state.preferences?.bgUrl || '';
-                if (url) { body.style.backgroundImage = `url(${url})`; body.classList.add('has-custom-bg'); }
+                const source = validateCustomBackgroundSource(state.preferences?.bgUrl);
+                if (source.ok) {
+                    body.style.backgroundImage = `url(${JSON.stringify(source.url)})`;
+                    body.classList.add('has-custom-bg');
+                }
             }
         }
 
@@ -2298,11 +2333,18 @@
 
         function applySavedBg() {
             let type = state.preferences?.bgType || 'none';
-            if (isTianyiWallpaperBg(type) && !isTianyiThemeUnlocked()) {
+            const invalidLockedWallpaper = isTianyiWallpaperBg(type) && !isTianyiThemeUnlocked();
+            const invalidCustomBackground = type === 'custom'
+                && !validateCustomBackgroundSource(state.preferences?.bgUrl).ok;
+            if (invalidLockedWallpaper || invalidCustomBackground) {
                 type = 'none';
                 state.preferences.bgType = 'none';
                 state.preferences.bgUrl = '';
                 persistStoredPreferences();
+                savePreferencesInBackground({ bgType: 'none', bgUrl: '' });
+                if (preferencesHydrated && invalidCustomBackground) {
+                    showToast('自定义背景地址无效，已恢复默认背景', 'warning');
+                }
             }
             currentBgType = type;
             applyBackground(type);
@@ -2333,9 +2375,9 @@
 
         function applyCustomBackground() {
             const el = document.getElementById('custom-bg-url');
-            const url = el ? el.value.trim() : '';
-            if (!url) { showToast('请输入图片 URL', 'error'); return; }
-            state.preferences.bgUrl = url;
+            const source = validateCustomBackgroundSource(el?.value);
+            if (!source.ok) { showToast(source.message, 'error'); return; }
+            state.preferences.bgUrl = source.url;
             currentBgType = 'custom';
             applyBackground('custom');
             updatePreferencesBg('custom');
@@ -2356,9 +2398,9 @@
 
         function applyModalCustomBg() {
             const el = document.getElementById('modal-custom-bg-url');
-            const url = el ? el.value.trim() : '';
-            if (!url) { showToast('请输入图片 URL', 'error'); return; }
-            state.preferences.bgUrl = url;
+            const source = validateCustomBackgroundSource(el?.value);
+            if (!source.ok) { showToast(source.message, 'error'); return; }
+            state.preferences.bgUrl = source.url;
             currentBgType = 'custom';
             applyBackground('custom');
             updatePreferencesBg('custom');
@@ -2369,18 +2411,30 @@
             const file = input.files?.[0];
             if (!file) return;
             if (!file.type.startsWith('image/')) { showToast('请选择图片文件', 'error'); return; }
+            if (file.size > CUSTOM_BACKGROUND_MAX_FILE_BYTES) {
+                showToast('本地背景图片不能超过 2 MB', 'error');
+                input.value = '';
+                return;
+            }
             const reader = new FileReader();
             reader.onload = function(e) {
-                const dataUrl = e.target.result;
-                state.preferences.bgUrl = dataUrl;
+                const source = validateCustomBackgroundSource(e.target.result);
+                if (!source.ok) {
+                    showToast(source.message, 'error');
+                    return;
+                }
+                state.preferences.bgUrl = source.url;
                 currentBgType = 'custom';
                 applyBackground('custom');
                 updatePreferencesBg('custom');
                 const modalUrl = document.getElementById('modal-custom-bg-url');
-                if (modalUrl) modalUrl.value = dataUrl;
+                if (modalUrl) modalUrl.value = source.url;
                 const customUrl = document.getElementById('custom-bg-url');
-                if (customUrl) customUrl.value = dataUrl;
+                if (customUrl) customUrl.value = source.url;
                 hideBgModal();
+            };
+            reader.onerror = function() {
+                showToast('读取背景图片失败', 'error');
             };
             reader.readAsDataURL(file);
             input.value = '';
@@ -2391,6 +2445,7 @@
             state.preferences.bgType = 'none';
             state.preferences.bgUrl = '';
             state.preferences.glassBlur = 16;
+            state.preferences.overlayStrength = 70;
              applyBackground('none');
              // 重置毛玻璃模糊度滑块
              const slider = document.getElementById('glass-blur-slider');
@@ -2399,6 +2454,10 @@
              if (valueEl) valueEl.textContent = '16px';
              applyGlassBlur(16);
              // 重置覆盖层强度
+             const strengthSlider = document.getElementById('overlay-strength-slider');
+             const strengthValueEl = document.getElementById('overlay-strength-value');
+             if (strengthSlider) strengthSlider.value = 70;
+             if (strengthValueEl) strengthValueEl.textContent = '70%';
              document.body.style.removeProperty('--overlay-alpha');
              document.body.style.removeProperty('--overlay-blur');
              persistStoredPreferences();
@@ -2406,6 +2465,7 @@
                  bgType: 'none',
                  bgUrl: '',
                  glassBlur: 16,
+                 overlayStrength: 70,
              });
             syncBgModalState();
             const prefGrid = document.getElementById('bg-preview-grid');
