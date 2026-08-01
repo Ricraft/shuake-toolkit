@@ -1,11 +1,12 @@
 import asyncio
-from types import ModuleType
-import requests
 import random
-from playwright.async_api import Page
-from playwright._impl._errors import TimeoutError
+
+import requests
+
+from playwright._impl._errors import TargetClosedError
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+
 from modules.logger import Logger
-from modules.login_selectors import LOGIN_PANEL
 
 # 防御性导入 OpenCV 和 NumPy（由 caller 通过 runtime_deps 提供）
 try:
@@ -16,6 +17,15 @@ except ImportError:
     np = None   # type: ignore
 
 logger = Logger()
+SLIDER_VISIBILITY_SELECTORS = (
+    ".yidun_bgimg",
+    "img.yidun_bg-img",
+    "img.yidun_jigsaw",
+    "div.yidun_slider",
+)
+SLIDER_DETECTION_TIMEOUT_MS = 3000
+SLIDER_DETECTION_POLL_MS = 200
+SLIDER_RESULT_SETTLE_MS = 800
 
 
 # 下载图片并转换为OpenCV格式
@@ -60,7 +70,11 @@ def process_block_image(image):
 async def progress_img(page: Page):
     # 等待滑块验证码图片加载完成
     if await page.locator("div.yidun--loading").is_visible():
-        await page.wait_for_selector("div.yidun--loading", state="detached")
+        await page.wait_for_selector(
+            "div.yidun--loading",
+            state="detached",
+            timeout=5000,
+        )
 
     # 异步下载背景图片和滑块图片
     bg_url = await page.locator('img.yidun_bg-img').get_attribute('src')
@@ -96,6 +110,8 @@ def gen_movelist(sum_n, steps=30):
 async def move_slider(page: Page, distance, offset=32):
     await page.locator('div.yidun_slider').hover()
     box = await page.locator('div.yidun_slider').bounding_box()
+    if not box:
+        raise RuntimeError("无法获取滑块位置")
 
     # 生成每次移动距离列表
     move_list = gen_movelist(distance)
@@ -106,30 +122,104 @@ async def move_slider(page: Page, distance, offset=32):
     await page.mouse.up()
 
 
-async def slider_verify(page: Page):
+async def is_slider_visible(page: Page) -> bool:
+    """Recognize both legacy and current NetEase slider challenge nodes."""
+    for selector in SLIDER_VISIBILITY_SELECTORS:
+        locator = page.locator(selector)
+        count = await locator.count()
+        if count == 0:
+            continue
+        if count == 1:
+            if await locator.is_visible():
+                return True
+            continue
+        for item in await locator.all():
+            if await item.is_visible():
+                return True
+    return False
+
+
+async def wait_for_slider_appearance(
+    page: Page,
+    *,
+    timeout_ms: int = SLIDER_DETECTION_TIMEOUT_MS,
+    poll_ms: int = SLIDER_DETECTION_POLL_MS,
+) -> bool:
+    """Give a post-submit challenge a short, bounded appearance window."""
+    remaining_ms = max(int(timeout_ms), 0)
+    poll_ms = max(int(poll_ms), 1)
+    while True:
+        if await is_slider_visible(page):
+            return True
+        if remaining_ms <= 0:
+            return False
+        delay_ms = min(poll_ms, remaining_ms)
+        await page.wait_for_timeout(delay_ms)
+        remaining_ms -= delay_ms
+
+
+async def confirm_slider_drag_result(page: Page) -> bool:
+    """Treat a drag as successful only after the challenge is hidden."""
+    await page.wait_for_timeout(SLIDER_RESULT_SETTLE_MS)
+    return not await is_slider_visible(page)
+
+
+async def slider_verify(
+    page: Page,
+    *,
+    max_retries: int = 3,
+    detection_timeout_ms: int = SLIDER_DETECTION_TIMEOUT_MS,
+    logger_instance=None,
+) -> bool:
     """执行滑块验证码自动破解（OpenCV 模板匹配）
 
     注意：cv2 和 np 在模块加载时通过防御性导入初始化，
     若导入失败（无 runtime_deps），函数会提前返回。
     """
+    active_logger = logger_instance or logger
     if not cv2 or not np:
-        logger.warn("OpenCV或Numpy导入失败,无法开启自动滑块验证.")
-        return
-    # 尝试自动验证3次
-    isPassed = 0
-    for x in range(0, 3):
+        active_logger.warn("OpenCV或Numpy导入失败,无法开启自动滑块验证.")
+        return False
+
+    try:
+        challenge_visible = await wait_for_slider_appearance(
+            page,
+            timeout_ms=detection_timeout_ms,
+        )
+    except TargetClosedError:
+        raise
+    except Exception as exc:
+        active_logger.warn(f"检测滑块验证失败，改为手动处理: {str(exc)[:100]}")
+        return False
+
+    if not challenge_visible:
+        active_logger.info("未检测到滑块验证，继续等待登录结果.")
+        return True
+
+    attempts = max(1, int(max_retries))
+    for attempt in range(attempts):
         try:
-            await page.wait_for_selector(LOGIN_PANEL, state="attached")
-            await page.wait_for_selector(".yidun_bgimg", state="attached")
-            logger.info(f"第{x + 1}次尝试过滑块验证...")
+            active_logger.info(f"第{attempt + 1}次尝试过滑块验证...")
             max_loc = await progress_img(page)
             await move_slider(page, max_loc[0])
-            await page.wait_for_selector(LOGIN_PANEL, state='hidden', timeout=3000)
-            isPassed = 1
-            break
-        except TimeoutError:
-            continue
-    if not isPassed:
-        logger.warn("自动过滑块验证失败,请手动验证!")
-    else:
-        logger.info("滑块验证已成功通过.")
+            if await confirm_slider_drag_result(page):
+                active_logger.info("滑块验证已成功通过.")
+                return True
+            active_logger.warn(
+                f"第{attempt + 1}次拖动后滑块仍可见，准备重试."
+            )
+        except TargetClosedError:
+            raise
+        except PlaywrightTimeoutError as exc:
+            active_logger.warn(
+                f"第{attempt + 1}次滑块验证等待超时: {str(exc)[:80]}"
+            )
+        except Exception as exc:
+            active_logger.warn(
+                f"第{attempt + 1}次自动滑块验证失败: {str(exc)[:100]}"
+            )
+        if attempt < attempts - 1:
+            await page.wait_for_timeout(1000)
+
+    active_logger.warn("自动过滑块验证失败,请手动验证!")
+    return False
