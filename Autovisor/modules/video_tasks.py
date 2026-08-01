@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
+from typing import TypeVar
 
 from playwright._impl._errors import TargetClosedError
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
@@ -22,6 +24,7 @@ from modules.utils import (
 
 
 logger = Logger()
+_ResultT = TypeVar("_ResultT")
 
 
 def _report_loop_failure(active_logger, label: str, exc: Exception, count: int) -> None:
@@ -75,6 +78,70 @@ async def task_monitor(
             break
         await asyncio.sleep(poll_interval)
     active_logger.info("任务监控已退出.", shift=True)
+
+
+async def run_with_task_guard(
+    operation: Awaitable[_ResultT],
+    background_tasks: list[asyncio.Task],
+    *,
+    logger_instance=None,
+) -> _ResultT:
+    """Run the course operation while propagating background task failures."""
+    active_logger = logger_instance or logger
+    operation_task = asyncio.ensure_future(operation)
+    watched_tasks = set(background_tasks)
+    active_logger.info("任务监控已启动.")
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {operation_task, *watched_tasks},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if operation_task in done:
+                if operation_task.cancelled():
+                    return await operation_task
+                if operation_task.exception() is not None:
+                    for task in done:
+                        if task is operation_task or task.cancelled():
+                            continue
+                        try:
+                            task.exception()
+                        except asyncio.CancelledError:
+                            pass
+                    return await operation_task
+
+            for task in done:
+                watched_tasks.discard(task)
+                if task.cancelled():
+                    continue
+                try:
+                    exception = task.exception()
+                except asyncio.CancelledError:
+                    continue
+                if exception is None:
+                    continue
+                coroutine = task.get_coro()
+                function_name = getattr(
+                    coroutine,
+                    "__name__",
+                    type(coroutine).__name__,
+                )
+                active_logger.error(
+                    f"任务函数{function_name} 出现异常，停止当前课程队列.",
+                    shift=True,
+                )
+                active_logger.write_log(f"{repr(exception)}\n")
+                raise exception
+
+            if operation_task in done:
+                return operation_task.result()
+            if not watched_tasks:
+                return await operation_task
+    finally:
+        if not operation_task.done():
+            operation_task.cancel()
+            await asyncio.gather(operation_task, return_exceptions=True)
+        active_logger.info("任务监控已退出.", shift=True)
 
 
 async def activate_window(

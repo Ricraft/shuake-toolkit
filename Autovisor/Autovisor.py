@@ -68,7 +68,7 @@ from modules.test_capture import TestResponseHandler
 from modules.video_tasks import (
     activate_window,
     play_video,
-    task_monitor,
+    run_with_task_guard,
     video_optimize,
 )
 from modules import installer
@@ -689,12 +689,15 @@ async def main():
                     tasks.append(asyncio.create_task(activate_window(page)))
 
             monitored_tasks = list(tasks)
-            tasks.append(asyncio.create_task(task_monitor(monitored_tasks)))
-            summary = await run_course_queue(
-                page,
-                config,
-                logger,
-                course_worker=working_loop,
+            summary = await run_with_task_guard(
+                run_course_queue(
+                    page,
+                    config,
+                    logger,
+                    course_worker=working_loop,
+                ),
+                monitored_tasks,
+                logger_instance=logger,
             )
     print("==" * 10)
     if summary.failed:

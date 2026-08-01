@@ -81,6 +81,60 @@ def test_expired_login_returns_actionable_failure(monkeypatch):
     assert any("登录状态已失效" in message for message in _Logger.last.errors)
 
 
+def test_main_guards_course_queue_with_all_critical_background_tasks(monkeypatch):
+    guarded = []
+
+    class PlaywrightContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def init_page(_playwright):
+        return object(), object()
+
+    async def login(*_args, **_kwargs):
+        return True
+
+    async def background_worker(*_args, **_kwargs):
+        await runtime.asyncio.Event().wait()
+
+    async def course_queue(*_args, **_kwargs):
+        return SimpleNamespace(completed=1, failed=0)
+
+    async def guard(operation, tasks, *, logger_instance):
+        guarded.append((len(tasks), logger_instance))
+        return await operation
+
+    active_logger = _Logger()
+    monkeypatch.setattr(runtime, "logger", active_logger)
+    monkeypatch.setattr(
+        runtime,
+        "config",
+        SimpleNamespace(
+            enableAutoCaptcha=False,
+            username="user",
+            password="password",
+            enableHideWindow=False,
+        ),
+    )
+    monkeypatch.setattr(runtime, "async_playwright", lambda: PlaywrightContext())
+    monkeypatch.setattr(runtime, "init_page", init_page)
+    monkeypatch.setattr(runtime, "auto_login", login)
+    monkeypatch.setattr(runtime, "wait_for_verify", background_worker)
+    monkeypatch.setattr(runtime, "video_optimize", background_worker)
+    monkeypatch.setattr(runtime, "skip_questions", background_worker)
+    monkeypatch.setattr(runtime, "play_video", background_worker)
+    monkeypatch.setattr(runtime, "run_course_queue", course_queue)
+    monkeypatch.setattr(runtime, "run_with_task_guard", guard)
+
+    runtime.asyncio.run(runtime.main())
+
+    assert guarded == [(4, active_logger)]
+    assert "所有课程已学习完毕!" in active_logger.infos
+
+
 class _LearningPage:
     def __init__(
         self,
