@@ -427,18 +427,64 @@ class CoreManager:
         if not isinstance(releases, list):
             return None
 
-        for release in sorted(
-            releases,
-            key=self._github_release_time_key,
-            reverse=True,
-        ):
+        candidates = []
+        for release in releases:
             if not isinstance(release, dict) or release.get("draft"):
                 continue
             parsed = self._parse_yatori_release(release)
             if parsed:
                 parsed["prerelease"] = bool(release.get("prerelease"))
-                return parsed
-        return None
+                candidates.append(
+                    (
+                        self._parse_yatori_version(parsed.get("version")),
+                        self._github_release_time_key(release),
+                        parsed,
+                    )
+                )
+
+        if not candidates:
+            return None
+
+        # GitHub usually returns releases by publication time, but an older
+        # tag can be edited or republished later. Prefer the highest semantic
+        # version so that a recently touched beta cannot hide a newer build.
+        known_versions = [item for item in candidates if item[0] is not None]
+        pool = known_versions or candidates
+        selected = pool[0]
+        for candidate in pool[1:]:
+            if known_versions:
+                comparison = self._compare_yatori_versions(
+                    candidate[2].get("version"),
+                    selected[2].get("version"),
+                )
+                if comparison > 0 or (
+                    comparison == 0 and candidate[1] > selected[1]
+                ):
+                    selected = candidate
+            elif candidate[1] > selected[1]:
+                selected = candidate
+        return selected[2]
+
+    @staticmethod
+    def _is_yatori_windows_amd64_asset(name):
+        """Return whether an asset name unambiguously targets Windows x64."""
+        if not isinstance(name, str) or not name.lower().endswith(".zip"):
+            return False
+
+        tokens = {
+            token
+            for token in re.split(r"[-_.]+", name.lower())
+            if token
+        }
+        if tokens & {"darwin", "linux", "macos", "osx", "arm64", "aarch64"}:
+            return False
+
+        windows = bool(tokens & {"windows", "win", "win64"})
+        amd64 = bool(tokens & {"amd64", "x64", "win64"}) or {
+            "x86",
+            "64",
+        }.issubset(tokens)
+        return windows and amd64
 
     def _parse_yatori_release(self, data):
         """解析 Yatori release 数据"""
@@ -451,32 +497,23 @@ class CoreManager:
         asset_name = None
         selected_asset = None
 
-        # 优先匹配真正的 Windows x64/amd64 zip 资源
+        # 只接受明确标注 Windows x64/amd64 的 ZIP。旧的 ``'win' in
+        # name`` 会把 ``darwin-amd64`` 误判成 Windows 包；任意 ZIP
+        # 回退还可能选中 Linux/ARM 构建。
         for asset in assets:
+            if not isinstance(asset, dict):
+                continue
             name = asset.get('name', '')
-            low = name.lower()
-            if (
-                low.endswith('.zip')
-                and ('windows' in low or 'win' in low)
-                and ('amd64' in low or 'x64' in low or '64' in low)
-            ):
+            if self._is_yatori_windows_amd64_asset(name):
                 download_url = asset.get('browser_download_url')
+                if not isinstance(download_url, str) or not download_url.strip():
+                    continue
                 asset_name = name
                 selected_asset = asset
                 break
 
-        # 如果没找到，再退而求其次：取第一个 zip
         if not download_url:
-            for asset in assets:
-                name = asset.get('name', '')
-                if name.lower().endswith('.zip'):
-                    download_url = asset.get('browser_download_url')
-                    asset_name = name
-                    selected_asset = asset
-                    break
-
-        if not download_url:
-            self._log("未找到可用的 Windows ZIP 发行资源")
+            self._log("未找到明确标注 Windows amd64/x64 的 ZIP 发行资源")
             return None
 
         self._log(f"最新版本: {version}")

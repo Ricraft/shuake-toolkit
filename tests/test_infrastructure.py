@@ -374,6 +374,83 @@ class InfrastructureTests(unittest.TestCase):
         self.assertTrue(selected["prerelease"])
         self.assertEqual(selected["verification_source"], "github-release-asset-digest")
 
+    def test_yatori_release_list_prefers_highest_version_over_publish_time(self):
+        digest = "sha256:" + "a" * 64
+        releases = [
+            {
+                "tag_name": "v2.6.2-beta.11",
+                "published_at": "2026-07-20T10:00:00Z",
+                "prerelease": True,
+                "assets": [
+                    {
+                        "name": "yatori-windows-amd64.zip",
+                        "browser_download_url": "https://example.test/beta11.zip",
+                        "digest": digest,
+                        "size": 1024,
+                    }
+                ],
+            },
+            {
+                "tag_name": "v2.6.2-beta.8",
+                "published_at": "2026-07-30T10:00:00Z",
+                "prerelease": True,
+                "assets": [
+                    {
+                        "name": "yatori-windows-amd64.zip",
+                        "browser_download_url": "https://example.test/beta8.zip",
+                        "digest": digest,
+                        "size": 1024,
+                    }
+                ],
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            selected = manager._select_yatori_release(releases)
+
+        self.assertEqual(selected["version"], "v2.6.2-beta.11")
+        self.assertEqual(selected["download_url"], "https://example.test/beta11.zip")
+
+    def test_yatori_release_rejects_darwin_and_non_windows_zip_fallback(self):
+        digest = "sha256:" + "a" * 64
+        release = {
+            "tag_name": "v2.6.3",
+            "assets": [
+                None,
+                {
+                    "name": "yatori-darwin-amd64.zip",
+                    "browser_download_url": "https://example.test/darwin.zip",
+                    "digest": digest,
+                    "size": 1024,
+                },
+                {
+                    "name": "yatori-linux-amd64.zip",
+                    "browser_download_url": "https://example.test/linux.zip",
+                    "digest": digest,
+                    "size": 1024,
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            self.assertTrue(
+                manager._is_yatori_windows_amd64_asset(
+                    "yatori-go-console.v2.6.2-beta.11-windows-amd64-release.zip"
+                )
+            )
+            self.assertFalse(
+                manager._is_yatori_windows_amd64_asset(
+                    "yatori-go-console.v2.6.2-beta.11-darwin-amd64-release.zip"
+                )
+            )
+            selected = manager._parse_yatori_release(release)
+
+        self.assertIsNone(selected)
+        self.assertTrue(any("Windows amd64/x64" in message for message in logs))
+
     def test_yatori_update_check_queries_releases_list_before_latest_endpoint(self):
         class Response:
             def __init__(self, payload):
