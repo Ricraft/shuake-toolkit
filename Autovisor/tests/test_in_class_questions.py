@@ -11,6 +11,7 @@ _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from playwright._impl._errors import TargetClosedError
+from playwright.async_api import Error as PlaywrightError
 from modules import in_class_questions as questions
 from modules import tasks as task_module
 from modules.course_errors import CourseAuthenticationError
@@ -606,3 +607,126 @@ def test_hike_manual_question_unblocks_after_it_disappears(monkeypatch):
     )
 
     assert event.is_set()
+
+
+def test_question_listener_stops_and_unblocks_on_login_page():
+    class Page:
+        url = "https://login.zhihuishu.com/?origin=zhs"
+
+        async def wait_for_load_state(self, _state):
+            return None
+
+    event = asyncio.Event()
+    log = _Logger()
+    asyncio.run(
+        questions.skip_questions(
+            Page(),
+            event,
+            query_answer=lambda *_args: (None, False),
+            logger_instance=log,
+            poll_interval=0,
+        )
+    )
+
+    assert event.is_set()
+    assert any(
+        level == "warn" and "登录状态已失效" in message
+        for level, message in log.messages
+    )
+
+
+def test_question_listener_stops_when_poll_redirects_to_login(monkeypatch):
+    class Page:
+        url = "https://study.zhihuishu.com/learning/videoList"
+
+        async def wait_for_load_state(self, _state):
+            return None
+
+        async def wait_for_selector(self, *_args, **_kwargs):
+            raise AssertionError("登录跳转后不应继续查找随堂题")
+
+    page = Page()
+
+    async def redirect_on_poll(_seconds):
+        page.url = "https://login.zhihuishu.com/?origin=zhs"
+
+    monkeypatch.setattr(questions.asyncio, "sleep", redirect_on_poll)
+    event = asyncio.Event()
+    log = _Logger()
+    asyncio.run(
+        questions.skip_questions(
+            page,
+            event,
+            query_answer=lambda *_args: (None, False),
+            logger_instance=log,
+            poll_interval=0,
+        )
+    )
+
+    assert event.is_set()
+    assert any("登录状态已失效" in message for _, message in log.messages)
+
+
+def test_question_listener_handles_page_closed_during_initial_load():
+    class Page:
+        async def wait_for_load_state(self, _state):
+            raise TargetClosedError("closed before listener start")
+
+    log = _Logger()
+    asyncio.run(
+        questions.skip_questions(
+            Page(),
+            asyncio.Event(),
+            query_answer=lambda *_args: (None, False),
+            logger_instance=log,
+        )
+    )
+
+    assert any("答题模块已下线" in message for _, message in log.messages)
+
+
+def test_question_listener_rechecks_auth_after_navigation_race(monkeypatch):
+    auth_checks = 0
+
+    async def login_state(_page):
+        nonlocal auth_checks
+        auth_checks += 1
+        if auth_checks == 1:
+            return False
+        if auth_checks == 2:
+            raise PlaywrightError("execution context destroyed")
+        return True
+
+    class Page:
+        url = "https://study.zhihuishu.com/learning/videoList"
+
+        def __init__(self):
+            self.load_states = []
+
+        async def wait_for_load_state(self, state, *, timeout=None):
+            self.load_states.append((state, timeout))
+
+    page = Page()
+    event = asyncio.Event()
+    log = _Logger()
+    monkeypatch.setattr(questions, "is_login_page", login_state)
+
+    asyncio.run(
+        questions.skip_questions(
+            page,
+            event,
+            query_answer=lambda *_args: (None, False),
+            logger_instance=log,
+            poll_interval=0,
+        )
+    )
+
+    assert auth_checks == 3
+    assert page.load_states == [
+        ("domcontentloaded", None),
+        ("domcontentloaded", 3000),
+    ]
+    assert event.is_set()
+    assert [message for level, message in log.messages if level == "warn"] == [
+        "随堂题监听已停止: 登录状态已失效"
+    ]

@@ -8,9 +8,14 @@ import random
 from collections.abc import Callable
 
 from playwright._impl._errors import TargetClosedError
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import (
+    Error as PlaywrightError,
+    Page,
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 from modules.course_session import ensure_course_authenticated
+from modules.course_portal import is_login_page
 from modules.course_types import CourseKind, CourseProfile
 from modules.logger import Logger
 from modules.question_bank_client import _match_option
@@ -405,11 +410,43 @@ async def skip_questions(
 ) -> None:
     """长期监听随堂题；页面切到不支持的课程时暂停而不是永久退出。"""
     active_logger = logger_instance or logger
-    await page.wait_for_load_state("domcontentloaded")
+
+    async def stop_for_login_loss() -> bool:
+        try:
+            login_page = await is_login_page(page)
+        except TargetClosedError:
+            raise
+        except PlaywrightError:
+            try:
+                await page.wait_for_load_state(
+                    "domcontentloaded",
+                    timeout=3000,
+                )
+            except TargetClosedError:
+                raise
+            except PlaywrightTimeoutError:
+                pass
+            login_page = await is_login_page(page)
+        if not login_page:
+            return False
+        event_loop.set()
+        active_logger.warn("随堂题监听已停止: 登录状态已失效")
+        return True
+
+    try:
+        await page.wait_for_load_state("domcontentloaded")
+        if await stop_for_login_loss():
+            return
+    except TargetClosedError:
+        active_logger.write_log("浏览器已关闭,答题模块已下线.\n")
+        return
+
     consecutive_errors = 0
     warned_hike_url = None
     while True:
         try:
+            if await stop_for_login_loss():
+                return
             profile = CourseProfile.from_url(page.url)
             if profile.kind is CourseKind.HIKE:
                 if warned_hike_url != profile.url:
@@ -430,6 +467,8 @@ async def skip_questions(
 
             if profile.kind is CourseKind.NATIONAL_WISDOM:
                 await asyncio.sleep(poll_interval)
+                if await stop_for_login_loss():
+                    return
                 dialog = page.locator(".ai-class-exercise-dialog")
                 if not await _dialog_visible(dialog):
                     event_loop.set()
@@ -448,6 +487,8 @@ async def skip_questions(
                 continue
 
             await asyncio.sleep(poll_interval)
+            if await stop_for_login_loss():
+                return
             try:
                 container = await page.wait_for_selector(
                     ".el-scrollbar__view",
