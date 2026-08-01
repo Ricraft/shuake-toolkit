@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+import math
 import os
 import time
 import traceback
@@ -76,6 +77,15 @@ from modules import installer
 # 获取全局事件循环
 event_loop_verify = asyncio.Event()
 event_loop_answer = asyncio.Event()
+
+
+def _is_valid_video_time(value, *, allow_zero: bool) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if not math.isfinite(value):
+        return False
+    return value >= 0 if allow_zero else value > 0
+
 
 async def init_page(p: Playwright) -> tuple[Page, BrowserContext]:
     driver = "msedge" if config.driver == "edge" else config.driver
@@ -561,22 +571,96 @@ async def learning_loop(
     return completed
 
 
-async def review_loop(page: Page, start_time, is_hike_class=False):
+async def review_loop(
+    page: Page,
+    start_time,
+    is_hike_class=False,
+    *,
+    clock=time.time,
+    sleep_func=asyncio.sleep,
+    stuck_timeout=60,
+    max_recovery_attempts=3,
+):
     await ensure_course_authenticated(page, "复习模式启动时登录状态失效")
     total_time = await get_video_attr(page, "duration")
+    await ensure_course_authenticated(page, "读取复习视频时长时登录状态失效")
+    if not _is_valid_video_time(total_time, allow_zero=False):
+        raise RuntimeError(f"复习模式视频时长无效: {total_time!r}")
     await page.evaluate(config.reset_curtime)  # 重置视频播放时间
+    stuck_timeout = max(0.0, float(stuck_timeout))
+    max_recovery_attempts = max(0, int(max_recovery_attempts))
+    last_position = None
+    stuck_since = clock()
+    recovery_attempts = 0
     while True:
         limit_time = config.limitMaxTime
         cur_time = await get_video_attr(page, "currentTime")
         await ensure_course_authenticated(page, "复习模式播放期间登录状态失效")
-        if cur_time >= total_time:
+        position_valid = _is_valid_video_time(cur_time, allow_zero=True)
+        completion_position = max(total_time * 0.995, total_time - 0.5)
+        if position_valid and cur_time >= completion_position:
             break
         try:
-            time_period = (time.time() - start_time) / 60
+            now = clock()
+            time_period = (now - start_time) / 60
             if 0 < limit_time <= time_period:
                 break
+
+            if position_valid and (
+                last_position is None or cur_time > last_position + 0.5
+            ):
+                last_position = cur_time
+                stuck_since = now
+
+            if now - stuck_since > stuck_timeout:
+                if recovery_attempts >= max_recovery_attempts:
+                    raise RuntimeError(
+                        "复习视频进度持续停滞，已达到 "
+                        f"{max_recovery_attempts} 次恢复上限"
+                    )
+                recovery_attempts += 1
+                logger.warn(
+                    "复习视频进度停滞，刷新页面重试"
+                    f"（{recovery_attempts}/{max_recovery_attempts}）",
+                    shift=True,
+                )
+                try:
+                    await page.reload(wait_until="domcontentloaded")
+                    await wait_for_authenticated_selector(
+                        page,
+                        "video",
+                        "恢复复习视频页面时登录状态失效",
+                        timeout=15000,
+                    )
+                    await page.evaluate(config.remove_pause)
+                    refreshed_duration = await get_video_attr(page, "duration")
+                    await ensure_course_authenticated(
+                        page,
+                        "恢复复习视频时登录状态失效",
+                    )
+                    if not _is_valid_video_time(
+                        refreshed_duration,
+                        allow_zero=False,
+                    ):
+                        raise RuntimeError(
+                            f"刷新后复习视频时长无效: {refreshed_duration!r}"
+                        )
+                    total_time = refreshed_duration
+                    last_position = None
+                    stuck_since = clock()
+                    continue
+                except (CourseAuthenticationError, TargetClosedError):
+                    raise
+                except Exception as exc:
+                    logger.warn(
+                        f"恢复复习视频失败: {str(exc)[:100]}",
+                        shift=True,
+                    )
+                    stuck_since = clock()
+                    continue
+
             show_course_progress(desc="完成进度:", cur_time=time_period, limit_time=limit_time)
-            await asyncio.sleep(0.5)
+            await sleep_func(0.5)
         except TimeoutError as e:
             if await page.query_selector(".yidun_modal__title"):
                 resolved = await wait_for_verification_resolution(

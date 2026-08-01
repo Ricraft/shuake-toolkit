@@ -16,6 +16,7 @@ from modules.progress import (
     show_course_progress,
     show_progress,
 )
+from modules.utils import get_video_attr
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -241,6 +242,15 @@ def test_progress_reader_propagates_closed_page_instead_of_returning_zero():
                 is_national_wisdom=True,
             )
         )
+
+
+def test_video_attribute_reader_propagates_closed_page():
+    class ClosedPage:
+        async def wait_for_selector(self, *_args, **_kwargs):
+            raise TargetClosedError("closed while reading video attribute")
+
+    with pytest.raises(TargetClosedError, match="video attribute"):
+        asyncio.run(get_video_attr(ClosedPage(), "duration"))
 
 
 class _HoverArea:

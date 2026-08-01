@@ -1041,6 +1041,8 @@ async def get_video_attr(page, attr: str) -> any:
         await page.wait_for_selector("video", state="attached", timeout=1000)
         attr = await page.evaluate(f'''document.querySelector('video').{attr}''')
         return attr
+    except TargetClosedError:
+        raise
     except Exception as e:
         logger.write_log(f"Exec get_video_attr failed. Error:{repr(e)}\n")
         logger.write_log(traceback.format_exc())

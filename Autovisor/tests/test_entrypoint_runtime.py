@@ -651,3 +651,119 @@ def test_review_loop_propagates_login_redirect(monkeypatch):
 
     with pytest.raises(CourseAuthenticationError, match="复习模式播放期间"):
         runtime.asyncio.run(runtime.review_loop(page, 0))
+
+
+def test_review_loop_rejects_invalid_video_duration(monkeypatch):
+    async def video_attr(_page, _name):
+        return None
+
+    monkeypatch.setattr(runtime, "get_video_attr", video_attr)
+    monkeypatch.setattr(
+        runtime,
+        "config",
+        SimpleNamespace(limitMaxTime=0, reset_curtime="reset-video"),
+    )
+
+    with pytest.raises(RuntimeError, match="视频时长无效"):
+        runtime.asyncio.run(runtime.review_loop(_LearningPage(), 0))
+
+
+def test_review_loop_limits_repeated_stall_recovery(monkeypatch):
+    page = _LearningPage()
+    tick = 0
+
+    def clock():
+        nonlocal tick
+        tick += 1
+        return tick
+
+    async def video_attr(_page, name):
+        return 100 if name == "duration" else 0
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(runtime, "get_video_attr", video_attr)
+    monkeypatch.setattr(runtime, "show_course_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime,
+        "config",
+        SimpleNamespace(
+            limitMaxTime=0,
+            reset_curtime="reset-video",
+            remove_pause="resume-video",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="恢复上限"):
+        runtime.asyncio.run(
+            runtime.review_loop(
+                page,
+                0,
+                clock=clock,
+                sleep_func=no_sleep,
+                stuck_timeout=0,
+                max_recovery_attempts=2,
+            )
+        )
+
+    assert page.reloads == 2
+
+
+def test_review_loop_allows_advancing_video_to_complete(monkeypatch):
+    page = _LearningPage()
+    positions = iter([0, 10, 50, 100])
+    tick = 0
+
+    def clock():
+        nonlocal tick
+        tick += 1
+        return tick
+
+    async def video_attr(_page, name):
+        return 100 if name == "duration" else next(positions)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(runtime, "get_video_attr", video_attr)
+    monkeypatch.setattr(runtime, "show_course_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime,
+        "config",
+        SimpleNamespace(
+            limitMaxTime=0,
+            reset_curtime="reset-video",
+            remove_pause="resume-video",
+        ),
+    )
+
+    runtime.asyncio.run(
+        runtime.review_loop(
+            page,
+            0,
+            clock=clock,
+            sleep_func=no_sleep,
+            stuck_timeout=5,
+        )
+    )
+
+    assert page.reloads == 0
+
+
+def test_review_loop_accepts_near_duration_tail_frame(monkeypatch):
+    page = _LearningPage()
+
+    async def video_attr(_page, name):
+        return 100 if name == "duration" else 99.6
+
+    monkeypatch.setattr(runtime, "get_video_attr", video_attr)
+    monkeypatch.setattr(
+        runtime,
+        "config",
+        SimpleNamespace(limitMaxTime=0, reset_curtime="reset-video"),
+    )
+
+    runtime.asyncio.run(runtime.review_loop(page, 0))
+
+    assert page.reloads == 0
