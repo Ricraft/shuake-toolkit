@@ -13,6 +13,7 @@ sys.path.insert(0, _AUTOVISOR_ROOT)
 from playwright._impl._errors import TargetClosedError
 from modules import in_class_questions as questions
 from modules import tasks as task_module
+from modules.course_errors import CourseAuthenticationError
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -414,8 +415,114 @@ def test_wait_for_question_resolution_clears_stale_signal():
         )
     )
 
-    assert result is False
+    assert result is True
     assert not event.is_set()
+
+
+def test_wait_for_question_resolution_accepts_fresh_completion_signal():
+    class Page:
+        url = "https://studyvideoh5.zhihuishu.com/course"
+
+        async def query_selector(self, _selector):
+            return object()
+
+    async def scenario():
+        event = asyncio.Event()
+
+        async def complete_question():
+            await asyncio.sleep(0.01)
+            event.set()
+
+        setter = asyncio.create_task(complete_question())
+        result = await questions.wait_for_question_resolution(
+            Page(),
+            event,
+            (".topic-title",),
+            timeout=0.2,
+            poll_interval=0.05,
+        )
+        await setter
+        return result
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_wait_for_question_resolution_accepts_popup_disappearance_without_event():
+    class Page:
+        url = "https://studyvideoh5.zhihuishu.com/course"
+
+        def __init__(self):
+            self.query_calls = 0
+
+        async def query_selector(self, _selector):
+            self.query_calls += 1
+            return object() if self.query_calls == 1 else None
+
+    logger = _Logger()
+    result = asyncio.run(
+        questions.wait_for_question_resolution(
+            Page(),
+            asyncio.Event(),
+            (".topic-title",),
+            timeout=0.2,
+            poll_interval=0.01,
+            logger_instance=logger,
+        )
+    )
+
+    assert result is True
+    assert any("弹窗已消失" in message for _, message in logger.messages)
+
+
+def test_wait_for_question_resolution_times_out_instead_of_waiting_forever():
+    class Page:
+        url = "https://studyvideoh5.zhihuishu.com/course"
+
+        async def query_selector(self, _selector):
+            return object()
+
+    logger = _Logger()
+    result = asyncio.run(
+        questions.wait_for_question_resolution(
+            Page(),
+            asyncio.Event(),
+            (".topic-title",),
+            timeout=0.01,
+            poll_interval=0.01,
+            logger_instance=logger,
+        )
+    )
+
+    assert result is False
+    assert any("避免永久等待" in message for _, message in logger.messages)
+
+
+def test_wait_for_question_resolution_propagates_login_redirect():
+    class Page:
+        url = "https://studyvideoh5.zhihuishu.com/course"
+
+        def __init__(self):
+            self.query_calls = 0
+
+        async def query_selector(self, _selector):
+            self.query_calls += 1
+            if self.query_calls >= 2:
+                self.url = "https://login.zhihuishu.com/login"
+            return object()
+
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="等待随堂题完成时登录状态失效",
+    ):
+        asyncio.run(
+            questions.wait_for_question_resolution(
+                Page(),
+                asyncio.Event(),
+                (".topic-title",),
+                timeout=0.2,
+                poll_interval=0.01,
+            )
+        )
 
 
 def test_hike_page_pauses_listener_instead_of_terminating(monkeypatch):

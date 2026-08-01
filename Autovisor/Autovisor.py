@@ -524,17 +524,23 @@ async def learning_loop(
             if await page.query_selector(".yidun_modal__title"):
                 await event_loop_verify.wait()
             elif await page.query_selector(".topic-title"):
-                await wait_for_question_resolution(
+                resolved = await wait_for_question_resolution(
                     page,
                     event_loop_answer,
                     (".topic-title",),
+                    logger_instance=logger,
                 )
+                if not resolved:
+                    raise RuntimeError("随堂题等待超时，视频学习已停止")
             elif is_hike_class and await page.query_selector(".question-info"):
-                await wait_for_question_resolution(
+                resolved = await wait_for_question_resolution(
                     page,
                     event_loop_answer,
                     (".question-info",),
+                    logger_instance=logger,
                 )
+                if not resolved:
+                    raise RuntimeError("翻转课随堂题等待超时，视频学习已停止")
             else:
                 logger.warn(repr(e))
 
@@ -568,11 +574,14 @@ async def review_loop(page: Page, start_time, is_hike_class=False):
             if await page.query_selector(".yidun_modal__title"):
                 await event_loop_verify.wait()
             elif await page.query_selector(".topic-title"):
-                await wait_for_question_resolution(
+                resolved = await wait_for_question_resolution(
                     page,
                     event_loop_answer,
                     (".topic-title",),
+                    logger_instance=logger,
                 )
+                if not resolved:
+                    raise RuntimeError("随堂题等待超时，复习模式已停止")
             else:
                 logger.warn(repr(e))
     await ensure_course_authenticated(page, "复习模式结束时登录状态失效")

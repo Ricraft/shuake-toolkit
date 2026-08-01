@@ -10,6 +10,7 @@ from collections.abc import Callable
 from playwright._impl._errors import TargetClosedError
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from modules.course_session import ensure_course_authenticated
 from modules.course_types import CourseKind, CourseProfile
 from modules.logger import Logger
 from modules.question_bank_client import _match_option
@@ -334,13 +335,62 @@ async def wait_for_question_resolution(
     page: Page,
     event: asyncio.Event,
     selectors: tuple[str, ...],
+    *,
+    timeout: float = 180,
+    poll_interval: float = 0.5,
+    logger_instance=None,
 ) -> bool:
-    """清除旧完成信号并复查弹窗，避免上一题信号导致忙循环。"""
+    """Wait boundedly for a live question popup to be resolved."""
+    active_logger = logger_instance or logger
     event.clear()
-    for selector in selectors:
-        if await page.query_selector(selector):
-            await event.wait()
+
+    async def question_remains() -> bool:
+        for selector in selectors:
+            if await page.query_selector(selector):
+                return True
+        return False
+
+    await ensure_course_authenticated(
+        page,
+        "等待随堂题完成时登录状态失效",
+    )
+    if not await question_remains():
+        return True
+
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    timeout = max(0.0, float(timeout))
+    interval = max(0.05, float(poll_interval))
+    while loop.time() - started_at < timeout:
+        await ensure_course_authenticated(
+            page,
+            "等待随堂题完成时登录状态失效",
+        )
+        if event.is_set():
             return True
+
+        remaining = timeout - (loop.time() - started_at)
+        try:
+            await asyncio.wait_for(
+                event.wait(),
+                timeout=min(interval, max(0.0, remaining)),
+            )
+            return True
+        except asyncio.TimeoutError:
+            pass
+
+        await ensure_course_authenticated(
+            page,
+            "等待随堂题完成时登录状态失效",
+        )
+        if not await question_remains():
+            active_logger.info("随堂题弹窗已消失，继续课程播放")
+            return True
+
+    active_logger.warn(
+        "随堂题在 %s 秒内未完成，停止当前视频以避免永久等待"
+        % f"{timeout:g}"
+    )
     return False
 
 

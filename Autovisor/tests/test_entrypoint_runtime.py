@@ -399,6 +399,45 @@ def test_learning_loop_rechecks_auth_after_progress_reader_returns(monkeypatch):
     assert progress_calls == 2
 
 
+def test_learning_loop_stops_when_in_class_question_resolution_times_out(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%"])
+    progress_calls = 0
+    resolution_calls = []
+
+    class QuestionPage(_LearningPage):
+        async def query_selector(self, selector):
+            return object() if selector == ".topic-title" else None
+
+    async def progress(*_args, **_kwargs):
+        nonlocal progress_calls
+        progress_calls += 1
+        if progress_calls > 1:
+            raise runtime.TimeoutError("question interrupted progress read")
+        return "0%"
+
+    async def resolution(*_args, **_kwargs):
+        resolution_calls.append(True)
+        return False
+
+    monkeypatch.setattr(runtime, "get_course_progress", progress)
+    monkeypatch.setattr(runtime, "wait_for_question_resolution", resolution)
+
+    with pytest.raises(RuntimeError, match="随堂题等待超时"):
+        runtime.asyncio.run(
+            runtime.learning_loop(
+                QuestionPage(),
+                0,
+                clock=lambda: 1,
+                minimum_watch_seconds=0,
+                auth_check_interval=999,
+                health_check_interval=999,
+                position_check_interval=999,
+            )
+        )
+
+    assert resolution_calls == [True]
+
+
 def test_learning_loop_limits_repeated_video_load_recovery(monkeypatch):
     _patch_learning_runtime(monkeypatch, ["0%"])
     page = _LearningPage(video_error=3)
