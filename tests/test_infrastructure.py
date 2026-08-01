@@ -441,6 +441,42 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(result["info"]["version"], "v2.6.2-beta.11")
         self.assertTrue(any("内置版本" in item for item in logs))
 
+    def test_yatori_version_comparison_avoids_downgrades_and_equivalent_tags(self):
+        cases = [
+            ("v2.6.2-beta.12", "v2.6.2-beta.11", False, True),
+            ("2.6.2-beta.11", "v2.6.2-beta.11", False, False),
+            ("v2.6.2-beta11", "v2.6.2-beta.11", False, False),
+            ("v2.6.2", "v2.6.2-beta.11", False, True),
+            ("v2.6.2-beta.8", "v2.6.2-beta.11", True, False),
+            ("v2.6.2", "v2.6.3-beta.1", True, False),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            manager.check_yatori_installed = lambda: True
+
+            for local_version, remote_version, has_update, local_newer in cases:
+                with self.subTest(
+                    local_version=local_version,
+                    remote_version=remote_version,
+                ):
+                    manager.local_versions["yatori"] = local_version
+                    manager.get_yatori_latest_release = lambda version=remote_version: {
+                        "version": version,
+                        "download_url": "https://example.test/yatori.zip",
+                    }
+
+                    result = manager.check_yatori_update()
+
+                    self.assertEqual(result["has_update"], has_update)
+                    self.assertEqual(
+                        bool(result.get("local_newer")),
+                        local_newer,
+                    )
+
+        self.assertTrue(any("跳过降级" in item for item in logs))
+
     def test_release_archive_requires_matching_sha256_and_size(self):
         payload = b"verified core archive"
         with tempfile.TemporaryDirectory() as temp_dir:

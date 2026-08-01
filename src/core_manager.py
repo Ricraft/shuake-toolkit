@@ -117,6 +117,69 @@ class CoreManager:
     def _format_compact_date(self, timestamp):
         return datetime.fromtimestamp(timestamp).strftime("%Y%m%d")
 
+    @staticmethod
+    def _parse_yatori_version(value):
+        text = str(value or "").strip()
+        match = re.fullmatch(
+            r"[vV]?(\d+(?:\.\d+)*)"
+            r"(?:-([0-9A-Za-z.-]+))?"
+            r"(?:\+[0-9A-Za-z.-]+)?",
+            text,
+        )
+        if not match:
+            return None
+
+        core = tuple(int(part) for part in match.group(1).split("."))
+        prerelease = match.group(2)
+        if prerelease is None:
+            return core, None
+
+        identifiers = []
+        for part in re.findall(r"[A-Za-z]+|\d+", prerelease):
+            if part.isdigit():
+                identifiers.append((0, int(part)))
+            else:
+                identifiers.append((1, part.lower()))
+        if not identifiers:
+            return None
+        return core, tuple(identifiers)
+
+    @classmethod
+    def _compare_yatori_versions(cls, left, right):
+        left_parsed = cls._parse_yatori_version(left)
+        right_parsed = cls._parse_yatori_version(right)
+        if left_parsed is None or right_parsed is None:
+            return None
+
+        left_core, left_pre = left_parsed
+        right_core, right_pre = right_parsed
+        core_length = max(len(left_core), len(right_core))
+        left_core = left_core + (0,) * (core_length - len(left_core))
+        right_core = right_core + (0,) * (core_length - len(right_core))
+        if left_core != right_core:
+            return 1 if left_core > right_core else -1
+
+        if left_pre is None and right_pre is None:
+            return 0
+        if left_pre is None:
+            return 1
+        if right_pre is None:
+            return -1
+
+        for index in range(max(len(left_pre), len(right_pre))):
+            if index >= len(left_pre):
+                return -1
+            if index >= len(right_pre):
+                return 1
+            left_part = left_pre[index]
+            right_part = right_pre[index]
+            if left_part == right_part:
+                continue
+            if left_part[0] != right_part[0]:
+                return -1 if left_part[0] == 0 else 1
+            return 1 if left_part[1] > right_part[1] else -1
+        return 0
+
     def _collect_existing_mtimes(self, root_dir, relative_paths):
         mtimes = []
         for relative_path in relative_paths:
@@ -1131,20 +1194,36 @@ class CoreManager:
                 f"将按内置版本 {local_version} 比较"
             )
 
-        # 简单的字符串比较，如果需要更复杂的可以用 packaging.version
-        if latest_version != local_version:
+        comparison = self._compare_yatori_versions(
+            latest_version,
+            local_version,
+        )
+        if comparison is None:
+            has_update = str(latest_version).strip() != str(local_version).strip()
+        else:
+            has_update = comparison > 0
+
+        if has_update:
             return {
                 'has_update': True,
                 'installed': True,
                 'version': local_version,
                 'info': release_info,
             }
+
+        local_newer = comparison is not None and comparison < 0
+        if local_newer:
+            self._log(
+                f"本地 Yatori 版本 {local_version} 高于远端 {latest_version}，"
+                "跳过降级"
+            )
         
         return {
             'has_update': False,
             'installed': True,
             'version': local_version,
             'info': release_info,
+            'local_newer': local_newer,
         }
 
     def check_autovisor_update(self):

@@ -155,6 +155,29 @@ class UpdateControllerTests(unittest.TestCase):
         self.assertTrue(any("最新版本介绍" in item[2] for item in notices))
         self.assertTrue(any("版本介绍第一行" in item[2] for item in notices))
 
+    def test_yatori_local_newer_result_reports_skipped_downgrade(self):
+        manager = _Manager()
+        manager.yatori_result = {
+            "installed": True,
+            "has_update": False,
+            "local_newer": True,
+            "version": "v2.6.2-beta.12",
+            "info": {
+                "version": "v2.6.2-beta.11",
+                "body": "older release notes",
+            },
+        }
+        controller, _manager, _logs, notices, _installed = self.make_controller(manager)
+
+        result = controller.prepare_yatori_update_confirmation()
+
+        self.assertTrue(result["upToDate"])
+        self.assertTrue(result["localNewer"])
+        self.assertIn("跳过降级", result["message"])
+        self.assertIn("本地版本高于远端", result["toast"])
+        self.assertNotIn("older release notes", result["message"])
+        self.assertTrue(any("跳过降级" in item[2] for item in notices))
+
     def test_duplicate_yatori_check_is_rejected_while_first_is_pending(self):
         tasks = []
         controller, _manager, _logs, notices, _installed = self.make_controller(

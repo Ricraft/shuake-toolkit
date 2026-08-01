@@ -133,6 +133,12 @@ class UpdateController:
 
     def _build_yatori_current_message(self, result) -> str:
         version = result.get("version", "未知")
+        if result.get("local_newer"):
+            remote_version = (result.get("info") or {}).get("version", "未知")
+            return (
+                f"本地 Yatori 版本 ({version}) 高于当前远端版本 "
+                f"({remote_version})，已跳过降级。"
+            )
         message = f"当前已是最新版本 ({version})"
         notes = self._format_yatori_release_notes(result.get("info"))
         if notes:
@@ -203,8 +209,13 @@ class UpdateController:
         return {
             "ok": True,
             "upToDate": True,
+            "localNewer": bool(result.get("local_newer")),
             "message": message,
-            "toast": f"当前已是最新版本 ({result.get('version', '未知')})",
+            "toast": (
+                "本地版本高于远端，已跳过降级"
+                if result.get("local_newer")
+                else f"当前已是最新版本 ({result.get('version', '未知')})"
+            ),
             "toastType": "info",
         }
 
