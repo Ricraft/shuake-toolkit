@@ -261,6 +261,11 @@ async def handle_test_page(
         active_logger.error("[ERROR] 题目数据格式无效")
         return False
 
+    await ensure_course_authenticated(
+        page,
+        "测验页面登录状态失效",
+    )
+
     try:
         await widget_injector(page)
         active_logger.info("[OK] 浮动答题助手已注入")
@@ -287,6 +292,10 @@ async def handle_test_page(
     active_logger.info("=" * 60)
     current_index = 0
     while current_index < total:
+        await ensure_course_authenticated(
+            page,
+            "测验作答期间登录状态失效",
+        )
         index = current_index
         question = questions_data[index]
         question_name = clean_html_tags(question.get("name", ""))
@@ -319,6 +328,10 @@ async def handle_test_page(
             if action not in {"closed", "error"}:
                 selection_state = await selection_checker(page)
                 if selection_state is None:
+                    await ensure_course_authenticated(
+                        page,
+                        "检查测验作答状态时登录状态失效",
+                    )
                     active_logger.error(
                         "[ERROR] 无法确认当前题作答状态，停止答题以防题号错位"
                     )
@@ -333,7 +346,12 @@ async def handle_test_page(
             if action == "next":
                 active_logger.info("[手动模式] 用户点击下一题")
                 if index < total - 1:
-                    if not await next_clicker(page):
+                    clicked = await next_clicker(page)
+                    await ensure_course_authenticated(
+                        page,
+                        "测验翻到下一题时登录状态失效",
+                    )
+                    if not clicked:
                         active_logger.error(
                             "[ERROR] 下一题按钮点击失败，停止答题以防题号错位"
                         )
@@ -343,7 +361,12 @@ async def handle_test_page(
             elif action == "prev":
                 active_logger.info("[手动模式] 用户点击上一题")
                 if index > 0:
-                    if not await prev_clicker(page):
+                    clicked = await prev_clicker(page)
+                    await ensure_course_authenticated(
+                        page,
+                        "测验翻到上一题时登录状态失效",
+                    )
+                    if not clicked:
                         active_logger.error(
                             "[ERROR] 上一题按钮点击失败，停止答题以防题号错位"
                         )
@@ -355,7 +378,12 @@ async def handle_test_page(
                 if not is_multiple:
                     await page.wait_for_timeout(500)
                     if index < total - 1:
-                        if not await next_clicker(page):
+                        clicked = await next_clicker(page)
+                        await ensure_course_authenticated(
+                            page,
+                            "测验翻到下一题时登录状态失效",
+                        )
+                        if not clicked:
                             active_logger.error(
                                 "[ERROR] 下一题按钮点击失败，停止答题以防题号错位"
                             )
@@ -371,7 +399,12 @@ async def handle_test_page(
             elif action == "timeout":
                 active_logger.warn("[手动模式] 超时，自动下一题")
                 if index < total - 1:
-                    if not await next_clicker(page):
+                    clicked = await next_clicker(page)
+                    await ensure_course_authenticated(
+                        page,
+                        "测验超时翻页时登录状态失效",
+                    )
+                    if not clicked:
                         active_logger.error(
                             "[ERROR] 下一题按钮点击失败，停止答题以防题号错位"
                         )
@@ -379,6 +412,10 @@ async def handle_test_page(
                     await page.wait_for_timeout(300)
                 current_index += 1
             else:
+                await ensure_course_authenticated(
+                    page,
+                    "测验页面监听期间登录状态失效",
+                )
                 active_logger.error(
                     "[ERROR] 答题页面监听异常，停止答题以防题号错位"
                 )
@@ -393,6 +430,10 @@ async def handle_test_page(
                     options,
                     raw_options,
                 )
+                await ensure_course_authenticated(
+                    page,
+                    "应用测验答案时登录状态失效",
+                )
                 question["answer_applied"] = bool(applied)
                 if not applied:
                     active_logger.warn("[WARN] 答案存在，但页面选项点击失败")
@@ -403,7 +444,12 @@ async def handle_test_page(
                 )
             await page.wait_for_timeout(500)
             if index < total - 1:
-                if not await next_clicker(page):
+                clicked = await next_clicker(page)
+                await ensure_course_authenticated(
+                    page,
+                    "测验翻到下一题时登录状态失效",
+                )
+                if not clicked:
                     active_logger.error(
                         "[ERROR] 下一题按钮点击失败，停止答题以防题号错位"
                     )
@@ -415,6 +461,10 @@ async def handle_test_page(
     active_logger.info("[STEP3] 提交试卷")
     active_logger.info("=" * 60)
     if manual_submit:
+        await ensure_course_authenticated(
+            page,
+            "等待手动提交时登录状态失效",
+        )
         active_logger.info("[手动提交] 已跳过自动提交，请在页面上手动点击提交按钮")
         active_logger.info("[手动提交] 页面保持打开状态，请检查答案后手动提交")
         active_logger.warn("[手动提交] 尚未确认试卷已经提交")
@@ -432,7 +482,16 @@ async def handle_test_page(
         active_logger.warn("[WARN] 如需强制自动交卷，请调整答题策略或配置 AI")
         return False
 
+    await ensure_course_authenticated(
+        page,
+        "测验交卷前登录状态失效",
+    )
     success = await submitter(page)
+    if not success:
+        await ensure_course_authenticated(
+            page,
+            "测验交卷期间登录状态失效",
+        )
     if success:
         active_logger.info("\n" + "=" * 60)
         active_logger.info("[DONE] 答题完成，准备继续课程学习")

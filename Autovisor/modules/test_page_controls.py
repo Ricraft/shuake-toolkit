@@ -196,9 +196,15 @@ async def wait_for_user_action(
     timeout: float = 180,
     *,
     poll_interval: float = 0.2,
+    logger_instance=None,
 ) -> str:
     """返回 next/prev/option_click/submit/timeout/closed/error。"""
+    active_logger = logger_instance or logger
     try:
+        await ensure_course_authenticated(
+            page,
+            "等待用户作答时登录状态失效",
+        )
         await page.evaluate(
             """
             window._optionClicked = false;
@@ -215,7 +221,15 @@ async def wait_for_user_action(
         )
         loop = asyncio.get_running_loop()
         started_at = loop.time()
+        next_auth_check = started_at
         while loop.time() - started_at < timeout:
+            now = loop.time()
+            if now >= next_auth_check:
+                await ensure_course_authenticated(
+                    page,
+                    "等待用户作答时登录状态失效",
+                )
+                next_auth_check = now + 1.0
             if await page.evaluate("window._widgetNextClicked"):
                 await page.evaluate("window._widgetNextClicked = false")
                 is_last = await page.evaluate(
@@ -237,9 +251,22 @@ async def wait_for_user_action(
                 await page.wait_for_timeout(300)
                 return "option_click"
             await asyncio.sleep(poll_interval)
+    except CourseAuthenticationError:
+        raise
     except TargetClosedError:
         return "closed"
-    except Exception:
+    except Exception as exc:
+        try:
+            await ensure_course_authenticated(
+                page,
+                "等待用户作答时登录状态失效",
+            )
+        except CourseAuthenticationError as auth_error:
+            raise auth_error from exc
+        active_logger.warn(
+            "[WARN] 用户作答监听异常: %s"
+            % str(exc)[:80]
+        )
         return "error"
     return "timeout"
 

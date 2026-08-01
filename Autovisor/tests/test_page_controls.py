@@ -509,15 +509,79 @@ def test_wait_for_user_action_distinguishes_page_error_from_timeout():
         async def evaluate(self, _script):
             raise RuntimeError("execution context was destroyed")
 
+    class CaptureLogger(_Logger):
+        def __init__(self):
+            self.warnings = []
+
+        def warn(self, message, **_kwargs):
+            self.warnings.append(message)
+
+    active_logger = CaptureLogger()
     result = asyncio.run(
         controls.wait_for_user_action(
             Page(),
             timeout=0.01,
             poll_interval=0,
+            logger_instance=active_logger,
         )
     )
 
     assert result == "error"
+    assert any(
+        "用户作答监听异常" in message
+        and "execution context was destroyed" in message
+        for message in active_logger.warnings
+    )
+
+
+def test_wait_for_user_action_rejects_login_before_registering_listener():
+    class Page:
+        url = "https://login.zhihuishu.com/login"
+
+        def __init__(self):
+            self.evaluate_calls = 0
+
+        async def evaluate(self, _script):
+            self.evaluate_calls += 1
+
+    page = Page()
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="等待用户作答时登录状态失效",
+    ):
+        asyncio.run(controls.wait_for_user_action(page, timeout=180))
+
+    assert page.evaluate_calls == 0
+
+
+def test_wait_for_user_action_propagates_login_redirect_from_page_error():
+    class Page:
+        url = "https://onlineweb.zhihuishu.com/onlinestuh5"
+
+        def __init__(self):
+            self.evaluate_calls = 0
+
+        async def evaluate(self, _script):
+            self.evaluate_calls += 1
+            if self.evaluate_calls == 1:
+                return None
+            self.url = "https://login.zhihuishu.com/login"
+            raise RuntimeError("execution context was destroyed")
+
+    page = Page()
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="等待用户作答时登录状态失效",
+    ):
+        asyncio.run(
+            controls.wait_for_user_action(
+                page,
+                timeout=180,
+                poll_interval=0,
+            )
+        )
+
+    assert page.evaluate_calls == 2
 
 
 class _FlowPage:

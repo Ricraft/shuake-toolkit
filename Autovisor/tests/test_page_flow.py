@@ -43,6 +43,17 @@ def _question(index, question_type="单选题", type_id=1):
     }
 
 
+class _FlowPage:
+    def __init__(self, url="https://onlineweb.zhihuishu.com/onlinestuh5"):
+        self.url = url
+
+    async def wait_for_load_state(self, _state):
+        return None
+
+    async def wait_for_timeout(self, _delay_ms):
+        return None
+
+
 def test_tasks_preserves_test_page_flow_compatibility_exports():
     assert task_module.clean_html_tags is flow.clean_html_tags
     assert task_module.query_test_answers is flow.query_test_answers
@@ -240,3 +251,128 @@ def test_handle_test_page_rejects_malformed_question_collection():
     )
 
     assert result is False
+
+
+def test_handle_test_page_rejects_login_before_widget_or_option_wait(monkeypatch):
+    calls = []
+
+    async def options_ready(*_args):
+        calls.append("options")
+        return True
+
+    async def inject_widget(_page):
+        calls.append("widget")
+
+    monkeypatch.setattr(flow, "_wait_for_options", options_ready)
+
+    with pytest.raises(CourseAuthenticationError, match="测验页面登录状态失效"):
+        asyncio.run(
+            flow.handle_test_page(
+                _FlowPage("https://login.zhihuishu.com/login"),
+                [_question(0)],
+                auto_submit=True,
+                query_answer=lambda *_args: ("A", False),
+                widget_injector=inject_widget,
+                logger_instance=_Logger(),
+            )
+        )
+
+    assert calls == []
+
+
+def test_handle_test_page_propagates_login_redirect_during_answer(monkeypatch):
+    async def options_ready(*_args):
+        return True
+
+    async def inject_widget(_page):
+        return None
+
+    async def apply_answer(page, *_args):
+        page.url = "https://login.zhihuishu.com/login"
+        return False
+
+    monkeypatch.setattr(flow, "_wait_for_options", options_ready)
+
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="应用测验答案时登录状态失效",
+    ):
+        asyncio.run(
+            flow.handle_test_page(
+                _FlowPage(),
+                [_question(0)],
+                auto_submit=True,
+                query_answer=lambda *_args: ("A", False),
+                widget_injector=inject_widget,
+                answer_applier=apply_answer,
+                logger_instance=_Logger(),
+            )
+        )
+
+
+def test_handle_test_page_propagates_login_redirect_during_navigation(monkeypatch):
+    async def options_ready(*_args):
+        return True
+
+    async def inject_widget(_page):
+        return None
+
+    async def apply_answer(_page, *_args):
+        return True
+
+    async def next_question(page):
+        page.url = "https://login.zhihuishu.com/login"
+        return False
+
+    monkeypatch.setattr(flow, "_wait_for_options", options_ready)
+
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="测验翻到下一题时登录状态失效",
+    ):
+        asyncio.run(
+            flow.handle_test_page(
+                _FlowPage(),
+                [_question(0), _question(1)],
+                auto_submit=True,
+                query_answer=lambda *_args: ("A", False),
+                widget_injector=inject_widget,
+                answer_applier=apply_answer,
+                next_clicker=next_question,
+                logger_instance=_Logger(),
+            )
+        )
+
+
+def test_handle_test_page_propagates_login_redirect_from_submitter(monkeypatch):
+    async def options_ready(*_args):
+        return True
+
+    async def inject_widget(_page):
+        return None
+
+    async def apply_answer(_page, *_args):
+        return True
+
+    async def submit(page):
+        page.url = "https://login.zhihuishu.com/login"
+        return False
+
+    monkeypatch.setattr(flow, "_wait_for_options", options_ready)
+
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="测验交卷期间登录状态失效",
+    ):
+        asyncio.run(
+            flow.handle_test_page(
+                _FlowPage(),
+                [_question(0)],
+                auto_submit=True,
+                query_answer=lambda *_args: ("A", False),
+                widget_injector=inject_widget,
+                answer_applier=apply_answer,
+                submitter=submit,
+                logger_instance=_Logger(),
+            )
+        )
