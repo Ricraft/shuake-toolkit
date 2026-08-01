@@ -62,8 +62,12 @@ class NormalTestSession:
 
     async def cleanup(self) -> None:
         if self._listener_active:
-            self.handler.remove_listener()
-            self._listener_active = False
+            try:
+                self.handler.remove_listener()
+            except Exception as exc:
+                self.logger.write_log(f"移除普通课测验监听器失败: {exc}\n")
+            finally:
+                self._listener_active = False
         if self.new_page_task and not self.new_page_task.done():
             self.new_page_task.cancel()
             await asyncio.gather(self.new_page_task, return_exceptions=True)

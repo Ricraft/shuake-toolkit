@@ -76,8 +76,12 @@ class NationalTestSession:
 
     async def cancel(self) -> None:
         if self._listener_active:
-            self.handler.remove_listener()
-            self._listener_active = False
+            try:
+                self.handler.remove_listener()
+            except Exception as exc:
+                self.logger.write_log(f"移除全国共享课测验监听器失败: {exc}\n")
+            finally:
+                self._listener_active = False
         if self.new_page_task and not self.new_page_task.done():
             self.new_page_task.cancel()
             await asyncio.gather(self.new_page_task, return_exceptions=True)
@@ -172,6 +176,7 @@ class NationalTestSession:
                 ) from goto_error
 
     async def process(self) -> NationalTestOutcome:
+        primary_error = None
         try:
             await self._await_new_page()
             work_page = self.new_page or self.page
@@ -241,6 +246,27 @@ class NationalTestSession:
 
             self.logger.warn("没有题目数据，跳过答题")
             return NationalTestOutcome.NO_QUESTIONS
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
-            await self.cancel()
-            await self.restore_course_list()
+            cleanup_error = None
+            try:
+                await self.cancel()
+            except Exception as exc:
+                cleanup_error = exc
+                self.logger.write_log(f"清理全国共享课测验资源失败: {exc}\n")
+
+            try:
+                await self.restore_course_list()
+            except Exception as exc:
+                if primary_error is None:
+                    raise
+                self.logger.write_log(
+                    "恢复全国共享课课程列表失败，但保留原始处理错误 "
+                    f"{type(primary_error).__name__}: {primary_error}; "
+                    f"恢复错误: {type(exc).__name__}: {exc}\n"
+                )
+
+            if cleanup_error is not None and primary_error is None:
+                raise cleanup_error

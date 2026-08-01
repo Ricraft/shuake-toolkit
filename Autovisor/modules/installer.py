@@ -209,8 +209,12 @@ def install_package(package, version, mirror_name, base_url):
         logger.error(error_message)
         return None
     finally:
-        if wheel_path and os.path.exists(wheel_path):
-            os.remove(wheel_path)
+        if wheel_path:
+            try:
+                if os.path.exists(wheel_path):
+                    os.remove(wheel_path)
+            except OSError as exc:
+                logger.warn(f"清理临时 wheel 文件失败: {wheel_path}: {exc}")
 
 
 def start():

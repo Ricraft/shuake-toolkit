@@ -116,10 +116,18 @@ class _Page:
 
 
 class _Handler:
-    def __init__(self, questions=None, *, completed=False, wait_result=False):
+    def __init__(
+        self,
+        questions=None,
+        *,
+        completed=False,
+        wait_result=False,
+        remove_error=None,
+    ):
         self.questions_data = questions or []
         self.is_completed = completed
         self.wait_result = wait_result
+        self.remove_error = remove_error
         self.setup_context = None
         self.removed = False
         self.wait_calls = 0
@@ -129,6 +137,8 @@ class _Handler:
 
     def remove_listener(self):
         self.removed = True
+        if self.remove_error:
+            raise self.remove_error
 
     async def wait_for_questions(self, timeout):
         assert timeout == 20
@@ -263,6 +273,60 @@ def test_login_popup_stops_before_waiting_for_questions():
     assert handler.removed is True
     assert login_page.closed is True
     assert page.reload_calls == ["domcontentloaded"]
+
+
+def test_fatal_auth_survives_cleanup_and_restore_failures():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    login_page = _Page("https://login.zhihuishu.com/?from=exam")
+    page = _Page(
+        course_url,
+        new_page=login_page,
+        reload_error=RuntimeError("reload failed"),
+        goto_error=RuntimeError("goto failed"),
+    )
+    handler = _Handler(
+        [{"id": 1}],
+        remove_error=RuntimeError("listener cleanup failed"),
+    )
+    logger = _Logger()
+    session = NationalTestSession(page, course_url, logger, handler, None)
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(CourseAuthenticationError, match="测验页面登录状态失效"):
+        asyncio.run(run_session())
+
+    assert handler.removed is True
+    assert login_page.closed is True
+    assert page.reload_calls == ["domcontentloaded"]
+    assert page.goto_calls == [(course_url, "domcontentloaded")]
+    assert any("移除全国共享课测验监听器失败" in message for message in logger.logs)
+    assert any("保留原始处理错误" in message for message in logger.logs)
+
+
+def test_closed_context_survives_course_restore_failure():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    page = _Page(
+        course_url,
+        context_error=TargetClosedError("context closed"),
+        reload_error=RuntimeError("reload failed"),
+        goto_error=RuntimeError("goto failed"),
+    )
+    handler = _Handler()
+    logger = _Logger()
+    session = NationalTestSession(page, course_url, logger, handler, None)
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(TargetClosedError, match="context closed"):
+        asyncio.run(run_session())
+
+    assert handler.removed is True
+    assert any("保留原始处理错误 TargetClosedError" in message for message in logger.logs)
 
 
 def test_context_wait_preserves_page_closed_error():
@@ -446,3 +510,37 @@ def test_answer_failure_still_cleans_listener_and_restores_page():
 
     assert handler.removed is True
     assert page.reload_calls == ["domcontentloaded"]
+
+
+def test_answer_failure_survives_cleanup_and_restore_failures():
+    course_url = "https://wisdom-mooc.zhihuishu.com/study/index"
+    page = _Page(
+        course_url,
+        reload_error=RuntimeError("reload failed"),
+        goto_error=RuntimeError("goto failed"),
+    )
+    handler = _Handler(
+        [{"id": 1}],
+        remove_error=RuntimeError("listener cleanup failed"),
+    )
+    logger = _Logger()
+
+    async def failing_answer(*_args, **_kwargs):
+        raise RuntimeError("answer failed")
+
+    session = NationalTestSession(
+        page, course_url, logger, handler, failing_answer
+    )
+
+    async def run_session():
+        session.prepare()
+        await session.process()
+
+    with pytest.raises(RuntimeError, match="answer failed"):
+        asyncio.run(run_session())
+
+    assert handler.removed is True
+    assert page.reload_calls == ["domcontentloaded"]
+    assert page.goto_calls == [(course_url, "domcontentloaded")]
+    assert any("移除全国共享课测验监听器失败" in message for message in logger.logs)
+    assert any("保留原始处理错误 RuntimeError" in message for message in logger.logs)

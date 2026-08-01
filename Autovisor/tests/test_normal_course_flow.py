@@ -104,10 +104,18 @@ class _Page:
 
 
 class _Handler:
-    def __init__(self, questions=None, *, completed=False, wait_result=True):
+    def __init__(
+        self,
+        questions=None,
+        *,
+        completed=False,
+        wait_result=True,
+        remove_error=None,
+    ):
         self.questions_data = questions or []
         self.is_completed = completed
         self.wait_result = wait_result
+        self.remove_error = remove_error
         self.removed = False
 
     def setup_listener(self, _context):
@@ -115,6 +123,8 @@ class _Handler:
 
     def remove_listener(self):
         self.removed = True
+        if self.remove_error:
+            raise self.remove_error
 
     async def wait_for_questions(self, timeout):
         assert timeout == 20
@@ -233,6 +243,24 @@ def test_test_session_rejects_login_popup_before_waiting_for_questions():
     assert answer_calls == []
     assert handler.removed is True
     assert login_page.closed is True
+
+
+def test_fatal_auth_survives_listener_cleanup_failure_and_closes_popup():
+    login_page = _Page(url="https://login.zhihuishu.com/?from=exam")
+    page = _Page(new_page=login_page)
+    handler = _Handler(
+        [{"id": 1}],
+        remove_error=RuntimeError("listener cleanup failed"),
+    )
+    logger = _Logger()
+    session = NormalTestSession(page, logger, handler, None)
+
+    with pytest.raises(CourseAuthenticationError, match="测验页面登录状态失效"):
+        asyncio.run(session.process(_ClickableCourse()))
+
+    assert handler.removed is True
+    assert login_page.closed is True
+    assert any("移除普通课测验监听器失败" in message for message in logger.logs)
 
 
 def test_test_session_preserves_closed_context_error():
