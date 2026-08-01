@@ -1254,8 +1254,10 @@ class UnifiedLauncher:
     def show_update_available_notification(self, version):
         self.log_system(f"检测到 Yatori 新版本: {version}")
 
-    def install_yatori_update_async(self, release_info=None):
-        return self.update_controller.install_yatori_async(release_info)
+    def install_yatori_update_async(self, confirmation_token=None):
+        return self.update_controller.install_yatori_confirmed_async(
+            confirmation_token
+        )
 
     def check_autovisor_update_async(self):
         return self.update_controller.check_autovisor_async()

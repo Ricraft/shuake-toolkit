@@ -72,16 +72,48 @@ class UpdateControllerTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["updateDialog"]["latestVersion"], "new")
         self.assertEqual(result["updateDialog"]["currentVersion"], "old")
+        confirmation_token = result["updateDialog"]["confirmationToken"]
+        self.assertTrue(confirmation_token)
         self.assertEqual(manager.installed, [])
         self.assertEqual(installed, [])
         self.assertEqual(controller.yatori_update_info["info"]["version"], "new")
 
-        self.assertTrue(controller.install_yatori_async())
+        self.assertTrue(
+            controller.install_yatori_confirmed_async(confirmation_token)
+        )
 
         self.assertEqual(manager.installed, [("yatori", "new")])
         self.assertEqual(installed, ["yatori"])
         self.assertIsNone(controller.yatori_update_info)
         self.assertFalse(controller.installing)
+
+    def test_yatori_update_confirmation_rejects_missing_or_wrong_token(self):
+        controller, manager, _logs, notices, _installed = self.make_controller()
+        result = controller.prepare_yatori_update_confirmation()
+
+        self.assertFalse(controller.install_yatori_confirmed_async(None))
+        self.assertFalse(controller.install_yatori_confirmed_async("wrong-token"))
+
+        self.assertEqual(manager.installed, [])
+        self.assertTrue(any("确认已失效" in item[2] for item in notices))
+        self.assertTrue(result["updateDialog"]["confirmationToken"])
+
+    def test_yatori_confirmation_installs_the_release_shown_in_dialog(self):
+        controller, manager, _logs, _notices, _installed = self.make_controller()
+        result = controller.prepare_yatori_update_confirmation()
+        confirmation_token = result["updateDialog"]["confirmationToken"]
+        controller.yatori_update_info = {
+            "info": {"version": "newer-background-release"}
+        }
+
+        self.assertTrue(
+            controller.install_yatori_confirmed_async(confirmation_token)
+        )
+
+        self.assertEqual(manager.installed, [("yatori", "new")])
+        self.assertFalse(
+            controller.install_yatori_confirmed_async(confirmation_token)
+        )
 
     def test_yatori_update_confirmation_includes_current_version_and_release_notes(self):
         manager = _Manager()

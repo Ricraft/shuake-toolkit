@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import secrets
 import threading
 from collections.abc import Callable
 
@@ -44,6 +46,7 @@ class UpdateController:
         self.installing_core = None
         self.yatori_checking = False
         self.autovisor_checking = False
+        self._yatori_confirmation = None
         self._lock = threading.RLock()
 
     def check_yatori_async(self, *, explicit: bool = False) -> bool:
@@ -136,7 +139,7 @@ class UpdateController:
             message = f"{message}\n\n最新版本介绍:\n{notes}"
         return message
 
-    def _build_yatori_update_dialog(self, result):
+    def _build_yatori_update_dialog(self, result, confirmation_token):
         release_info = result.get("info") or {}
         latest_version = release_info.get("version", "未知")
         installed = result.get("installed", False)
@@ -151,10 +154,13 @@ class UpdateController:
             "publishedAt": release_info.get("published_at") or "",
             "releaseNotes": notes or "该版本暂未提供更新说明。",
             "releaseNotesAvailable": bool(notes),
+            "confirmationToken": confirmation_token,
         }
 
     def _prepare_yatori_update_confirmation_result(self, result):
         if not result:
+            with self._lock:
+                self._yatori_confirmation = None
             message = "无法连接至 GitHub 节点，请检查网络环境。"
             self.show_error("管理中心", message)
             return {"ok": False, "message": message}
@@ -162,8 +168,18 @@ class UpdateController:
         installed = result.get("installed", False)
         has_update = result.get("has_update", False)
         if not installed or has_update:
-            self.yatori_update_info = result
-            dialog = self._build_yatori_update_dialog(result)
+            release_info = result.get("info") or {}
+            confirmation_token = secrets.token_urlsafe(24)
+            with self._lock:
+                self.yatori_update_info = result
+                self._yatori_confirmation = {
+                    "token": confirmation_token,
+                    "release_info": copy.deepcopy(release_info),
+                }
+            dialog = self._build_yatori_update_dialog(
+                result,
+                confirmation_token,
+            )
             if installed:
                 self.log(
                     "检测到 Yatori 新版本 "
@@ -179,7 +195,9 @@ class UpdateController:
                 "toastType": "info",
             }
 
-        self.yatori_update_info = None
+        with self._lock:
+            self.yatori_update_info = None
+            self._yatori_confirmation = None
         message = self._build_yatori_current_message(result)
         self.show_info("管理中心", message)
         return {
@@ -221,6 +239,31 @@ class UpdateController:
 
     def install_yatori_async(self, release_info=None) -> bool:
         return self._install_async("yatori", release_info)
+
+    def install_yatori_confirmed_async(self, confirmation_token) -> bool:
+        with self._lock:
+            confirmation = self._yatori_confirmation
+            expected_token = (confirmation or {}).get("token")
+            if (
+                not isinstance(confirmation_token, str)
+                or not confirmation_token
+                or not isinstance(expected_token, str)
+                or not secrets.compare_digest(
+                    confirmation_token,
+                    expected_token,
+                )
+            ):
+                self.show_warning(
+                    "Yatori 更新",
+                    "更新确认已失效，请重新点击更新按钮并核对版本说明。",
+                )
+                return False
+
+            release_info = copy.deepcopy(confirmation["release_info"])
+            accepted = self._install_async("yatori", release_info)
+            if accepted:
+                self._yatori_confirmation = None
+            return accepted
 
     def check_autovisor_async(self) -> bool:
         if not self.core_manager:

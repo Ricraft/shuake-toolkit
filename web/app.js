@@ -1094,10 +1094,16 @@
         function closeYatoriUpdateModal() {
             if (yatoriUpdateConfirming) return;
             document.getElementById('yatori-update-modal')?.classList.remove('active');
+            window.pendingYatoriUpdateDialog = null;
         }
 
         async function confirmYatoriUpdate() {
             if (yatoriUpdateConfirming) return;
+            const confirmationToken = window.pendingYatoriUpdateDialog?.confirmationToken;
+            if (!confirmationToken) {
+                showToast('更新确认已失效，请重新点击更新按钮', 'error');
+                return;
+            }
             yatoriUpdateConfirming = true;
             const btn = document.getElementById('yatori-update-confirm-btn');
             const oldHtml = btn ? btn.innerHTML : '';
@@ -1106,9 +1112,14 @@
                 btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在启动更新...';
             }
             try {
-                const result = await apiCall('perform_action', 'install_yatori_update');
+                const result = await apiCall(
+                    'perform_action',
+                    'install_yatori_update',
+                    confirmationToken
+                );
                 if (handleWebActionResult(result, 'Yatori 更新启动失败')) {
                     document.getElementById('yatori-update-modal')?.classList.remove('active');
+                    window.pendingYatoriUpdateDialog = null;
                     showToast('Yatori 更新已开始，请查看系统日志进度', 'success');
                 }
             } catch (error) {

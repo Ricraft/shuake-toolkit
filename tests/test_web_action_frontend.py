@@ -48,3 +48,28 @@ def test_direct_web_action_entry_points_share_the_lock():
     assert "runWebActionLocked(action, []" in save_source
     assert "requestWebAction(action, args)" in perform_source
     assert "runWebActionLocked('show_update_dialog', []" in update_source
+
+
+def test_yatori_update_confirmation_uses_backend_token_once():
+    modal_source = function_source(
+        "showYatoriUpdateModal",
+        "closeYatoriUpdateModal",
+    )
+    close_source = function_source(
+        "closeYatoriUpdateModal",
+        "confirmYatoriUpdate",
+    )
+    confirm_source = function_source(
+        "confirmYatoriUpdate",
+        "confirmAndPerform",
+    )
+
+    assert "window.pendingYatoriUpdateDialog = info" in modal_source
+    assert "window.pendingYatoriUpdateDialog = null" in close_source
+    assert "confirmationToken" in confirm_source
+    assert "'install_yatori_update'," in confirm_source
+    assert "confirmationToken" in confirm_source.split(
+        "'install_yatori_update',",
+        1,
+    )[1]
+    assert "window.pendingYatoriUpdateDialog = null" in confirm_source

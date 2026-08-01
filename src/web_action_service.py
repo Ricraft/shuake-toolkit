@@ -90,8 +90,10 @@ class WebActionService:
             elif action == "show_update_dialog":
                 return self._with_state(launcher.show_update_dialog())
             elif action == "install_yatori_update":
-                if not launcher.install_yatori_update_async():
-                    return self._failure("暂无可安装的 Yatori 更新")
+                if not launcher.install_yatori_update_async(script_type):
+                    return self._failure(
+                        "更新确认已失效，请重新点击更新按钮并核对版本说明"
+                    )
             elif action == "check_autovisor_update":
                 if not launcher.check_autovisor_update_async():
                     return self._failure(

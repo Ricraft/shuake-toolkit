@@ -94,9 +94,10 @@ def test_yatori_update_button_returns_confirmation_data_without_installing():
             "updateDialog": {
                 "latestVersion": "v2.6.2-beta.11",
                 "releaseNotes": "版本介绍",
+                "confirmationToken": "confirm-beta11",
             },
         },
-        install_yatori_update_async=lambda: calls.append("install") or True,
+        install_yatori_update_async=lambda _token: calls.append("install") or True,
     )
 
     result = WebActionService(launcher).perform("show_update_dialog")
@@ -109,13 +110,29 @@ def test_yatori_update_button_returns_confirmation_data_without_installing():
 def test_yatori_update_confirm_action_starts_install():
     calls = []
     launcher = make_launcher(
-        install_yatori_update_async=lambda: calls.append("install") or True
+        install_yatori_update_async=lambda token: calls.append(token) or True
+    )
+
+    result = WebActionService(launcher).perform(
+        "install_yatori_update",
+        "confirm-beta11",
+    )
+
+    assert result["ok"] is True
+    assert calls == ["confirm-beta11"]
+
+
+def test_yatori_update_confirm_action_rejects_missing_token():
+    calls = []
+    launcher = make_launcher(
+        install_yatori_update_async=lambda token: calls.append(token) or False
     )
 
     result = WebActionService(launcher).perform("install_yatori_update")
 
-    assert result["ok"] is True
-    assert calls == ["install"]
+    assert result["ok"] is False
+    assert "确认已失效" in result["message"]
+    assert calls == [None]
 
 
 def test_autovisor_upstream_install_is_blocked_without_calling_installer():
