@@ -86,6 +86,90 @@ def test_play_video_handles_page_closed_during_initial_load():
     assert logger.logs == ["浏览器已关闭,视频播放模块已下线.\n"]
 
 
+class _LoginPage:
+    url = "https://login.zhihuishu.com/login"
+
+    def __init__(self):
+        self.selector_checks = 0
+
+    async def wait_for_load_state(self, _state):
+        return None
+
+    async def wait_for_selector(self, _selector, **_kwargs):
+        self.selector_checks += 1
+        raise AssertionError("login page must not wait for video")
+
+
+def test_video_optimize_stops_on_login_page_before_video_wait():
+    logger = _Logger()
+    page = _LoginPage()
+
+    asyncio.run(
+        video_optimize(
+            page,
+            SimpleNamespace(),
+            logger_instance=logger,
+            poll_interval=0,
+        )
+    )
+
+    assert page.selector_checks == 0
+    assert logger.warnings == [
+        "视频调节模块已停止: 视频调节模块检测到登录状态失效"
+    ]
+
+
+def test_play_video_stops_on_login_page_before_video_wait():
+    logger = _Logger()
+    page = _LoginPage()
+
+    asyncio.run(
+        play_video(
+            page,
+            SimpleNamespace(limitSpeed=1.5),
+            logger_instance=logger,
+            poll_interval=0,
+        )
+    )
+
+    assert page.selector_checks == 0
+    assert logger.warnings == [
+        "视频播放模块已停止: 视频播放模块检测到登录状态失效"
+    ]
+
+
+def test_video_optimize_stops_when_video_timeout_is_login_redirect():
+    class RedirectingPage:
+        url = "https://studyservice-api.zhihuishu.com/course"
+
+        def __init__(self):
+            self.selector_checks = 0
+
+        async def wait_for_load_state(self, _state):
+            return None
+
+        async def wait_for_selector(self, _selector, **_kwargs):
+            self.selector_checks += 1
+            self.url = "https://login.zhihuishu.com/login"
+            raise PlaywrightTimeoutError("video missing after redirect")
+
+    logger = _Logger()
+    page = RedirectingPage()
+    asyncio.run(
+        video_optimize(
+            page,
+            SimpleNamespace(),
+            logger_instance=logger,
+            poll_interval=0,
+        )
+    )
+
+    assert page.selector_checks == 1
+    assert logger.warnings == [
+        "视频调节模块已停止: 视频调节模块检测到登录状态失效"
+    ]
+
+
 class _PausedVideoPage:
     url = "https://studyservice-api.zhihuishu.com/course"
 

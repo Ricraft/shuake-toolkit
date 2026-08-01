@@ -9,6 +9,8 @@ from playwright._impl._errors import TargetClosedError
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from modules.configs import Config
+from modules.course_errors import CourseAuthenticationError
+from modules.course_session import ensure_course_authenticated
 from modules.course_types import CourseProfile
 from modules.logger import Logger
 from modules.utils import (
@@ -28,6 +30,19 @@ def _report_loop_failure(active_logger, label: str, exc: Exception, count: int) 
         active_logger.warn(
             "%s异常（连续%d次）: %s" % (label, count, repr(exc)[:100])
         )
+
+
+async def _stop_for_auth_loss(page: Page, active_logger, label: str) -> bool:
+    """Stop optional video helpers once the course session is no longer valid."""
+    try:
+        await ensure_course_authenticated(
+            page,
+            f"{label}检测到登录状态失效",
+        )
+    except CourseAuthenticationError as exc:
+        active_logger.warn(f"{label}已停止: {exc}")
+        return True
+    return False
 
 
 async def task_monitor(
@@ -106,6 +121,8 @@ async def video_optimize(
     active_logger = logger_instance or logger
     try:
         await page.wait_for_load_state("domcontentloaded")
+        if await _stop_for_auth_loss(page, active_logger, "视频调节模块"):
+            return
     except TargetClosedError:
         active_logger.write_log("浏览器已关闭,视频调节模块已下线.\n")
         return
@@ -116,6 +133,8 @@ async def video_optimize(
     while True:
         try:
             await asyncio.sleep(poll_interval)
+            if await _stop_for_auth_loss(page, active_logger, "视频调节模块"):
+                return
             await page.wait_for_selector("video", state="attached", timeout=3000)
             volume = await get_video_attr(page, "volume")
             rate = await get_video_attr(page, "playbackRate")
@@ -165,9 +184,13 @@ async def video_optimize(
             active_logger.write_log("浏览器已关闭,视频调节模块已下线.\n")
             return
         except PlaywrightTimeoutError:
+            if await _stop_for_auth_loss(page, active_logger, "视频调节模块"):
+                return
             consecutive_errors = 0
             continue
         except Exception as exc:
+            if await _stop_for_auth_loss(page, active_logger, "视频调节模块"):
+                return
             consecutive_errors += 1
             _report_loop_failure(
                 active_logger,
@@ -187,6 +210,8 @@ async def play_video(
     active_logger = logger_instance or logger
     try:
         await page.wait_for_load_state("domcontentloaded")
+        if await _stop_for_auth_loss(page, active_logger, "视频播放模块"):
+            return
     except TargetClosedError:
         active_logger.write_log("浏览器已关闭,视频播放模块已下线.\n")
         return
@@ -196,6 +221,8 @@ async def play_video(
     while True:
         try:
             await asyncio.sleep(poll_interval)
+            if await _stop_for_auth_loss(page, active_logger, "视频播放模块"):
+                return
             await page.wait_for_selector("video", state="attached", timeout=3000)
             paused = await page.evaluate("document.querySelector('video').paused")
             profile = CourseProfile.from_url(page.url)
@@ -276,9 +303,13 @@ async def play_video(
             active_logger.write_log("浏览器已关闭,视频播放模块已下线.\n")
             return
         except PlaywrightTimeoutError:
+            if await _stop_for_auth_loss(page, active_logger, "视频播放模块"):
+                return
             consecutive_errors = 0
             continue
         except Exception as exc:
+            if await _stop_for_auth_loss(page, active_logger, "视频播放模块"):
+                return
             consecutive_errors += 1
             _report_loop_failure(
                 active_logger,
