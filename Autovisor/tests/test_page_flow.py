@@ -6,12 +6,16 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 
 _AUTOVISOR_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules import tasks as task_module
 from modules import test_page_flow as flow
+from modules.course_errors import CourseAuthenticationError
 
 sys.path.remove(_AUTOVISOR_ROOT)
 
@@ -129,6 +133,96 @@ def test_widget_update_passes_data_as_evaluate_argument():
     assert result is True
     assert page.data is widget_data
     assert widget_data["question"] not in page.script
+
+
+def test_wait_for_options_uses_one_combined_selector_per_attempt():
+    class Page:
+        url = "https://onlineweb.zhihuishu.com/onlinestuh5"
+
+        def __init__(self):
+            self.selectors = []
+
+        async def wait_for_selector(self, selector, **_options):
+            self.selectors.append(selector)
+            return object()
+
+    page = Page()
+    result = asyncio.run(flow._wait_for_options(page, _Logger()))
+
+    assert result is True
+    assert page.selectors == [flow.OPTION_SELECTOR]
+    assert all(selector in flow.OPTION_SELECTOR for selector in flow.OPTION_SELECTORS)
+
+
+def test_wait_for_options_rejects_login_redirect_before_waiting():
+    class Page:
+        url = "https://login.zhihuishu.com/login"
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        async def wait_for_selector(self, _selector, **_options):
+            self.wait_calls += 1
+            raise PlaywrightTimeoutError("not rendered")
+
+    page = Page()
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="等待测验选项时登录状态失效",
+    ):
+        asyncio.run(flow._wait_for_options(page, _Logger()))
+
+    assert page.wait_calls == 0
+
+
+def test_wait_for_options_reports_unknown_selector_failure_once():
+    class Page:
+        url = "https://onlineweb.zhihuishu.com/onlinestuh5"
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        async def wait_for_selector(self, _selector, **_options):
+            self.wait_calls += 1
+            raise RuntimeError("selector engine failed")
+
+    page = Page()
+    log = _Logger()
+    result = asyncio.run(flow._wait_for_options(page, log))
+
+    assert result is False
+    assert page.wait_calls == 1
+    assert any(
+        "检查测验选项时发生未知错误" in message
+        and "selector engine failed" in message
+        for _, message in log.messages
+    )
+
+
+def test_wait_for_options_limits_missing_option_waits_to_three_attempts():
+    class Page:
+        url = "https://onlineweb.zhihuishu.com/onlinestuh5"
+
+        def __init__(self):
+            self.wait_calls = 0
+            self.retry_delays = []
+
+        async def wait_for_selector(self, _selector, **_options):
+            self.wait_calls += 1
+            raise PlaywrightTimeoutError("not rendered")
+
+        async def wait_for_timeout(self, delay_ms):
+            self.retry_delays.append(delay_ms)
+
+        async def content(self):
+            return "<html>course shell</html>"
+
+    page = Page()
+    result = asyncio.run(flow._wait_for_options(page, _Logger()))
+
+    assert result is False
+    assert page.wait_calls == 3
+    assert page.retry_delays == [3000, 3000]
 
 
 def test_handle_test_page_rejects_malformed_question_collection():

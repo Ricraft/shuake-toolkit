@@ -10,8 +10,13 @@ import re
 from collections.abc import Callable
 
 from playwright._impl._errors import TargetClosedError
-from playwright.async_api import Page
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from modules.course_errors import CourseAuthenticationError
+from modules.course_session import (
+    ensure_course_authenticated,
+    wait_for_authenticated_selector,
+)
 from modules.floating_widget import inject_widget
 from modules.logger import Logger
 from modules.test_page_controls import (
@@ -36,6 +41,7 @@ OPTION_SELECTORS = (
     '[class*="option"]',
     '[class*="topic"]',
 )
+OPTION_SELECTOR = ", ".join(OPTION_SELECTORS)
 
 QUESTION_TYPE_MAP = {
     "单选题": "single",
@@ -162,20 +168,34 @@ async def query_test_answers(
 
 async def _wait_for_options(page: Page, active_logger) -> bool:
     for retry in range(3):
-        for selector in OPTION_SELECTORS:
-            try:
-                await page.wait_for_selector(
-                    selector,
-                    timeout=5000,
-                    state="visible",
-                )
-                active_logger.info("[OK] 选项元素已加载: %s" % selector)
-                return True
-            except TargetClosedError:
-                active_logger.warn("[WARN] 答题页面在加载选项时关闭")
-                return False
-            except Exception:
-                continue
+        try:
+            await ensure_course_authenticated(
+                page,
+                "等待测验选项时登录状态失效",
+            )
+            await wait_for_authenticated_selector(
+                page,
+                OPTION_SELECTOR,
+                "等待测验选项时登录状态失效",
+                timeout=5000,
+                state="visible",
+            )
+            active_logger.info("[OK] 选项元素已加载")
+            return True
+        except CourseAuthenticationError:
+            active_logger.warn("[FAIL] 等待测验选项时登录状态失效")
+            raise
+        except TargetClosedError:
+            active_logger.warn("[WARN] 答题页面在加载选项时关闭")
+            return False
+        except PlaywrightTimeoutError:
+            pass
+        except Exception as exc:
+            active_logger.warn(
+                "[WARN] 检查测验选项时发生未知错误: %s"
+                % str(exc)[:80]
+            )
+            return False
         if retry < 2:
             active_logger.warn(
                 "[RETRY] 等待选项加载失败，重试 %d/3" % (retry + 1)
@@ -184,8 +204,13 @@ async def _wait_for_options(page: Page, active_logger) -> bool:
     try:
         page_html = await page.content()
         active_logger.warn("页面HTML前500字符: %s" % page_html[:500])
-    except Exception:
-        pass
+    except TargetClosedError:
+        active_logger.warn("[WARN] 答题页面在读取诊断信息时关闭")
+    except Exception as exc:
+        active_logger.warn(
+            "[WARN] 无法读取测验页面诊断信息: %s"
+            % str(exc)[:80]
+        )
     active_logger.error("[ERROR] 无法加载选项元素")
     return False
 
