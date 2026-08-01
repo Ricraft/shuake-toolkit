@@ -318,7 +318,7 @@ def test_learning_loop_raises_when_login_expires(monkeypatch):
     _patch_learning_runtime(monkeypatch, ["0%"])
     page = _LearningPage(url="https://passport.zhihuishu.com/login")
 
-    with pytest.raises(CourseAuthenticationError, match="视频播放期间"):
+    with pytest.raises(CourseAuthenticationError, match="视频播放启动时"):
         runtime.asyncio.run(
             runtime.learning_loop(
                 page,
@@ -329,6 +329,74 @@ def test_learning_loop_raises_when_login_expires(monkeypatch):
                 position_check_interval=999,
             )
         )
+
+
+def test_learning_loop_rejects_login_redirect_during_video_startup(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%"])
+
+    class RedirectedStartupPage(_LearningPage):
+        def __init__(self):
+            super().__init__()
+            self.wait_calls = 0
+
+        async def wait_for_timeout(self, _milliseconds):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                self.url = "https://login.zhihuishu.com/login"
+
+    page = RedirectedStartupPage()
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="等待视频开始播放时登录状态失效",
+    ):
+        runtime.asyncio.run(
+            runtime.learning_loop(
+                page,
+                0,
+                is_national_wisdom=True,
+                clock=lambda: 1,
+                minimum_watch_seconds=0,
+            )
+        )
+
+    assert page.wait_calls == 1
+
+
+def test_learning_loop_rechecks_auth_after_progress_reader_returns(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%"])
+    page = _LearningPage()
+    progress_calls = 0
+
+    async def redirected_progress(*_args, **_kwargs):
+        nonlocal progress_calls
+        progress_calls += 1
+        if progress_calls == 2:
+            page.url = "https://login.zhihuishu.com/login"
+        return "0%"
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(runtime, "get_course_progress", redirected_progress)
+
+    with pytest.raises(
+        CourseAuthenticationError,
+        match="读取视频播放进度时登录状态失效",
+    ):
+        runtime.asyncio.run(
+            runtime.learning_loop(
+                page,
+                0,
+                clock=lambda: 1,
+                sleep_func=no_sleep,
+                minimum_watch_seconds=0,
+                health_check_interval=999,
+                auth_check_interval=999,
+                position_check_interval=999,
+            )
+        )
+
+    assert progress_calls == 2
 
 
 def test_learning_loop_limits_repeated_video_load_recovery(monkeypatch):

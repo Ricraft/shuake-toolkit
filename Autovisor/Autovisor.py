@@ -229,25 +229,71 @@ async def learning_loop(
     stuck_timeout=60,
     max_recovery_attempts=3,
     health_check_interval=30,
+    auth_check_interval=4,
     position_check_interval=10,
     diagnostic_clock=time.monotonic,
 ) -> bool:
     diagnostics = RateLimitedDiagnostics(logger, clock=diagnostic_clock)
+    auth_check_interval = max(1, int(auth_check_interval))
+    await ensure_course_authenticated(
+        page,
+        "视频播放启动时登录状态失效",
+    )
     # 见面课完成阈值：80%（签到进度达到80%即完成签到）
     completion_threshold = 0.8 if is_meeting_class else (0.98 if is_national_wisdom else 1.0)
+
+    async def read_authenticated_progress(message):
+        await ensure_course_authenticated(page, message)
+        try:
+            progress = await get_course_progress(
+                page,
+                is_new_version,
+                is_hike_class,
+                is_national_wisdom,
+                is_meeting_class,
+                completion_threshold,
+                diagnostics=diagnostics,
+            )
+        except (CourseAuthenticationError, TargetClosedError):
+            raise
+        except Exception as exc:
+            try:
+                await ensure_course_authenticated(page, message)
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from exc
+            raise
+        await ensure_course_authenticated(page, message)
+        return progress
     
     # 对于全国智慧共享课和见面课，额外等待视频真正开始播放
     if is_national_wisdom or is_meeting_class:
         await page.wait_for_timeout(2000)
+        await ensure_course_authenticated(
+            page,
+            "等待视频开始播放时登录状态失效",
+        )
         # 等待视频开始播放（paused 变为 false）
         for _ in range(10):
             try:
+                await ensure_course_authenticated(
+                    page,
+                    "等待视频开始播放时登录状态失效",
+                )
                 paused = await page.evaluate('document.querySelector("video")?.paused ?? true')
                 if not paused:
                     break
+            except CourseAuthenticationError:
+                raise
             except TargetClosedError:
                 raise
             except Exception as error:
+                try:
+                    await ensure_course_authenticated(
+                        page,
+                        "等待视频开始播放时登录状态失效",
+                    )
+                except CourseAuthenticationError as auth_error:
+                    raise auth_error from error
                 diagnostics.warn(
                     "initial-video-state",
                     "等待视频开始播放时读取状态失败",
@@ -256,27 +302,15 @@ async def learning_loop(
             await page.wait_for_timeout(500)
     
     await page.wait_for_timeout(1000)
-    cur_time = await get_course_progress(
-        page,
-        is_new_version,
-        is_hike_class,
-        is_national_wisdom,
-        is_meeting_class,
-        completion_threshold,
-        diagnostics=diagnostics,
+    cur_time = await read_authenticated_progress(
+        "读取视频初始进度时登录状态失效",
     )
     
     # 如果一开始就显示100%，对于智慧共享课和见面课需要额外等待和验证
     if cur_time == "100%" and (is_hike_class or is_national_wisdom or is_meeting_class):
         await page.wait_for_timeout(5000)
-        cur_time = await get_course_progress(
-            page,
-            is_new_version,
-            is_hike_class,
-            is_national_wisdom,
-            is_meeting_class,
-            completion_threshold,
-            diagnostics=diagnostics,
+        cur_time = await read_authenticated_progress(
+            "复核视频完成状态时登录状态失效",
         )
         
         # 再次检查，如果还是100%但视频时间很短，说明可能是误判，需要重置视频
@@ -293,7 +327,16 @@ async def learning_loop(
                     await page.evaluate("Object.defineProperty(document.querySelector('video'), 'ended', { value: false, writable: true });")
                     await page.evaluate("document.querySelector('video').play();")
                     cur_time = "0%"
+            except (CourseAuthenticationError, TargetClosedError):
+                raise
             except Exception as e:
+                try:
+                    await ensure_course_authenticated(
+                        page,
+                        "修复视频进度状态时登录状态失效",
+                    )
+                except CourseAuthenticationError as auth_error:
+                    raise auth_error from e
                 logger.warn(f"重置视频失败: {repr(e)}", shift=True)
     
     min_duration = clock() + minimum_watch_seconds
@@ -305,6 +348,12 @@ async def learning_loop(
     while cur_time != "100%" or clock() < min_duration:
         try:
             loop_counter += 1
+
+            if loop_counter == 1 or loop_counter % auth_check_interval == 0:
+                await ensure_course_authenticated(
+                    page,
+                    "视频播放期间被重定向到首页或登录页",
+                )
             
             limit_time = config.limitMaxTime
             time_period = (clock() - start_time) / 60
@@ -380,21 +429,8 @@ async def learning_loop(
                         logger.error(f"刷新页面失败: {str(reload_e)[:50]}", shift=True)
                         break
             
-            # P0-2: 每30次循环检查登录态是否过期
-            if loop_counter % health_check_interval == 0:
-                await ensure_course_authenticated(
-                    page,
-                    "视频播放期间被重定向到首页或登录页",
-                )
-            
-            cur_time = await get_course_progress(
-                page,
-                is_new_version,
-                is_hike_class,
-                is_national_wisdom,
-                is_meeting_class,
-                completion_threshold,
-                diagnostics=diagnostics,
+            cur_time = await read_authenticated_progress(
+                "读取视频播放进度时登录状态失效",
             )
             
             # 【修复】检测进度停滞：如果连续60秒进度没有变化，刷新页面
@@ -478,6 +514,13 @@ async def learning_loop(
             
             await sleep_func(0.5)
         except TimeoutError as e:
+            try:
+                await ensure_course_authenticated(
+                    page,
+                    "视频播放等待超时时登录状态失效",
+                )
+            except CourseAuthenticationError as auth_error:
+                raise auth_error from e
             if await page.query_selector(".yidun_modal__title"):
                 await event_loop_verify.wait()
             elif await page.query_selector(".topic-title"):
