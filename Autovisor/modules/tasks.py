@@ -37,6 +37,7 @@ from modules.page_monitor import (
     smart_click_text,
     status_ocr_stream,
     trigger_restart,
+    wait_for_verification_resolution,
     wait_for_verify,
 )
 from modules.question_bank_client import (

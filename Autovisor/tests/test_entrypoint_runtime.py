@@ -438,6 +438,69 @@ def test_learning_loop_stops_when_in_class_question_resolution_times_out(monkeyp
     assert resolution_calls == [True]
 
 
+def test_learning_loop_stops_when_security_verification_times_out(monkeypatch):
+    _patch_learning_runtime(monkeypatch, ["0%"])
+    progress_calls = 0
+
+    class VerificationPage(_LearningPage):
+        async def query_selector(self, selector):
+            return object() if selector == ".yidun_modal__title" else None
+
+    async def progress(*_args, **_kwargs):
+        nonlocal progress_calls
+        progress_calls += 1
+        if progress_calls > 1:
+            raise runtime.TimeoutError("verification interrupted progress read")
+        return "0%"
+
+    async def resolution(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(runtime, "get_course_progress", progress)
+    monkeypatch.setattr(runtime, "wait_for_verification_resolution", resolution)
+
+    with pytest.raises(RuntimeError, match="安全验证等待超时"):
+        runtime.asyncio.run(
+            runtime.learning_loop(
+                VerificationPage(),
+                0,
+                clock=lambda: 1,
+                minimum_watch_seconds=0,
+                auth_check_interval=999,
+                health_check_interval=999,
+                position_check_interval=999,
+            )
+        )
+
+
+def test_review_loop_stops_when_security_verification_times_out(monkeypatch):
+    class VerificationPage(_LearningPage):
+        async def query_selector(self, selector):
+            return object() if selector == ".yidun_modal__title" else None
+
+    async def video_attr(_page, name):
+        return 100 if name == "duration" else 0
+
+    async def resolution(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(runtime, "get_video_attr", video_attr)
+    monkeypatch.setattr(
+        runtime,
+        "show_course_progress",
+        lambda **_kwargs: (_ for _ in ()).throw(runtime.TimeoutError("verify")),
+    )
+    monkeypatch.setattr(runtime, "wait_for_verification_resolution", resolution)
+    monkeypatch.setattr(
+        runtime,
+        "config",
+        SimpleNamespace(limitMaxTime=0, reset_curtime="reset-video"),
+    )
+
+    with pytest.raises(RuntimeError, match="安全验证等待超时"):
+        runtime.asyncio.run(runtime.review_loop(VerificationPage(), 0))
+
+
 def test_learning_loop_limits_repeated_video_load_recovery(monkeypatch):
     _patch_learning_runtime(monkeypatch, ["0%"])
     page = _LearningPage(video_error=3)

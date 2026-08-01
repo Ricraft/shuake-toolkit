@@ -61,6 +61,7 @@ from modules.tasks import (
     handle_test_page,
     skip_questions,
     wait_for_question_resolution,
+    wait_for_verification_resolution,
     wait_for_verify,
 )
 from modules.test_capture import TestResponseHandler
@@ -522,7 +523,13 @@ async def learning_loop(
             except CourseAuthenticationError as auth_error:
                 raise auth_error from e
             if await page.query_selector(".yidun_modal__title"):
-                await event_loop_verify.wait()
+                resolved = await wait_for_verification_resolution(
+                    page,
+                    event_loop_verify,
+                    logger_instance=logger,
+                )
+                if not resolved:
+                    raise RuntimeError("安全验证等待超时，视频学习已停止")
             elif await page.query_selector(".topic-title"):
                 resolved = await wait_for_question_resolution(
                     page,
@@ -572,7 +579,13 @@ async def review_loop(page: Page, start_time, is_hike_class=False):
             await asyncio.sleep(0.5)
         except TimeoutError as e:
             if await page.query_selector(".yidun_modal__title"):
-                await event_loop_verify.wait()
+                resolved = await wait_for_verification_resolution(
+                    page,
+                    event_loop_verify,
+                    logger_instance=logger,
+                )
+                if not resolved:
+                    raise RuntimeError("安全验证等待超时，复习模式已停止")
             elif await page.query_selector(".topic-title"):
                 resolved = await wait_for_question_resolution(
                     page,

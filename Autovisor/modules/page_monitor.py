@@ -7,14 +7,20 @@ import asyncio
 import json
 
 from playwright._impl._errors import TargetClosedError
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import (
+    Error as PlaywrightError,
+    Page,
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 from modules.diagnostics import RateLimitedDiagnostics
+from modules.course_session import ensure_course_authenticated
 from modules.logger import Logger
 from modules.utils import display_window, hide_window
 
 
 logger = Logger()
+VERIFY_SELECTOR = ".yidun_modal__title"
 
 
 async def smart_click_text(
@@ -231,15 +237,16 @@ async def wait_for_verify(
         try:
             await asyncio.sleep(3)
             await page.wait_for_selector(
-                ".yidun_modal__title",
-                state="attached",
+                VERIFY_SELECTOR,
+                state="visible",
                 timeout=1000,
             )
+            event_loop.clear()
             active_logger.warn("检测到安全验证,请手动完成验证...", shift=True)
             if config.enableHideWindow:
                 await display_window(page)
             await page.wait_for_selector(
-                ".yidun_modal__title",
+                VERIFY_SELECTOR,
                 state="hidden",
                 timeout=24 * 3600 * 1000,
             )
@@ -259,3 +266,88 @@ async def wait_for_verify(
                 "安全验证监控异常",
                 exc,
             )
+
+
+async def wait_for_verification_resolution(
+    page: Page,
+    event: asyncio.Event,
+    *,
+    timeout: float = 300,
+    poll_interval: float = 0.5,
+    logger_instance=None,
+) -> bool:
+    """Wait boundedly for the current manual security verification."""
+    active_logger = logger_instance or logger
+    event.clear()
+
+    async def ensure_active() -> None:
+        try:
+            await ensure_course_authenticated(
+                page,
+                "等待安全验证完成时登录状态失效",
+            )
+        except TargetClosedError:
+            raise
+        except PlaywrightError:
+            try:
+                await page.wait_for_load_state(
+                    "domcontentloaded",
+                    timeout=3000,
+                )
+            except TargetClosedError:
+                raise
+            except PlaywrightTimeoutError:
+                pass
+            await ensure_course_authenticated(
+                page,
+                "等待安全验证完成时登录状态失效",
+            )
+
+    async def verification_remains() -> bool:
+        try:
+            element = await page.query_selector(VERIFY_SELECTOR)
+        except TargetClosedError:
+            raise
+        except PlaywrightError:
+            await ensure_active()
+            element = await page.query_selector(VERIFY_SELECTOR)
+        if not element:
+            return False
+        is_visible = getattr(element, "is_visible", None)
+        if callable(is_visible):
+            return bool(await is_visible())
+        return True
+
+    await ensure_active()
+    if not await verification_remains():
+        return True
+
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    timeout = max(0.0, float(timeout))
+    interval = max(0.05, float(poll_interval))
+    while loop.time() - started_at < timeout:
+        await ensure_active()
+        if event.is_set():
+            return True
+
+        remaining = timeout - (loop.time() - started_at)
+        try:
+            await asyncio.wait_for(
+                event.wait(),
+                timeout=min(interval, max(0.0, remaining)),
+            )
+            return True
+        except asyncio.TimeoutError:
+            pass
+
+        await ensure_active()
+        if not await verification_remains():
+            active_logger.info("安全验证弹窗已消失，继续课程播放")
+            return True
+
+    active_logger.warn(
+        "安全验证在 %s 秒内未完成，停止当前视频以避免永久等待"
+        % f"{timeout:g}"
+    )
+    return False
