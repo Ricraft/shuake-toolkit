@@ -179,6 +179,12 @@ class FrontendContractTests(unittest.TestCase):
         self.assertEqual(CONTRIBUTOR_LINKS["zerror"], "https://app.zerror.cc/")
         self.assertIn('data-contributor="zerror"', PAGE)
         self.assertIn('href="https://app.zerror.cc/"', PAGE)
+        # 图标改为随包分发的 SVG（不再使用占位字母）
+        self.assertIn("assets/zerror_logo.svg", PAGE)
+        self.assertNotIn('">Z</div>', PAGE)
+        self.assertTrue(
+            (PROJECT_ROOT / "web" / "assets" / "zerror_logo.svg").is_file()
+        )
 
     def test_startup_does_not_auto_check_autovisor(self):
         launcher = (PROJECT_ROOT / "统一启动器.py").read_text(encoding="utf-8")
