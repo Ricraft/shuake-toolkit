@@ -83,6 +83,12 @@
                 icon: 'fas fa-wand-magic-sparkles',
                 color: '#ec6a9c',
             },
+            dev_link_visit: {
+                title: '吃水不忘挖井人',
+                desc: '第一次通过启动器打开开发者主页。感谢 Yatori、Autovisor、ZError，以及每一位让这个工具变好的人。',
+                icon: 'fas fa-hand-holding-heart',
+                color: '#f8b62d',
+            },
         };
         const TIANYI_WALLPAPERS = {
             'tianyi-luoshu': 'assets/tianyi_wallpaper_luoshu.jpg',
@@ -3716,14 +3722,21 @@
             const url = (anchor && anchor.href) || '';
             const api = bridge();
             if (!api || typeof api.perform_action !== 'function') {
-                if (url) window.open(url, '_blank', 'noopener');
+                if (url) {
+                    window.open(url, '_blank', 'noopener');
+                    noteDeveloperLinkVisited(key);
+                }
                 return false;
             }
             if (!key) {
                 if (url) window.open(url, '_blank', 'noopener');
                 return false;
             }
-            performAction('open_contributor_link', key);
+            performAction('open_contributor_link', key)
+                .then(result => {
+                    if (result?.ok !== false) noteDeveloperLinkVisited(key);
+                })
+                .catch(() => {});
             return false;
         }
 
@@ -4054,6 +4067,7 @@
             try {
                 const result = await apiCall('perform_action', 'open_update_link', key);
                 if (!handleWebActionResult(result, '无法打开下载链接')) return;
+                noteDeveloperLinkVisited(key);
                 showToast('已在系统浏览器中打开下载页', 'success');
             } catch (error) {
                 if (!error?.silent) showToast(error?.message || '无法打开下载链接', 'error');
@@ -4062,4 +4076,23 @@
 
         function closeAutovisorUpdateModal() {
             document.getElementById('autovisor-update-modal')?.classList.remove('active');
+        }
+
+        /* ============================================================
+           成就「吃水不忘挖井人」：首次通过启动器打开开发者主页
+           计入 Yatori 文档站 / Autovisor 仓库 / ZError 站点，
+           以及更新弹窗里的 Autovisor GitHub 链接；蓝奏云不计入。
+           ============================================================ */
+
+        const DEVELOPER_LINK_ACHIEVEMENT_KEYS = [
+            'yatori',
+            'autovisor',
+            'zerror',
+            'autovisor_github',
+        ];
+
+        function noteDeveloperLinkVisited(key) {
+            const normalized = String(key ?? '');
+            if (!DEVELOPER_LINK_ACHIEVEMENT_KEYS.includes(normalized)) return false;
+            return unlockAchievement('dev_link_visit');
         }
