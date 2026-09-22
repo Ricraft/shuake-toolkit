@@ -6,7 +6,9 @@ import os
 import subprocess
 import sys
 import threading
+import webbrowser
 from datetime import datetime
+from urllib.parse import urlparse
 from typing import Callable, Iterable, Mapping, Optional
 
 from src.atomic_io import atomic_write_text
@@ -16,6 +18,13 @@ class DesktopPlatformService:
     """Keep platform-specific side effects out of the launcher coordinator."""
 
     LOG_TABS = frozenset(("system", "yatori", "autovisor"))
+
+    # 关于页致谢外链白名单：(hostname, 允许的 path 前缀)。
+    EXTERNAL_URL_ALLOWLIST = (
+        ("yatori-dev.github.io", "/yatori-docs"),
+        ("github.com", "/cxrunfree/autovisor"),
+        ("www.github.com", "/cxrunfree/autovisor"),
+    )
 
     def __init__(
         self,
@@ -32,6 +41,7 @@ class DesktopPlatformService:
         command_runner=None,
         process_launcher=None,
         path_opener=None,
+        url_opener=None,
         now: Optional[Callable[[], datetime]] = None,
     ):
         self.base_dir = os.path.abspath(base_dir)
@@ -51,6 +61,9 @@ class DesktopPlatformService:
         self.process_launcher = process_launcher or subprocess.Popen
         self.path_opener = (
             getattr(os, "startfile", None) if path_opener is None else path_opener
+        )
+        self.url_opener = (
+            webbrowser.open if url_opener is None else url_opener
         )
         self.now = now or datetime.now
         self.shutdown_pending = False
@@ -301,3 +314,38 @@ class DesktopPlatformService:
             if os.path.exists(candidate):
                 return self.open_path(candidate)
         return {"ok": False, "message": missing_message}
+
+    def open_external_url(self, url: str) -> dict:
+        """Open an allow-listed https link in the system browser.
+
+        Only hosts/prefixes from :attr:`EXTERNAL_URL_ALLOWLIST` may be
+        opened, so a compromised frontend cannot turn this method into an
+        arbitrary external-link redirector.
+        """
+        raw = str(url or "").strip()
+        if not raw:
+            return {"ok": False, "message": "外部链接为空"}
+        try:
+            parsed = urlparse(raw)
+            host = (parsed.hostname or "").lower().rstrip(".")
+            port = parsed.port
+        except ValueError:
+            return {"ok": False, "message": f"外部链接格式无效: {raw}"}
+        if parsed.scheme != "https":
+            return {"ok": False, "message": "仅允许打开 https 链接"}
+        if parsed.username or parsed.password or port is not None:
+            return {"ok": False, "message": "外部链接不允许携带凭据或端口"}
+        path = parsed.path.lower()
+        allowed = any(
+            host == allowed_host and path.startswith(allowed_prefix)
+            for allowed_host, allowed_prefix in self.EXTERNAL_URL_ALLOWLIST
+        )
+        if not allowed:
+            return {"ok": False, "message": f"外部链接不在白名单内: {raw}"}
+        if self.url_opener is None:
+            return {"ok": False, "message": "当前系统不支持打开外部链接"}
+        try:
+            self.url_opener(raw)
+        except Exception as exc:
+            return {"ok": False, "message": f"打开外部链接失败: {exc}"}
+        return {"ok": True, "url": raw}

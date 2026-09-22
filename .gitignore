@@ -61,3 +61,7 @@ dist/
 
 # 备份
 _backup/
+
+# 启动器自更新暂存与备份（由 应用更新.cmd 管理）
+.update-staging/
+.update-backup/

@@ -33,6 +33,7 @@ from src.desktop_platform_service import DesktopPlatformService
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
 from src.launcher_startup_service import LauncherStartupService
+from src.launcher_update_service import LauncherUpdateService
 from src.process_supervisor import ProcessSupervisor
 from src.preferences_service import PreferencesService
 from src.practice_mode_service import PracticeModeService
@@ -83,7 +84,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.2.0"
+    LAUNCHER_VERSION = "v1.3.0"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -1417,6 +1418,13 @@ class UnifiedLauncher:
             )
         return result
 
+    def open_external_url(self, url):
+        """在系统默认浏览器中打开白名单内的外部链接。"""
+        result = self._get_desktop_platform_service().open_external_url(url)
+        if not result.get('ok'):
+            self._show_error("错误", result.get('message') or "无法打开外部链接")
+        return result
+
     # ==================== 核心管理功能 ====================
 
     def check_yatori_update_async(self):
@@ -1450,6 +1458,43 @@ class UnifiedLauncher:
 
     def handle_manual_check_result(self, result):
         return self.update_controller.handle_explicit_yatori_result(result)
+
+    # ==================== 统一启动器自身更新 ====================
+
+    def _handle_launcher_update_result(self, result):
+        message = str((result or {}).get("message") or "").strip()
+        if (result or {}).get("ok"):
+            self._show_info(
+                "统一启动器更新",
+                message or "统一启动器更新已就绪",
+            )
+        else:
+            self._show_error(
+                "统一启动器更新",
+                message or "统一启动器更新失败",
+            )
+
+    def _get_launcher_update_service(self):
+        service = getattr(self, "_launcher_update_service", None)
+        if service is None:
+            service = LauncherUpdateService(
+                self.get_base_dir(),
+                current_version=self.LAUNCHER_VERSION,
+                log=self.log_system,
+                on_result=self._handle_launcher_update_result,
+            )
+            self._launcher_update_service = service
+        return service
+
+    def show_launcher_update_dialog(self):
+        """检查统一启动器自身更新，返回 Web 确认弹窗数据。"""
+        return self._get_launcher_update_service().prepare_update_confirmation()
+
+    def install_launcher_update_async(self, confirmation_token=None):
+        return self._get_launcher_update_service().install_confirmed_async(
+            confirmation_token,
+            schedule=self._after,
+        )
 
     def on_closing(self, confirmed=False):
         """关闭窗口时清理"""

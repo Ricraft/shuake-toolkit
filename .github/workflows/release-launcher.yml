@@ -1,0 +1,71 @@
+name: Release Launcher
+
+# Triggered by pushing a version tag (v1.2.0, v1.3.0, ...) or manually.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to build, e.g. v1.3.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Resolve release version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            value="${{ inputs.version }}"
+          else
+            value="${GITHUB_REF_NAME}"
+          fi
+          echo "value=${value}" >> "$GITHUB_OUTPUT"
+          echo "Building for ${value}"
+
+      - name: Verify about-page changelog contract
+        run: |
+          python -m pip install --quiet pytest
+          python -m pytest tests/test_about_changelog.py -q
+
+      - name: JavaScript syntax check
+        run: node --check web/app.js
+
+      # Builds launcher-<version>.zip + launcher-manifest.json and fails when the
+      # tag does not match LAUNCHER_VERSION in 统一启动器.py.
+      - name: Build release assets
+        run: |
+          python scripts/build_launcher_release.py \
+            --version "${{ steps.version.outputs.value }}" \
+            --require-version-match \
+            --out dist
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.value }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag exists; uploading assets (clobber)."
+            gh release upload "$tag" dist/*.zip dist/launcher-manifest.json --clobber
+          else
+            gh release create "$tag" \
+              dist/*.zip dist/launcher-manifest.json \
+              --title "统一启动器 $tag" \
+              --generate-notes
+          fi

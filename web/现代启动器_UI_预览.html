@@ -1283,6 +1283,9 @@
                     <h1 class="text-3xl font-extrabold tracking-tight mb-1">统一启动器 <span id="about-title-version" class="text-xl font-mono text-transparent bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text"></span></h1>
                     <p id="about-version" class="font-mono text-sm mb-6" style="color: var(--text-muted);">正在读取版本信息...</p>
                     <div class="flex gap-3 justify-center mb-8 flex-wrap">
+                        <button class="btn btn-outline btn-pill" onclick="openLauncherUpdateDialog()">
+                            <i class="fas fa-rotate"></i> 检查统一启动器更新
+                        </button>
                         <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="openYatoriUpdateDialog()">
                             <i class="fas fa-download"></i> 安装 Yatori 更新
                         </button>
@@ -1305,7 +1308,42 @@
                             <div class="card-icon"><i class="fas fa-code-branch"></i></div>
                             <h2 class="font-bold text-lg">更新日志</h2>
                         </div>
-                        <div class="flex flex-col">
+                        <div class="flex flex-col" id="changelog-list">
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.3.0 - 界面主题滑块切换</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">软件设置的界面主题改为分段滑块，点击后滑块平滑滑到目标主题；天依主题未解锁时仍只提示、不移动</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.3.0 - 毛玻璃滑杆圆点动效</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">毛玻璃模糊度与背景图片强度滑杆在鼠标靠近圆点时放大、拖动保持并带过渡，拖拽改为逐帧合并写入避免掉帧</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.3.0 - 关于页感谢名单外链</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">Yatori 与 Autovisor 卡片可点击打开对应文档站与仓库，链接经后端白名单校验后交给系统浏览器</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.3.0 - 关于页更新日志折叠</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">更新日志默认只显示前 15 条，点击显示更多可展开完整记录并再次收起，打印时始终输出全部条目</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.3.0 - 统一启动器检查更新</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">关于页新增检查启动器自身更新：确认后只下载、校验并暂存新版本，退出后运行生成的更新脚本才替换文件，运行中绝不覆盖自身</div>
+                                </div>
+                            </div>
                             <div class="changelog-item">
                                 <span class="changelog-badge feature">新增</span>
                                 <div>
@@ -1426,6 +1464,12 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="changelog-more">
+                            <button type="button" id="changelog-more-btn" class="changelog-more-btn" aria-controls="changelog-list" aria-expanded="false" hidden>
+                                <span id="changelog-more-label">显示更多</span>
+                                <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                            </button>
+                        </div>
                     </div>
 
                     <div class="glass-card spotlight-card stagger-item">
@@ -1435,14 +1479,24 @@
                         </div>
                         <p class="text-xs mb-4" style="color: var(--text-muted);">感谢以下开源项目与贡献者为统一启动器提供的支持</p>
                         <div class="contributor-grid">
-                            <div class="contributor-card" data-tilt>
+                            <a class="contributor-card is-external-link" data-tilt data-contributor="yatori"
+                                href="https://yatori-dev.github.io/yatori-docs/"
+                                target="_blank" rel="noopener noreferrer"
+                                title="打开 Yatori 文档站"
+                                onclick="return openContributorLink(event, this)">
                                 <div class="contributor-avatar logo-avatar"><img src="assets/yatori_logo.png" alt="Yatori"></div>
                                 <div><div class="text-sm font-semibold">Yatori</div><div class="text-xs" style="color:var(--text-muted);">通用刷课核心</div><div class="contributor-detail">开源刷课框架核心作者</div></div>
-                            </div>
-                            <div class="contributor-card" data-tilt>
+                                <i class="fas fa-arrow-up-right-from-square contributor-link-icon" aria-hidden="true"></i>
+                            </a>
+                            <a class="contributor-card is-external-link" data-tilt data-contributor="autovisor"
+                                href="https://github.com/CXRunfree/Autovisor"
+                                target="_blank" rel="noopener noreferrer"
+                                title="打开 Autovisor 仓库"
+                                onclick="return openContributorLink(event, this)">
                                 <div class="contributor-avatar logo-avatar"><img src="assets/autovisor_logo.png" alt="Autovisor"></div>
                                 <div><div class="text-sm font-semibold">Autovisor</div><div class="text-xs" style="color:var(--text-muted);">智慧树核心</div><div class="contributor-detail">智慧树自动学习引擎</div></div>
-                            </div>
+                                <i class="fas fa-arrow-up-right-from-square contributor-link-icon" aria-hidden="true"></i>
+                            </a>
                             <div class="contributor-card" data-tilt>
                                 <div class="contributor-avatar" style="background:linear-gradient(135deg,#f59e0b,#f26d6d);">Z</div>
                                 <div><div class="text-sm font-semibold">ZError</div><div class="text-xs" style="color:var(--text-muted);">题库架构支持</div><div class="contributor-detail">题库API与数据架构设计</div></div>
@@ -1553,6 +1607,41 @@
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="closeYatoriUpdateModal()">稍后再说</button>
                 <button class="btn btn-primary" id="yatori-update-confirm-btn" onclick="confirmYatoriUpdate()">
+                    <i class="fas fa-download"></i> 确认更新
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 统一启动器更新确认弹窗 -->
+    <div id="launcher-update-modal" class="modal-overlay">
+        <div class="modal-box update-modal-box">
+            <div class="modal-icon accent"><i class="fas fa-rotate"></i></div>
+            <div class="modal-title">发现统一启动器可用更新</div>
+            <div class="modal-desc" id="launcher-update-summary">请确认是否下载并暂存统一启动器新版本。</div>
+            <div class="update-version-grid">
+                <div>
+                    <span>当前版本</span>
+                    <strong id="launcher-update-current">未知</strong>
+                </div>
+                <div>
+                    <span>最新版本</span>
+                    <strong id="launcher-update-latest">未知</strong>
+                </div>
+                <div>
+                    <span>发行资源</span>
+                    <strong id="launcher-update-asset">未知资源</strong>
+                </div>
+                <div>
+                    <span>发布时间</span>
+                    <strong id="launcher-update-published">未提供</strong>
+                </div>
+            </div>
+            <div class="update-notes-title">最新版本介绍</div>
+            <pre class="update-release-notes" id="launcher-update-notes">该版本暂未提供更新说明。</pre>
+            <div class="modal-actions">
+                <button class="btn btn-outline" onclick="closeLauncherUpdateModal()">稍后再说</button>
+                <button class="btn btn-primary" id="launcher-update-confirm-btn" onclick="confirmLauncherUpdate()">
                     <i class="fas fa-download"></i> 确认更新
                 </button>
             </div>

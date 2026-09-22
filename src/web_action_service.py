@@ -10,6 +10,12 @@ AUTOVISOR_UPDATE_DISABLED_MESSAGE = (
     "可继续检查版本信息，但不会替换现有核心。"
 )
 
+# 关于页「感谢名单」外链白名单：前端只传键，URL 只存在于后端。
+CONTRIBUTOR_LINKS = {
+    "yatori": "https://yatori-dev.github.io/yatori-docs/",
+    "autovisor": "https://github.com/CXRunfree/Autovisor",
+}
+
 
 class WebActionService:
     """Translate Web action names into calls on the launcher runtime."""
@@ -104,6 +110,23 @@ class WebActionService:
                     AUTOVISOR_UPDATE_DISABLED_MESSAGE,
                     blockedByPolicy=True,
                 )
+            elif action == "check_launcher_update":
+                return self._with_state(launcher.show_launcher_update_dialog())
+            elif action == "install_launcher_update":
+                if not launcher.install_launcher_update_async(script_type):
+                    return self._failure(
+                        "更新确认已失效，请重新点击「检查统一启动器更新」并核对版本说明"
+                    )
+            elif action == "open_contributor_link":
+                url = CONTRIBUTOR_LINKS.get(str(script_type or ""))
+                if not url:
+                    return self._failure(f"未知的致谢链接: {script_type}")
+                result = launcher.open_external_url(url)
+                if not result.get("ok"):
+                    return self._failure(
+                        result.get("message") or "无法打开外部链接"
+                    )
+                return self._success(url=url, accepted=True)
             elif action == "clear_logs":
                 launcher.clear_all_logs()
             elif action == "exit":

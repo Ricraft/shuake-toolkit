@@ -164,7 +164,14 @@
             const ti = document.getElementById('page-title');
             if (ti) ti.textContent = pageTitles[viewId]||viewId;
             if (viewId==='settings') requestAnimationFrame(() => renderSettingsTabContent(currentConfigTab));
-            if (viewId==='preferences') loadPreferences();
+            if (viewId==='preferences') {
+                loadPreferences();
+                // 设置页首次可见（display:none 解除）后瞬时定位主题滑块，并初始化滑杆圆点靠近放大
+                requestAnimationFrame(() => {
+                    syncThemeChoicePill({ animate: false });
+                    initSliderThumbProximity();
+                });
+            }
             if (viewId==='about') requestAnimationFrame(() => initAboutPageEffects());
             if (viewId==='tianyi') {
                 unlockTianyiTheme();
@@ -2125,6 +2132,7 @@
             document.querySelectorAll('[data-theme-choice]').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.themeChoice === theme);
             });
+            syncThemeChoicePill();
         }
 
         function toggleTheme() { setTheme(getCurrentTheme() === 'dark' ? 'light' : 'dark'); }
@@ -2267,8 +2275,8 @@
             // 更新显示值
             const valueEl = document.getElementById('glass-blur-value');
             if (valueEl) valueEl.textContent = blurValue + 'px';
-            // 应用模糊度
-            applyGlassBlur(blurValue);
+            // 应用模糊度（requestAnimationFrame 合并，拖动时每帧最多重写一次 backdrop-filter）
+            scheduleGlassBlurApply(blurValue);
             // 保存偏好
             persistStoredPreferences();
             savePreferencesInBackground({ glassBlur: blurValue });
@@ -2376,6 +2384,7 @@
              const valueEl = document.getElementById('glass-blur-value');
              if (slider) slider.value = blurValue;
              if (valueEl) valueEl.textContent = blurValue + 'px';
+             cancelPendingGlassBlur();
              applyGlassBlur(blurValue);
             // 加载并应用背景强度设置
             const strengthRow = document.getElementById('overlay-strength-row');
@@ -2469,6 +2478,7 @@
              const valueEl = document.getElementById('glass-blur-value');
              if (slider) slider.value = 16;
              if (valueEl) valueEl.textContent = '16px';
+             cancelPendingGlassBlur();
              applyGlassBlur(16);
              // 重置覆盖层强度
              const strengthSlider = document.getElementById('overlay-strength-slider');
@@ -2609,6 +2619,7 @@
             initSpotlightEffect();
             initMagneticButtons();
             initTypewriterPaths();
+            setupChangelogCollapse();
         }
 
         function initAmbientLight() {
@@ -3690,5 +3701,282 @@
         function trimTianyiHistory() {
             if (tianyiState.history.length > TIANYI_HISTORY_MAX * 2) {
                 tianyiState.history = tianyiState.history.slice(-TIANYI_HISTORY_MAX * 2);
+            }
+        }
+
+        /* ============================================================
+           关于页：感谢名单外链 + 更新日志折叠
+           ============================================================ */
+
+        const CHANGELOG_DEFAULT_VISIBLE = 15;
+
+        function openContributorLink(evt, anchor) {
+            if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+            const key = (anchor && anchor.dataset && anchor.dataset.contributor) || '';
+            const url = (anchor && anchor.href) || '';
+            const api = bridge();
+            if (!api || typeof api.perform_action !== 'function') {
+                if (url) window.open(url, '_blank', 'noopener');
+                return false;
+            }
+            if (!key) {
+                if (url) window.open(url, '_blank', 'noopener');
+                return false;
+            }
+            performAction('open_contributor_link', key);
+            return false;
+        }
+
+        function setupChangelogCollapse() {
+            const list = document.getElementById('changelog-list');
+            if (!list) return;
+            const button = document.getElementById('changelog-more-btn');
+            const items = Array.from(list.querySelectorAll('.changelog-item'));
+            const hiddenCount = items.length - CHANGELOG_DEFAULT_VISIBLE;
+            if (hiddenCount <= 0) {
+                if (button) button.hidden = true;
+                return;
+            }
+            if (list.dataset.changelogReady === '1') return;
+            list.dataset.changelogReady = '1';
+            items.forEach((item, index) => {
+                if (index >= CHANGELOG_DEFAULT_VISIBLE) item.classList.add('is-overflow');
+            });
+            if (button) {
+                button.hidden = false;
+                button.addEventListener('click', () => {
+                    setChangelogExpanded(!list.classList.contains('is-expanded'));
+                });
+            }
+            setChangelogExpanded(false);
+        }
+
+        function setChangelogExpanded(expanded) {
+            const list = document.getElementById('changelog-list');
+            if (!list) return false;
+            const button = document.getElementById('changelog-more-btn');
+            const label = document.getElementById('changelog-more-label');
+            const total = list.querySelectorAll('.changelog-item').length;
+            const remaining = Math.max(total - CHANGELOG_DEFAULT_VISIBLE, 0);
+            list.classList.toggle('is-expanded', !!expanded);
+            if (button) button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            if (label) {
+                label.textContent = expanded
+                    ? '收起'
+                    : `显示更多（还有 ${remaining} 条）`;
+            }
+            return true;
+        }
+
+        /* ============================================================
+           主题分段控件滑块 + 滑杆圆点靠近放大
+           ============================================================ */
+
+        let themePillObserver = null;
+        let glassBlurFrame = 0;
+        let pendingGlassBlurValue = null;
+        const sliderProximityZones = new WeakSet();
+
+        const SLIDER_THUMB_NEAR_RADIUS = 30;
+        const SLIDER_THUMB_RADIUS = 9;
+
+        // 主题分段控件：只测量当前 active 按钮，几何写进 CSS 变量后交给 CSS 过渡完成滑动
+        function syncThemeChoicePill(options) {
+            const animate = !options || options.animate !== false;
+            const group = document.getElementById('theme-choice-group');
+            if (!group) return false;
+            const active = group.querySelector('.theme-choice.active');
+            // 设置页初始 display:none（.view-page）时 offsetWidth 为 0，等可见后再同步
+            if (!active || !active.offsetWidth) return false;
+            if (!animate) group.classList.add('theme-pill-instant');
+            group.style.setProperty('--theme-pill-w', active.offsetWidth + 'px');
+            group.style.setProperty('--theme-pill-x', active.offsetLeft + 'px');
+            if (!animate) {
+                void group.offsetWidth;
+                requestAnimationFrame(() => group.classList.remove('theme-pill-instant'));
+            }
+            group.classList.add('has-theme-pill');
+            if (!themePillObserver && typeof ResizeObserver !== 'undefined') {
+                // 洛天依解锁后按钮出现、容器变宽时重新测量（不播动画）
+                themePillObserver = new ResizeObserver(() => syncThemeChoicePill({ animate: false }));
+                themePillObserver.observe(group);
+            }
+            return true;
+        }
+
+        // 毛玻璃模糊度：requestAnimationFrame 合并，拖动时每帧最多写一次 backdrop-filter
+        function scheduleGlassBlurApply(blurValue) {
+            const next = parseInt(blurValue);
+            pendingGlassBlurValue = Number.isFinite(next) ? next : 0;
+            if (glassBlurFrame) return;
+            glassBlurFrame = requestAnimationFrame(() => {
+                glassBlurFrame = 0;
+                const value = pendingGlassBlurValue;
+                pendingGlassBlurValue = null;
+                if (value === null) return;
+                applyGlassBlur(value);
+            });
+        }
+
+        function cancelPendingGlassBlur() {
+            if (glassBlurFrame) {
+                cancelAnimationFrame(glassBlurFrame);
+                glassBlurFrame = 0;
+            }
+            pendingGlassBlurValue = null;
+        }
+
+        // 滑杆圆点「靠近即放大」：Blink 下 ::-webkit-slider-thumb:hover 只在指针压在圆点上才触发
+        function initSliderThumbProximity() {
+            const sliders = document.querySelectorAll('.opacity-slider');
+            if (!sliders.length) return;
+            sliders.forEach(slider => {
+                const zone = slider.closest('.setting-row') || slider.parentElement || slider;
+                if (sliderProximityZones.has(zone)) return;
+                sliderProximityZones.add(zone);
+
+                let rect = null;
+                let pointer = null;
+                let frame = 0;
+
+                const measure = () => { rect = slider.getBoundingClientRect(); };
+                const invalidate = () => { rect = null; };
+                const evaluate = () => {
+                    frame = 0;
+                    if (!pointer) return;
+                    if (!rect) measure();
+                    const min = Number(slider.min || 0);
+                    const max = slider.max === '' ? 100 : Number(slider.max);
+                    const span = (max - min) || 1;
+                    const raw = (Number(slider.value) - min) / span;
+                    const ratio = Math.min(Math.max(Number.isFinite(raw) ? raw : 0, 0), 1);
+                    const travel = Math.max(rect.width - SLIDER_THUMB_RADIUS * 2, 0);
+                    const centerX = rect.left + SLIDER_THUMB_RADIUS + ratio * travel;
+                    const centerY = rect.top + rect.height / 2;
+                    const distance = Math.hypot(pointer.x - centerX, pointer.y - centerY);
+                    slider.classList.toggle('slider-near', distance <= SLIDER_THUMB_NEAR_RADIUS);
+                };
+                const scheduleEvaluate = () => {
+                    if (!frame) frame = requestAnimationFrame(evaluate);
+                };
+
+                zone.addEventListener('pointerenter', (event) => {
+                    measure();
+                    pointer = { x: event.clientX, y: event.clientY };
+                    scheduleEvaluate();
+                });
+                zone.addEventListener('pointermove', (event) => {
+                    pointer = { x: event.clientX, y: event.clientY };
+                    scheduleEvaluate();
+                }, { passive: true });
+                zone.addEventListener('pointerleave', () => {
+                    pointer = null;
+                    slider.classList.remove('slider-near');
+                });
+                slider.addEventListener('pointerdown', () => slider.classList.add('slider-active'));
+                const endDrag = () => {
+                    slider.classList.remove('slider-active');
+                    measure();
+                };
+                const releaseDrag = () => { slider.classList.remove('slider-active'); };
+                slider.addEventListener('pointerup', endDrag);
+                slider.addEventListener('pointercancel', endDrag);
+                window.addEventListener('pointerup', releaseDrag);
+                window.addEventListener('pointercancel', releaseDrag);
+                window.addEventListener('resize', invalidate, { passive: true });
+                document.addEventListener('scroll', invalidate, { passive: true, capture: true });
+            });
+        }
+
+        // 这里刻意不注册 DOMContentLoaded：主题药丸与两个滑杆都在 #view-preferences 内，
+        // 只有 switchView('preferences') 才会可见，因此统一由 switchView 懒初始化；
+        // 同时让只提供 getElementById 的契约测试桩（tests/test_about_contributor_links_frontend.py）
+        // 执行到文件末尾时不会触碰不存在的 document.addEventListener。
+
+        // ==================== 统一启动器自身更新 ====================
+        // 与 Yatori 更新流程同构：检查 -> 确认弹窗 -> 一次性确认令牌 -> 下载暂存。
+        // 运行中的启动器不会自我覆盖：确认后只下载并暂存新版本，退出启动器后由
+        // 生成的「应用更新.cmd」完成替换，失败可回滚。
+        let launcherUpdateConfirming = false;
+
+        async function openLauncherUpdateDialog() {
+            return runWebActionLocked('check_launcher_update', [], async () => {
+                try {
+                    showToast('正在检查统一启动器更新...', 'info');
+                    const result = await apiCall('perform_action', 'check_launcher_update');
+                    if (!handleWebActionResult(result, '无法检查统一启动器更新')) return result;
+                    if (result?.updateDialog) {
+                        showLauncherUpdateModal(result.updateDialog);
+                    }
+                    return result;
+                } catch (error) {
+                    if (!error?.silent) showToast(error.message || '无法检查统一启动器更新', 'error');
+                    return {
+                        ok: false,
+                        message: error?.message || '无法检查统一启动器更新',
+                    };
+                }
+            });
+        }
+
+        function showLauncherUpdateModal(info) {
+            const modal = document.getElementById('launcher-update-modal');
+            if (!modal) return;
+            window.pendingLauncherUpdateDialog = info || {};
+            setText('launcher-update-current', info?.currentVersion || '未知');
+            setText('launcher-update-latest', info?.latestVersion || '未知');
+            setText('launcher-update-asset', info?.assetName || '未提供');
+            setText('launcher-update-published', info?.publishedAt || '未提供');
+            setText(
+                'launcher-update-notes',
+                info?.releaseNotes || '该版本暂未提供更新说明。'
+            );
+            setText(
+                'launcher-update-summary',
+                info?.summary
+                    || `将从 ${info?.currentVersion || '未知'} 更新到 ${info?.latestVersion || '未知'}。请确认后开始下载并暂存新版本。`
+            );
+            modal.classList.add('active');
+        }
+
+        function closeLauncherUpdateModal() {
+            if (launcherUpdateConfirming) return;
+            document.getElementById('launcher-update-modal')?.classList.remove('active');
+            window.pendingLauncherUpdateDialog = null;
+        }
+
+        async function confirmLauncherUpdate() {
+            if (launcherUpdateConfirming) return;
+            const confirmationToken = window.pendingLauncherUpdateDialog?.confirmationToken;
+            if (!confirmationToken) {
+                showToast('更新确认已失效，请重新点击检查更新按钮', 'error');
+                return;
+            }
+            launcherUpdateConfirming = true;
+            const btn = document.getElementById('launcher-update-confirm-btn');
+            const oldHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在下载更新...';
+            }
+            try {
+                const result = await apiCall(
+                    'perform_action',
+                    'install_launcher_update',
+                    confirmationToken
+                );
+                if (handleWebActionResult(result, '统一启动器更新启动失败')) {
+                    document.getElementById('launcher-update-modal')?.classList.remove('active');
+                    window.pendingLauncherUpdateDialog = null;
+                    showToast('统一启动器更新已开始下载，完成后请退出启动器并运行「应用更新.cmd」生效', 'success');
+                }
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '统一启动器更新启动失败', 'error');
+            } finally {
+                launcherUpdateConfirming = false;
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = oldHtml || '<i class="fas fa-download"></i> 确认更新';
+                }
             }
         }
