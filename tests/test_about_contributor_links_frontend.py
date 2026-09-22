@@ -20,6 +20,7 @@ FRONTEND = APP_JS_PATH.read_text(encoding="utf-8")
 STYLES = (PROJECT_ROOT / "web" / "styles.css").read_text(encoding="utf-8")
 YATORI_DOCS_URL = "https://yatori-dev.github.io/yatori-docs/"
 AUTOVISOR_URL = "https://github.com/CXRunfree/Autovisor"
+ZERROR_URL = "https://app.zerror.cc/"
 CONTRIBUTOR_KEYS = {"yatori": YATORI_DOCS_URL, "autovisor": AUTOVISOR_URL}
 
 
@@ -147,20 +148,24 @@ def test_failed_opener_is_reported_without_raising(sandbox_dir):
 # --------------------------------------------------------------- 前端契约
 
 
-def test_only_yatori_and_autovisor_cards_link_to_their_project():
-    assert HTML.count('<a class="contributor-card') == 2
-    assert HTML.count('<div class="contributor-card" data-tilt>') == 5
-    assert HTML.count("</a>") == 2
-    assert 'data-contributor="yatori"' in HTML
-    assert 'data-contributor="autovisor"' in HTML
-    assert 'href="%s"' % YATORI_DOCS_URL in HTML
-    assert 'href="%s"' % AUTOVISOR_URL in HTML
-    assert HTML.count('target="_blank" rel="noopener noreferrer"') == 2
-    assert HTML.count('onclick="return openContributorLink(event, this)"') == 2
+def test_linked_contributor_cards_match_the_backend_allowlist():
+    assert HTML.count('<a class="contributor-card') == 3
+    assert HTML.count('<div class="contributor-card" data-tilt>') == 4
+    assert HTML.count('data-contributor="') == 3
+    assert HTML.count("</a>") == 3
+    for key, url in (
+        ("yatori", YATORI_DOCS_URL),
+        ("autovisor", AUTOVISOR_URL),
+        ("zerror", ZERROR_URL),
+    ):
+        assert 'data-contributor="%s"' % key in HTML
+        assert 'href="%s"' % url in HTML
+    assert HTML.count('target="_blank" rel="noopener noreferrer"') == 3
+    assert HTML.count('onclick="return openContributorLink(event, this)"') == 3
 
 
 def test_remaining_contributor_cards_stay_plain_and_unclickable():
-    for name in ("ZError", "PyWebView", "Tailwind CSS", "Font Awesome", "所有用户"):
+    for name in ("PyWebView", "Tailwind CSS", "Font Awesome", "所有用户"):
         assert ">%s</div>" % name in HTML
     assert "contributor-link-icon" not in HTML.split('</a>')[-1]
 

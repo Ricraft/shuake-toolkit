@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 
+from src.update_controller import AUTOVISOR_UPSTREAM_LINK_MAP
+
 
 AUTOVISOR_UPDATE_DISABLED_MESSAGE = (
     "当前 Autovisor 包含项目本地适配修改，已禁用上游覆盖安装；"
@@ -14,6 +16,7 @@ AUTOVISOR_UPDATE_DISABLED_MESSAGE = (
 CONTRIBUTOR_LINKS = {
     "yatori": "https://yatori-dev.github.io/yatori-docs/",
     "autovisor": "https://github.com/CXRunfree/Autovisor",
+    "zerror": "https://app.zerror.cc/",
 }
 
 
@@ -100,6 +103,18 @@ class WebActionService:
                     return self._failure(
                         "更新确认已失效，请重新点击更新按钮并核对版本说明"
                     )
+            elif action == "show_autovisor_update_dialog":
+                return self._with_state(launcher.show_autovisor_update_dialog())
+            elif action == "open_update_link":
+                url = AUTOVISOR_UPSTREAM_LINK_MAP.get(str(script_type or ""))
+                if not url:
+                    return self._failure(f"未知的下载链接: {script_type}")
+                result = launcher.open_external_url(url)
+                if not result.get("ok"):
+                    return self._failure(
+                        result.get("message") or "无法打开下载链接"
+                    )
+                return self._success(url=url, accepted=True)
             elif action == "check_autovisor_update":
                 if not launcher.check_autovisor_update_async():
                     return self._failure(

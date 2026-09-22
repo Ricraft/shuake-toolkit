@@ -2409,6 +2409,69 @@ select.qb-input option {
     .changelog-more { display: none !important; }
 }
 
+/* Autovisor 版本信息弹窗：只读声明 + 原作者下载引导 */
+.update-notice {
+    margin-top: 0.75rem;
+    padding: 0.75rem 0.875rem;
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.7;
+    max-height: 9.5rem;
+    overflow-y: auto;
+}
+
+.update-links {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.update-link-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.125rem;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    font-family: inherit;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.update-link-btn:hover {
+    border-color: var(--border-glow);
+    background: var(--bg-surface-hover);
+}
+
+.update-link-label { font-size: 0.75rem; font-weight: 600; }
+
+.update-link-url {
+    font-size: 0.625rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    word-break: break-all;
+}
+
+.update-disabled-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-right: auto;
+    font-size: 0.6875rem;
+    color: var(--text-muted);
+}
+
+.modal-icon.warning { background: var(--warning-soft); color: var(--warning); }
+
 /* 感谢名单 */
 .contributor-grid {
     display: grid;

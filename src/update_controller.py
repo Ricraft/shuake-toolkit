@@ -12,6 +12,46 @@ def _run_in_background(target: Callable[[], None]) -> None:
     threading.Thread(target=target, daemon=True).start()
 
 
+# --------------------------------------------------------------------------- #
+# Autovisor 本地适配版政策
+#
+# 项目内的 Autovisor 是被魔改过的本地适配版，上游发行包未经过适配，直接覆盖会
+# 破坏适配逻辑。因此 Autovisor 只提供「版本信息展示」，不提供任何安装入口，
+# 并在版本说明前固定展示下面的声明与原作者下载引导。
+# --------------------------------------------------------------------------- #
+
+AUTOVISOR_ADAPTED_NOTICE = (
+    "声明：由于账号样本缺失及时间问题，该启动器版本无法保证能正常处理 zhs 的课程；"
+    "同时 zhs 页面更新，虽然老版本我修改了对应登录页，但是自己账号没有课程视频了，"
+    "而且相应题库接口等待更换。下方的更新版本为原作者版本（未经软件适配，会有一些"
+    "兼容性问题），此处暂不支持直接下载。若本软件旧核心无法支持正常刷课，"
+    "请下载下方原作者最新软件："
+)
+
+AUTOVISOR_UPSTREAM_LINKS = (
+    {
+        "key": "autovisor_github",
+        "label": "GitHub（推荐，给原作者一个 star）",
+        "url": "https://github.com/CXRunfree/Autovisor/releases",
+    },
+    {
+        "key": "autovisor_lanzou",
+        "label": "蓝奏云（国内网络推荐）",
+        "url": "https://wwk.lanzouj.com/b05evsxif",
+        "password": "492l",
+    },
+)
+
+AUTOVISOR_UPSTREAM_LINK_MAP = {
+    item["key"]: item["url"] for item in AUTOVISOR_UPSTREAM_LINKS
+}
+
+AUTOVISOR_INSTALL_DISABLED_REASON = (
+    "当前 Autovisor 为项目本地适配版（已魔改），本页面只做版本信息展示，"
+    "不提供直接覆盖安装。"
+)
+
+
 class UpdateController:
     """Coordinate Yatori and Autovisor checks without any UI dependency."""
 
@@ -312,6 +352,82 @@ class UpdateController:
 
         self.run_async(worker)
         return True
+
+    def _build_autovisor_update_dialog(self, result):
+        """Read-only Autovisor dialog: version info + notice + upstream links.
+
+        Deliberately carries no confirmation token: there is no install path
+        for the locally adapted core.
+        """
+        release_info = result.get("info") or {}
+        installed = result.get("installed", True)
+        notes = self._format_yatori_release_notes(release_info)
+        current = result.get("version") or self.get_autovisor_version()
+        latest = release_info.get("version", "未知")
+        return {
+            "core": "autovisor",
+            "installed": installed,
+            "currentVersion": current,
+            "latestVersion": latest,
+            "assetName": release_info.get("asset_name") or "未知资源",
+            "publishedAt": release_info.get("published_at") or "",
+            "releaseNotes": notes or "该版本暂未提供更新说明。",
+            "releaseNotesAvailable": bool(notes),
+            "notice": AUTOVISOR_ADAPTED_NOTICE,
+            "downloadLinks": [dict(item) for item in AUTOVISOR_UPSTREAM_LINKS],
+            "installDisabled": True,
+            "installDisabledReason": AUTOVISOR_INSTALL_DISABLED_REASON,
+            "summary": (
+                f"原作者最新版本 {latest}（本地适配版 {current}）。"
+                "本页面仅作版本信息展示，不支持直接下载或覆盖安装。"
+            ),
+        }
+
+    def show_autovisor_update_dialog(self):
+        """Synchronous Autovisor version dialog used by the About page button."""
+        if not self.core_manager:
+            message = "核心管理器初始化失败，无法检查 Autovisor 版本。"
+            self.show_error("Autovisor 版本", message)
+            return {"ok": False, "message": message}
+
+        with self._lock:
+            if self.autovisor_checking or self.installing:
+                message = "Autovisor 版本检查或安装正在进行中，请稍后重试。"
+                self.log(message)
+                return {"ok": False, "message": message}
+            self.autovisor_checking = True
+
+        self.log("手动检查 Autovisor 版本...")
+        try:
+            result = self.core_manager.check_autovisor_update()
+        except Exception as exc:
+            message = f"检查 Autovisor 版本失败: {exc}"
+            self.log(message)
+            self.show_error("Autovisor 版本", message)
+            return {"ok": False, "message": message}
+        finally:
+            with self._lock:
+                self.autovisor_checking = False
+
+        if not result:
+            message = "未能获取 Autovisor 最新版本信息，请检查网络后重试。"
+            self.log(message)
+            self.show_error("Autovisor 版本", message)
+            return {"ok": False, "message": message}
+
+        self.autovisor_update_info = result
+        dialog = self._build_autovisor_update_dialog(result)
+        self.log(
+            f"Autovisor 最新版本: {dialog['latestVersion']}"
+            f"（本地适配版 {dialog['currentVersion']}）；"
+            "仅展示版本信息，不提供直接覆盖安装。"
+        )
+        return {
+            "ok": True,
+            "updateDialog": dialog,
+            "toast": "已获取 Autovisor 版本信息（本地适配版，不提供直接安装）",
+            "toastType": "info",
+        }
 
     def handle_autovisor_result(self, result) -> None:
         release_info = result.get("info") or result

@@ -24,6 +24,8 @@ class DesktopPlatformService:
         ("yatori-dev.github.io", "/yatori-docs"),
         ("github.com", "/cxrunfree/autovisor"),
         ("www.github.com", "/cxrunfree/autovisor"),
+        ("app.zerror.cc", "/"),
+        ("wwk.lanzouj.com", "/b05evsxif"),
     )
 
     def __init__(

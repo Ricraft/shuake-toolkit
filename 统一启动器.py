@@ -84,7 +84,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.3.1"
+    LAUNCHER_VERSION = "v1.4.0"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -1440,6 +1440,10 @@ class UnifiedLauncher:
 
     def check_autovisor_update_async(self):
         return self.update_controller.check_autovisor_async()
+
+    def show_autovisor_update_dialog(self):
+        """关于页「检查 Autovisor 更新」：只读展示版本信息，不提供安装入口。"""
+        return self.update_controller.show_autovisor_update_dialog()
 
     def handle_autovisor_version_result(self, result):
         return self.update_controller.handle_autovisor_result(result)

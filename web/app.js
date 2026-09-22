@@ -3980,3 +3980,86 @@
                 }
             }
         }
+
+        /* ============================================================
+           Autovisor 版本信息弹窗（本地适配版：只读展示，不提供覆盖安装）
+           ============================================================ */
+
+        let autovisorUpdateChecking = false;
+
+        async function openAutovisorUpdateDialog() {
+            if (autovisorUpdateChecking) return;
+            autovisorUpdateChecking = true;
+            try {
+                showToast('正在检查 Autovisor 版本...', 'info');
+                const result = await apiCall('perform_action', 'show_autovisor_update_dialog');
+                if (!handleWebActionResult(result, '无法检查 Autovisor 版本')) return result;
+                if (result?.updateDialog) {
+                    showAutovisorUpdateModal(result.updateDialog);
+                } else if (result?.toast) {
+                    showToast(result.toast, result.toastType || 'info');
+                }
+                return result;
+            } catch (error) {
+                if (!error?.silent) showToast(error?.message || '无法检查 Autovisor 版本', 'error');
+                return { ok: false, message: error?.message || '无法检查 Autovisor 版本' };
+            } finally {
+                autovisorUpdateChecking = false;
+            }
+        }
+
+        function showAutovisorUpdateModal(info) {
+            const modal = document.getElementById('autovisor-update-modal');
+            if (!modal) return;
+            setText('autovisor-update-current', info?.currentVersion || '未知');
+            setText('autovisor-update-latest', info?.latestVersion || '未知');
+            setText('autovisor-update-asset', info?.assetName || '未知资源');
+            setText('autovisor-update-published', info?.publishedAt || '未提供');
+            setText('autovisor-update-notes', info?.releaseNotes || '该版本暂未提供更新说明。');
+            setText(
+                'autovisor-update-summary',
+                info?.summary
+                    || '本页面仅展示版本信息，不提供直接下载或覆盖安装。'
+            );
+            setText('autovisor-update-notice', info?.notice || '');
+            renderAutovisorDownloadLinks(info?.downloadLinks || []);
+            modal.classList.add('active');
+        }
+
+        function renderAutovisorDownloadLinks(links) {
+            const box = document.getElementById('autovisor-update-links');
+            if (!box) return;
+            box.innerHTML = '';
+            (links || []).forEach(link => {
+                if (!link || !link.key) return;
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'update-link-btn';
+                button.addEventListener('click', () => openAutovisorDownload(link.key));
+                const label = document.createElement('span');
+                label.className = 'update-link-label';
+                label.textContent = (link.label || '下载')
+                    + (link.password ? `（密码: ${link.password}）` : '');
+                const url = document.createElement('span');
+                url.className = 'update-link-url';
+                url.textContent = link.url || '';
+                button.appendChild(label);
+                button.appendChild(url);
+                box.appendChild(button);
+            });
+        }
+
+        async function openAutovisorDownload(key) {
+            if (!key) return;
+            try {
+                const result = await apiCall('perform_action', 'open_update_link', key);
+                if (!handleWebActionResult(result, '无法打开下载链接')) return;
+                showToast('已在系统浏览器中打开下载页', 'success');
+            } catch (error) {
+                if (!error?.silent) showToast(error?.message || '无法打开下载链接', 'error');
+            }
+        }
+
+        function closeAutovisorUpdateModal() {
+            document.getElementById('autovisor-update-modal')?.classList.remove('active');
+        }

@@ -189,7 +189,7 @@
                             <button class="btn btn-outline" onclick="openSettingsTab('autovisor')">
                                 <i class="fas fa-folder-open"></i> 配置
                             </button>
-                            <button class="btn btn-outline" onclick="performAction('check_autovisor_update')">
+                            <button class="btn btn-outline" onclick="openAutovisorUpdateDialog()">
                                 <i class="fas fa-magnifying-glass"></i> 检查版本
                             </button>
                             <button class="btn btn-outline" disabled title="当前为本地适配版，不使用上游包覆盖安装">
@@ -1289,7 +1289,7 @@
                         <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="openYatoriUpdateDialog()">
                             <i class="fas fa-download"></i> 安装 Yatori 更新
                         </button>
-                        <button class="btn btn-outline btn-pill" onclick="performAction('check_autovisor_update')">
+                        <button class="btn btn-outline btn-pill" onclick="openAutovisorUpdateDialog()">
                             <i class="fas fa-cloud-arrow-down"></i> 检查 Autovisor 更新
                         </button>
                         <button class="btn btn-outline btn-pill" disabled title="当前为本地适配版，不使用上游包覆盖安装">
@@ -1309,6 +1309,20 @@
                             <h2 class="font-bold text-lg">更新日志</h2>
                         </div>
                         <div class="flex flex-col" id="changelog-list">
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.4.0 - Autovisor 版本信息页</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">关于页「检查 Autovisor 更新」改为统一模板弹窗：展示本地适配版与原作者最新版本号、发行资源与发布时间，固定显示适配声明与原作者下载引导（GitHub / 蓝奏云），不提供直接覆盖安装</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.4.0 - ZError 致谢外链</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">感谢名单的 ZError 卡片可点击打开 https://app.zerror.cc/ ，链接同样经后端白名单校验</div>
+                                </div>
+                            </div>
                             <div class="changelog-item">
                                 <span class="changelog-badge fix">修复</span>
                                 <div>
@@ -1504,10 +1518,15 @@
                                 <div><div class="text-sm font-semibold">Autovisor</div><div class="text-xs" style="color:var(--text-muted);">智慧树核心</div><div class="contributor-detail">智慧树自动学习引擎</div></div>
                                 <i class="fas fa-arrow-up-right-from-square contributor-link-icon" aria-hidden="true"></i>
                             </a>
-                            <div class="contributor-card" data-tilt>
+                            <a class="contributor-card is-external-link" data-tilt data-contributor="zerror"
+                                href="https://app.zerror.cc/"
+                                target="_blank" rel="noopener noreferrer"
+                                title="打开 ZError 题库站点"
+                                onclick="return openContributorLink(event, this)">
                                 <div class="contributor-avatar" style="background:linear-gradient(135deg,#f59e0b,#f26d6d);">Z</div>
                                 <div><div class="text-sm font-semibold">ZError</div><div class="text-xs" style="color:var(--text-muted);">题库架构支持</div><div class="contributor-detail">题库API与数据架构设计</div></div>
-                            </div>
+                                <i class="fas fa-arrow-up-right-from-square contributor-link-icon" aria-hidden="true"></i>
+                            </a>
                             <div class="contributor-card" data-tilt>
                                 <div class="contributor-avatar" style="background:linear-gradient(135deg,#5ea2ff,#7e6dff);">P</div>
                                 <div><div class="text-sm font-semibold">PyWebView</div><div class="text-xs" style="color:var(--text-muted);">桌面端框架</div><div class="contributor-detail">Python桌面端WebView框架</div></div>
@@ -1651,6 +1670,43 @@
                 <button class="btn btn-primary" id="launcher-update-confirm-btn" onclick="confirmLauncherUpdate()">
                     <i class="fas fa-download"></i> 确认更新
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Autovisor 版本信息弹窗（本地适配版：只读展示，不提供直接覆盖安装） -->
+    <div id="autovisor-update-modal" class="modal-overlay">
+        <div class="modal-box update-modal-box">
+            <div class="modal-icon warning"><i class="fas fa-circle-info"></i></div>
+            <div class="modal-title">Autovisor 版本信息</div>
+            <div class="modal-desc" id="autovisor-update-summary">正在读取版本信息...</div>
+            <div class="update-version-grid">
+                <div>
+                    <span>本地适配版</span>
+                    <strong id="autovisor-update-current">未知</strong>
+                </div>
+                <div>
+                    <span>原作者最新</span>
+                    <strong id="autovisor-update-latest">未知</strong>
+                </div>
+                <div>
+                    <span>发行资源</span>
+                    <strong id="autovisor-update-asset">未知资源</strong>
+                </div>
+                <div>
+                    <span>发布时间</span>
+                    <strong id="autovisor-update-published">未提供</strong>
+                </div>
+            </div>
+            <div class="update-notice" id="autovisor-update-notice"></div>
+            <div class="update-links" id="autovisor-update-links"></div>
+            <div class="update-notes-title">原作者版本更新日志</div>
+            <pre class="update-release-notes" id="autovisor-update-notes">该版本暂未提供更新说明。</pre>
+            <div class="modal-actions">
+                <span class="update-disabled-hint">
+                    <i class="fas fa-shield-halved"></i> 本地适配版：不提供直接覆盖安装
+                </span>
+                <button class="btn btn-outline" onclick="closeAutovisorUpdateModal()">关闭</button>
             </div>
         </div>
     </div>
