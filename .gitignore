@@ -65,3 +65,6 @@ _backup/
 # 启动器自更新暂存与备份（由 应用更新.cmd 管理）
 .update-staging/
 .update-backup/
+
+# 一键引导创建的本地虚拟环境
+.runtime/

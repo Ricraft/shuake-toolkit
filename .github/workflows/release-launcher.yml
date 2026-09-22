@@ -55,6 +55,37 @@ jobs:
             --require-version-match \
             --out dist
 
+      # Builds the full first-run package used by new users.  It contains the
+      # launcher, scripts, local Autovisor sources, Yatori assets and bootstrap.
+      # Optional repository variables YATORI_CORE_URL / YATORI_CORE_SHA256 /
+      # YATORI_CORE_SIZE / YATORI_CORE_VERSION are written into the manifest so
+      # the bootstrap downloads the project-owned Yatori release asset.
+      - name: Build full release package
+        env:
+          YATORI_CORE_URL: ${{ vars.YATORI_CORE_URL }}
+          YATORI_CORE_SHA256: ${{ vars.YATORI_CORE_SHA256 }}
+          YATORI_CORE_SIZE: ${{ vars.YATORI_CORE_SIZE }}
+          YATORI_CORE_VERSION: ${{ vars.YATORI_CORE_VERSION }}
+        run: |
+          extra=()
+          if [ -n "$YATORI_CORE_URL" ]; then
+            extra+=(--yatori-core-url "$YATORI_CORE_URL")
+          fi
+          if [ -n "$YATORI_CORE_SHA256" ]; then
+            extra+=(--yatori-core-sha256 "$YATORI_CORE_SHA256")
+          fi
+          if [ -n "$YATORI_CORE_SIZE" ]; then
+            extra+=(--yatori-core-size "$YATORI_CORE_SIZE")
+          fi
+          if [ -n "$YATORI_CORE_VERSION" ]; then
+            extra+=(--yatori-core-version "$YATORI_CORE_VERSION")
+          fi
+          python scripts/build_full_release.py \
+            --version "${{ steps.version.outputs.value }}" \
+            --require-version-match \
+            --out dist \
+            "${extra[@]}"
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,10 +93,10 @@ jobs:
           tag="${{ steps.version.outputs.value }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag exists; uploading assets (clobber)."
-            gh release upload "$tag" dist/*.zip dist/launcher-manifest.json --clobber
+            gh release upload "$tag" dist/*.zip dist/launcher-manifest.json dist/full-manifest.json --clobber
           else
             gh release create "$tag" \
-              dist/*.zip dist/launcher-manifest.json \
+              dist/*.zip dist/launcher-manifest.json dist/full-manifest.json \
               --title "统一启动器 $tag" \
               --generate-notes
           fi

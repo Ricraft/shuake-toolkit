@@ -101,3 +101,32 @@ py Autovisor\Autovisor_Multi.py
 账号密码、API Key、Cookie、数据库和日志均为本地敏感运行数据；请勿提交或对外分发。请仅在平台规则和授权范围内使用自动化功能。
 
 当前实现率、已确认缺陷及后续拆分顺序见 [代码审查报告](docs/CODE_AUDIT.md)。
+
+## 新用户一键启动
+
+从 GitHub Release 下载 `shuake-toolkit-<version>.zip`，解压后双击：
+
+```text
+启动依赖.cmd
+```
+
+首次启动会自动：
+
+1. 查找 Python 3.11–3.13；
+2. 在 `.runtime\venv` 创建本地虚拟环境；
+3. 安装 `requirements.txt` 中的 Python 依赖（多镜像回退）；
+4. 安装 Playwright Chromium；
+5. 准备 `Autovisor\runtime_deps` 中的 numpy/opencv；
+6. 尝试准备 Yatori 核心；
+7. 检测 Microsoft Edge WebView2 Runtime；
+8. 启动 `统一启动器.py`。
+
+说明：
+
+- 第一版要求系统已安装 Python 3.11–3.13；没有 Python 时会明确提示。
+- 第一版检测到缺少 WebView2 Runtime 时只显示官方下载链接，不会自动静默安装。
+- Yatori 核心按 Release 资产下载；如果下载失败，启动器仍可打开，可在界面稍后重试。
+- 老用户继续使用 `launcher-<version>.zip` 自更新，不需要完整包。
+维护者可在仓库 Variables 中设置 `YATORI_CORE_URL`、`YATORI_CORE_SHA256`、
+`YATORI_CORE_SIZE`、`YATORI_CORE_VERSION`，完整包构建时会把它们写入
+`full-manifest.json`，bootstrap 会优先从该 Release 资产下载并校验 Yatori 核心。
