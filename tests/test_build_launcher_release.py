@@ -121,6 +121,14 @@ class BuildTests(unittest.TestCase):
             builder.build("v99.99.99", self.tmpdir, require_version_match=True)
         self.assertIn("LAUNCHER_VERSION", str(ctx.exception))
 
+
+    def test_archive_contains_every_required_entry_file(self):
+        result = builder.build(builder.declared_launcher_version(), self.tmpdir)
+
+        with zipfile.ZipFile(result["archive"]) as zf:
+            names = set(zf.namelist())
+        missing = [name for name in builder.REQUIRED_FILES if name not in names]
+        self.assertEqual(missing, [], f"required files missing from archive: {missing}")
     def test_version_match_guard_accepts_declared_version(self):
         version = builder.declared_launcher_version()
         result = builder.build(version, self.tmpdir, require_version_match=True)

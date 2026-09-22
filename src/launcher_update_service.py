@@ -68,10 +68,13 @@ UPDATE_BACKUP_DIR_NAME = ".update-backup"
 APPLY_SCRIPT_NAME = "应用更新.cmd"
 
 # 更新包内必须具备的文件，用于替换前的暂存校验。
+# 必须包含首屏入口页：替换后的校验只能证明目标文件存在，而旧版本的入口页
+# 本来就存在，缺少它的残缺包会静默退化成新 app.js + 旧 HTML 的混合安装。
 REQUIRED_STAGED_FILES = (
     "统一启动器.py",
     os.path.join("src", "web_action_service.py"),
     os.path.join("web", "app.js"),
+    os.path.join("web", "现代启动器_UI_预览.html"),
 )
 
 USER_AGENT = "shuake-toolkit-launcher-updater/1.0"
@@ -333,6 +336,15 @@ def build_apply_script(
         'if not exist "%ROOT%\\src\\web_action_service.py" set "FAILED=1"',
         'if not exist "%ROOT%\\web\\app.js" set "FAILED=1"',
         'if not exist "%ROOT%\\web\\现代启动器_UI_预览.html" set "FAILED=1"',
+        "rem ---- 再逐字节比对：只判断存在会让残缺包静默留下旧文件（新旧混合）----",
+        'fc /b "%PAYLOAD%\\统一启动器.py" "%ROOT%\\统一启动器.py" >nul 2>nul',
+        'if errorlevel 1 set "FAILED=1"',
+        'fc /b "%PAYLOAD%\\src\\web_action_service.py" "%ROOT%\\src\\web_action_service.py" >nul 2>nul',
+        'if errorlevel 1 set "FAILED=1"',
+        'fc /b "%PAYLOAD%\\web\\app.js" "%ROOT%\\web\\app.js" >nul 2>nul',
+        'if errorlevel 1 set "FAILED=1"',
+        'fc /b "%PAYLOAD%\\web\\现代启动器_UI_预览.html" "%ROOT%\\web\\现代启动器_UI_预览.html" >nul 2>nul',
+        'if errorlevel 1 set "FAILED=1"',
         'if "%FAILED%"=="1" goto rollback',
         "",
         'echo [完成] 统一启动器已更新到 "%VERSION%"。',

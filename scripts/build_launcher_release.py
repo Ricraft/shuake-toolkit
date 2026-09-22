@@ -39,6 +39,15 @@ EXCLUDED_DIR_NAMES = {"__pycache__", ".pytest_cache", "node_modules", ".git"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 
 VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
+
+# 更新包必须包含这些入口文件：缺任一项都说明打包不完整，直接失败而不是产出坏包。
+REQUIRED_FILES = (
+    "统一启动器.py",
+    "requirements.txt",
+    "src/web_action_service.py",
+    "web/app.js",
+    "web/现代启动器_UI_预览.html",
+)
 LAUNCHER_VERSION_RE = re.compile(r'LAUNCHER_VERSION\s*=\s*"([^"]+)"')
 
 
@@ -98,6 +107,11 @@ def build(version: str, out_dir: Path, *, require_version_match: bool = False) -
     payload = list(iter_payload(PROJECT_ROOT))
     if not payload:
         raise RuntimeError("nothing to package")
+
+    names = {arcname for _, arcname in payload}
+    missing = [name for name in REQUIRED_FILES if name not in names]
+    if missing:
+        raise RuntimeError("payload is missing required file(s): " + ", ".join(missing))
 
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path, arcname in payload:

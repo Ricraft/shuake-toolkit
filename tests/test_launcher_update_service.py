@@ -23,6 +23,7 @@ from src.launcher_update_service import (
     LAUNCHER_RELEASES_API_URL,
     LAUNCHER_REPO,
     PRESERVED_PATHS,
+    REQUIRED_STAGED_FILES,
     REPLACE_WHITELIST,
     UPDATE_BACKUP_DIR_NAME,
     UPDATE_STAGING_DIR_NAME,
@@ -972,3 +973,53 @@ def test_apply_script_rolls_back_when_a_replaced_file_is_missing(workspace):
     assert (root / "src" / "keep.py").read_text(encoding="utf-8") == "OLD-SRC"
     assert (root / "统一启动器.py").read_text(encoding="utf-8") == "OLD-LAUNCHER"
     assert (root / "requirements.txt").read_text(encoding="utf-8") == "OLD-REQ"
+
+# ------------------------------------------------- 发布完整性（独立验证 F1 回归）
+
+
+def test_required_staged_files_include_the_launcher_page():
+    normalized = {item.replace(os.sep, "/") for item in REQUIRED_STAGED_FILES}
+    assert f"web/{"现代启动器_UI_预览.html"}" in normalized, normalized
+
+
+def test_package_missing_launcher_page_is_rejected(workspace):
+    """残缺包（缺首屏入口页）必须在替换前被拒绝，不能退化成新旧混合安装。"""
+    base = make_base_dir(workspace)
+    partial = workspace / "no-page.zip"
+    entries = {
+        "统一启动器.py": "# launcher\n",
+        "requirements.txt": "# req\n",
+        "src/web_action_service.py": "# actions\n",
+        "web/app.js": "// app\n",
+    }
+    with zipfile.ZipFile(partial, "w") as handle:
+        for name, content in entries.items():
+            handle.writestr(name, content)
+    release = _release(TAG, assets=[_zip_asset(TAG, partial), _manifest_asset_entry()])
+    service = make_service(base, releases=[release], archive=str(partial))
+    token = service.prepare_update_confirmation()["updateDialog"]["confirmationToken"]
+
+    result = service.install_confirmed(token)
+
+    assert result["ok"] is False
+    assert "缺少必要文件" in result["message"]
+    assert "现代启动器_UI_预览.html" in result["message"]
+    # 服务是在解压后校验必需文件的，所以这里断言关键事实：没有生成应用脚本，
+    # 用户不可能误用这个残缺包去替换现有安装。
+    assert not (base / UPDATE_STAGING_DIR_NAME / APPLY_SCRIPT_NAME).exists()
+
+
+
+def test_apply_script_compares_content_instead_of_only_existence():
+    """只判断存在会让残缺包静默留下旧文件；脚本必须逐字节比对关键文件。"""
+    script = build_apply_script(version=TAG, current_version=CURRENT, launcher_pid=0)
+
+    assert "fc /b" in script
+    for relative in (
+        "统一启动器.py",
+        "src\\web_action_service.py",
+        "web\\app.js",
+        f"web\\{"现代启动器_UI_预览.html"}",
+    ):
+        expected = f'"%PAYLOAD%\\{relative}" "%ROOT%\\{relative}"'
+        assert f"fc /b {expected}" in script, relative
