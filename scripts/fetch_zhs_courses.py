@@ -87,13 +87,22 @@ def extract_share_course_rows(payload):
 
     ``None`` means the response is invalid or reports failure, while an empty
     list is a valid response for an account with no current courses.
+
+    实测：没有在修课程时接口返回 ``"courseOpenDtos": null``（首页同时提示
+    “您当前暂无进行中的共享课~”）。把这种合法空结果当成“接口无法识别”会让课程
+    获取以“接口已变化”失败收场，因此“字段存在但为 null”与 ``[]`` 同义；而字段
+    彻底缺失仍然是接口结构变化。
     """
     if not isinstance(payload, dict) or str(payload.get("code")) != "200":
         return None
     result = payload.get("result")
     if not isinstance(result, dict):
         return None
+    if "courseOpenDtos" not in result:
+        return None
     rows = result.get("courseOpenDtos")
+    if rows is None:
+        return []
     if not isinstance(rows, list):
         return None
     if any(not isinstance(row, dict) for row in rows):
@@ -299,15 +308,42 @@ def resolve_cookie_path(config):
     return cookie_path
 
 
+# 自动登录单账号时，Autovisor 把凭证写到 res/cookies.json；而带账号编号运行会得到
+# res/cookies_<n>.json。本脚本固定按账号编号取路径，于是读不到单账号登录的凭证，
+# 每次课程获取都要重新过一次易盾拼图。这里在“未显式配置 cookiesFile”且默认位置
+# 没有文件时回退到单账号路径。
+LEGACY_COOKIE_NAME = "cookies.json"
+
+
+def resolve_cookie_path_with_fallback(config):
+    """Return ``(cookie_path, fallback_used)`` for loading the login session."""
+    cookie_path = resolve_cookie_path(config)
+    if cookie_path.exists() or cookie_path.name == LEGACY_COOKIE_NAME:
+        return cookie_path, False
+    # 仅当路径就是本脚本按账号编号推导出的默认名时才回退，避免覆盖用户显式配置。
+    account_id = getattr(config, "account_id", None)
+    numbered_default = f"cookies_{account_id}.json"
+    if account_id is None or cookie_path.name != numbered_default:
+        return cookie_path, False
+    legacy = cookie_path.with_name(LEGACY_COOKIE_NAME)
+    if legacy.exists():
+        return legacy, True
+    return cookie_path, False
+
+
 async def create_session_context(browser, config):
     context = await browser.new_context()
-    cookie_path = resolve_cookie_path(config)
+    cookie_path, used_fallback = resolve_cookie_path_with_fallback(config)
     cookie_path.parent.mkdir(parents=True, exist_ok=True)
     cookies = load_cookies(str(cookie_path))
     if cookies:
         try:
             await context.add_cookies(cookies)
-            print("已加载该账号的登录凭证", flush=True)
+            print(
+                "已加载该账号的登录凭证"
+                + ("（单账号凭证文件）" if used_fallback else ""),
+                flush=True,
+            )
         except Exception as exc:
             print(f"历史登录凭证无效，将重新登录: {exc}", flush=True)
     return context, cookie_path

@@ -19,6 +19,15 @@ from modules.utils import (
 )
 
 
+def _lesson_identity(lesson: dict) -> str:
+    key = str(lesson.get("key") or "").strip()
+    if key:
+        return key
+    section = str(lesson.get("section") or "").strip()
+    title = str(lesson.get("title") or "").strip()
+    return f"{section}@@{title}"
+
+
 async def run_hike_course(
     page,
     config,
@@ -78,8 +87,15 @@ async def run_hike_course(
 
     target_course_url = course_url or config.course_urls[0]
     start_time = clock()
-    completed_card_ids: set[str] = set()
-    for lesson in pending_lessons:
+    completed_lesson_keys: set[str] = set()
+    lesson_keys = [_lesson_identity(lesson) for lesson in pending_lessons]
+    latest_lessons = {
+        _lesson_identity(lesson): lesson for lesson in pending_lessons
+    }
+    for lesson_key in lesson_keys:
+        lesson = latest_lessons.get(lesson_key)
+        if lesson is None:
+            continue
         title = lesson["title"]
         card_id = lesson["card_id"]
         scope_id = lesson.get("scope_id")
@@ -172,7 +188,7 @@ async def run_hike_course(
         if completed is not True:
             raise RuntimeError(f"视频未确认完成: {current_title}")
 
-        completed_card_ids.add(card_id)
+        completed_lesson_keys.add(lesson_key)
         await ensure_course_authenticated(
             page,
             "翻转课重新扫描时登录状态失效",
@@ -182,10 +198,13 @@ async def run_hike_course(
             page,
             "翻转课重新扫描后登录状态失效",
         )
+        latest_lessons = {
+            _lesson_identity(item): item for item in refreshed_lessons
+        }
         unresolved_lessons = [
             item
             for item in refreshed_lessons
-            if item["card_id"] not in completed_card_ids
+            if _lesson_identity(item) not in completed_lesson_keys
         ]
         if not unresolved_lessons:
             logger.info("所有课程已完成!", shift=True)
@@ -203,7 +222,7 @@ async def run_hike_course(
     unresolved_lessons = [
         item
         for item in refreshed_lessons
-        if item["card_id"] not in completed_card_ids
+        if _lesson_identity(item) not in completed_lesson_keys
     ]
     if unresolved_lessons:
         titles = [item["title"] for item in unresolved_lessons]

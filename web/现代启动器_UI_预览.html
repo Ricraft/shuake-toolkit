@@ -279,7 +279,7 @@
                                         洛天依
                                         <span class="tianyi-online-dot"></span>
                                     </div>
-                                    <div class="tianyi-head-sub" id="tianyi-head-sub">你的刷课小助手，试着说「一键刷课」或「现在什么状态」</div>
+                                    <div class="tianyi-head-sub" id="tianyi-head-sub">你的刷课小助手，试着说「帮我刷毛概，不用做题」或「现在什么状态」</div>
                                 </div>
                                 <button class="icon-btn" onclick="clearTianyiChat()" title="清空对话">
                                     <i class="fas fa-broom"></i>
@@ -292,12 +292,12 @@
                                 <button class="tianyi-chip" onclick="tianyiQuickSend('一键刷课')"><i class="fas fa-play"></i>一键刷课</button>
                                 <button class="tianyi-chip" onclick="tianyiQuickSend('停止全部')"><i class="fas fa-stop"></i>停止全部</button>
                                 <button class="tianyi-chip" onclick="tianyiQuickSend('现在什么状态')"><i class="fas fa-circle-info"></i>运行状态</button>
-                                <button class="tianyi-chip" onclick="tianyiQuickSend('启动题库')"><i class="fas fa-database"></i>启动题库</button>
+                                <button class="tianyi-chip" onclick="tianyiQuickSend('课程表里有哪些课')"><i class="fas fa-list-check"></i>课程表</button>
                                 <button class="tianyi-chip" onclick="tianyiQuickSend('你能做什么')"><i class="fas fa-lightbulb"></i>你能做什么</button>
                             </div>
 
                             <div class="tianyi-input-row">
-                                <input id="tianyi-input" type="text" class="input-field" placeholder="和天依聊天，或输入指令，例如：启动智慧树 / 停止 yatori / 查看状态"
+                                <input id="tianyi-input" type="text" class="input-field" placeholder="和天依聊天，或直接说：帮我刷毛概，不用做题 / 启动智慧树 / 现在什么状态"
                                     onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTianyiMessage();}">
                                 <button id="tianyi-send-btn" class="tianyi-send-btn" onclick="sendTianyiMessage()" title="发送">
                                     <i class="fas fa-paper-plane"></i>
@@ -345,15 +345,15 @@
                                 <p class="text-xs" id="tianyi-ai-url-hint" style="color: var(--text-muted);">选择提供商后自动填充默认地址</p>
                             </div>
                             <div class="input-group">
-                                <span class="input-label" style="display:flex;align-items:center;gap:0.5rem;">
-                                    模型名称
+                                <span class="input-label">模型名称</span>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <input style="flex: 1;" id="tianyi-ai-model" type="text" class="input-field" placeholder="输入或选择模型" list="tianyi-model-list" autocomplete="off" oninput="autoSaveTianyiConfig()">
                                     <button class="btn btn-outline btn-sm" id="tianyi-fetch-models-btn" onclick="fetchTianyiModelList()" style="margin-left:auto;">
                                         <i class="fas fa-sync-alt" id="tianyi-fetch-icon"></i>
                                         <i class="fas fa-spinner fa-spin" id="tianyi-fetch-loading" style="display:none;"></i>
                                         获取模型
                                     </button>
-                                </span>
-                                <input id="tianyi-ai-model" type="text" class="input-field" placeholder="输入或选择模型" list="tianyi-model-list" autocomplete="off" oninput="autoSaveTianyiConfig()">
+                                </div>
                                 <datalist id="tianyi-model-list"></datalist>
                             </div>
                             <div class="input-group">
@@ -384,20 +384,60 @@
                             </div>
                         </div>
 
+                        <!-- 课程表 -->
+                        <div class="glass-card flex flex-col gap-4">
+                            <div class="card-title-row">
+                                <div class="card-icon teal"><i class="fas fa-list-check"></i></div>
+                                <h3 class="font-bold text-sm">课程表（天依按这里单刷）</h3>
+                            </div>
+                            <p class="text-xs" style="color: var(--text-muted);">先查这里；没命中才去拉账号课程。留空就只拉账号课程。</p>
+                            <div id="course-plan-list" class="flex flex-col gap-3"></div>
+                            <div class="flex gap-2">
+                                <button class="btn btn-outline btn-sm flex-1" onclick="addCoursePlanRow()">
+                                    <i class="fas fa-plus"></i> 添加课程
+                                </button>
+                                <button class="btn btn-primary btn-sm flex-1" id="course-plan-save-btn" onclick="saveCoursePlans(true)">
+                                    <i class="fas fa-floppy-disk"></i> 保存课程表
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 人格设定 -->
+                        <div class="glass-card flex flex-col gap-4">
+                            <div class="card-title-row">
+                                <div class="card-icon"><i class="fas fa-comment-dots"></i></div>
+                                <h3 class="font-bold text-sm">人格提示词</h3>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">自定义人格（留空 = 默认洛天依人格）</span>
+                                <textarea id="tianyi-persona" class="input-field" rows="4" maxlength="2000" placeholder="例如：你是沉稳可靠的助教学姐，说话简洁，先给结论再给步骤……" oninput="autoSaveTianyiPersona()"></textarea>
+                                <p class="text-xs" id="tianyi-persona-hint" style="color: var(--text-muted);">当前使用默认洛天依人格（温柔治愈、爱吃小笼包、爱用音乐打比方）；留空即恢复默认。</p>
+                            </div>
+                            <div class="flex gap-2">
+                                <button class="btn btn-primary btn-sm flex-1" id="tianyi-save-persona-btn" onclick="saveTianyiPersona(true)">
+                                    <i class="fas fa-floppy-disk"></i> 保存人格
+                                </button>
+                                <button class="btn btn-outline btn-sm flex-1" onclick="resetTianyiPersona()">
+                                    <i class="fas fa-rotate-left"></i> 恢复默认
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- 指令帮助 -->
                         <div class="glass-card">
                             <div class="card-title-row mb-4">
                                 <div class="card-icon teal"><i class="fas fa-terminal"></i></div>
-                                <h3 class="font-bold text-sm">支持的控制指令</h3>
+                                <h3 class="font-bold text-sm">你可以这样对我说</h3>
                             </div>
                             <div class="tianyi-cmd-list">
-                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('一键刷课')"><code>一键刷课</code>保存配置并启动全部核心</div>
-                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('停止全部')"><code>停止全部</code>停止所有正在运行的核心</div>
-                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('启动 yatori')"><code>启动/停止 yatori</code>控制通用平台核心</div>
-                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('启动智慧树')"><code>启动/停止智慧树</code>控制 Autovisor 核心</div>
-                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('启动题库')"><code>启动/停止题库</code>控制题库服务器</div>
-                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('现在什么状态')"><code>状态</code>汇报各核心与题库运行情况</div>
-                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('打开题库设置')"><code>打开 xx 页面</code>跳转中控台/设置/题库/软件设置</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('帮我刷毛概，不用做题')"><code>帮我刷毛概，不用做题</code>单刷一门课（先在课程表或核心设置里配好）</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('刷大学物理，45 分钟')"><code>刷大学物理，45 分钟</code>带学习时长上限地单刷</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('课程表里有哪些课')"><code>课程表里有哪些课</code>看看天依现在认识哪些课程</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('重新拉一下学习通课程')"><code>重新拉一下学习通课程</code>Yatori 后台登录不弹窗；说智慧树会打开浏览器</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('一键刷课')"><code>一键刷课 / 停止全部</code>保存配置并启动，或停止全部核心</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('刷完关掉程序')"><code>刷完关掉程序 / 刷完关机</code>刷课结束后自动关软件或关机</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('现在什么状态')"><code>现在什么状态</code>汇报各核心与题库运行情况</div>
+                                <div class="tianyi-cmd-item" onclick="tianyiQuickSend('打开题库设置')"><code>打开 xx 页面</code>跳转中控台 / 核心设置 / 题库 / 软件设置</div>
                             </div>
                         </div>
                     </div>
@@ -534,15 +574,15 @@
                                 <p id="y-ai-url-preview" class="text-xs font-mono mt-1" style="color: var(--text-muted);">Preview: -</p>
                             </div>
                             <div class="input-group">
-                                <span class="input-label" style="display: flex; align-items: center; gap: 0.5rem;">
-                                    模型名称
+                                <span class="input-label">模型名称</span>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <input style="flex: 1;" id="y-ai-model" type="text" class="input-field" placeholder="输入或选择模型" list="y-model-list" autocomplete="off">
                                     <button class="btn btn-outline btn-sm" id="y-fetch-models-btn" onclick="fetchYatoriModelList()" style="margin-left: auto;">
                                         <i class="fas fa-sync-alt" id="y-fetch-icon"></i>
                                         <i class="fas fa-spinner fa-spin" id="y-fetch-loading" style="display: none;"></i>
                                         获取模型
                                     </button>
-                                </span>
-                                <input id="y-ai-model" type="text" class="input-field" placeholder="输入或选择模型" list="y-model-list" autocomplete="off">
+                                </div>
                                 <datalist id="y-model-list"></datalist>
                             </div>
                             <div class="input-group">
@@ -1142,6 +1182,13 @@
                         </div>
                         <div class="setting-row">
                             <div class="setting-info">
+                                <div class="setting-title">刷完自动关闭程序</div>
+                                <div class="setting-desc">所有账号课程刷完后自动退出统一启动器（与自动关机同时开启时以关机为准）</div>
+                            </div>
+                            <label class="switch"><input id="pref-close-launcher" type="checkbox" onchange="savePreference('closeLauncherOnComplete', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
                                 <div class="setting-title">启动后自动运行</div>
                                 <div class="setting-desc">启动器打开后自动开始刷课任务</div>
                             </div>
@@ -1259,6 +1306,83 @@
                             <h2 class="font-bold text-lg">更新日志</h2>
                         </div>
                         <div class="flex flex-col">
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 洛天依单课程刷课</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">对天依说「帮我刷毛概，不用做题」即可只刷这一门，支持指定核心、不做题与学习时长上限</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 洛天依课程表</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">洛天依页新增课程表，可维护课程名、别名、核心、账号与时长，天依优先按它匹配课程</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 工具调用与确认卡片</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">天依会真正调用工具执行操作，刷课/启停/改设置等写操作先弹确认卡片，点了才执行；模型不支持工具调用时自动回退文本指令</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 拉取账号课程</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">Yatori 后台登录不弹窗，Autovisor 会打开浏览器登录；拉取后回报课程清单并提示目标课程是否在其中</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 刷完自动关闭程序</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">软件设置新增开关，所有任务完成后自动退出启动器（与刷完自动关机同开时以关机为准）</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 自定义人格提示词</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">洛天依页可自定义人格，默认内置洛天依设定（温柔治愈、爱吃小笼包），控制指令与安全规则不可被覆盖</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 核心设置 AI 模型卡片对齐</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">「获取模型」按钮移到输入行，模型名称与 API Key 的标题和输入框不再错位（洛天依对话模型配置同步对齐）</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 洛天依帮助与示例更新</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">「你能做什么」、指令示例、快捷按钮与开场白全部换成新能力，问答提示词也改成洛天依设定</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - Yatori 章节任务开关不再被覆盖</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">「只刷这些课程」、学习时长、章节测试/作业/考试开关可以正常保存，不再在保存设置时被重置</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 查找课程不再意外打开浏览器</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">课程表与核心设置里已填的课程完全本地匹配；未命中时会询问你，绝不会偷偷拉起智慧树登录浏览器</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.2.0 - 拉取课程结果不再无回执</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">拉取账号课程后明确告知拉到了几门课程、有没有你要的那一门，失败时给出真实原因</div>
+                                </div>
+                            </div>
                             <div class="changelog-item">
                                 <span class="changelog-badge feature">新增</span>
                                 <div>

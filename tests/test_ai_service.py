@@ -10,6 +10,7 @@ class FakeTester:
     connectivity_calls = []
     model_calls = []
     chat_calls = []
+    tools_calls = []
 
     @classmethod
     def reset(cls):
@@ -19,6 +20,17 @@ class FakeTester:
         cls.connectivity_calls = []
         cls.model_calls = []
         cls.chat_calls = []
+        cls.tools_calls = []
+        cls.tools_result = (
+            True,
+            "OK",
+            {
+                "content": "好的",
+                "tool_calls": [
+                    {"id": "c1", "name": "get_status", "arguments": "{}"}
+                ],
+            },
+        )
 
     @classmethod
     def test_connectivity(cls, **kwargs):
@@ -34,6 +46,11 @@ class FakeTester:
     def chat_completion(cls, **kwargs):
         cls.chat_calls.append(kwargs)
         return cls.chat_result
+
+    @classmethod
+    def chat_completion_with_tools(cls, **kwargs):
+        cls.tools_calls.append(kwargs)
+        return cls.tools_result
 
 
 def make_service(log=None):
@@ -261,3 +278,59 @@ def test_chat_rejects_successful_but_empty_model_reply():
         "message": "AI 模型返回了空回复",
     }
     assert any("模型返回空回复" in line for line in logs)
+
+
+def test_chat_with_tools_requires_key_and_tool_definitions():
+    service = make_service()
+    missing_key = service.chat_with_tools(
+        {"provider": "SILICON", "api_url": "https://example.invalid/v1"},
+        [{"role": "user", "content": "hi"}],
+        [{"type": "function"}],
+    )
+    assert missing_key["ok"] is False
+    assert "API Key" in missing_key["message"]
+
+    empty_tools = service.chat_with_tools(
+        {"provider": "SILICON", "api_url": "https://example.invalid/v1", "api_key": "k"},
+        [{"role": "user", "content": "hi"}],
+        [],
+    )
+    assert empty_tools["ok"] is False
+    assert FakeTester.tools_calls == []
+
+
+def test_chat_with_tools_forwards_tools_and_returns_tool_calls():
+    service = make_service()
+    tools = [{"type": "function", "function": {"name": "get_status"}}]
+    result = service.chat_with_tools(
+        {
+            "provider": "SILICON",
+            "api_url": "https://example.invalid/v1",
+            "api_key": "secret",
+            "model": "model-x",
+        },
+        [{"role": "user", "content": "现在什么状态"}],
+        tools,
+    )
+    assert result["ok"] is True
+    assert result["reply"] == "\u597d\u7684"
+    assert result["tool_calls"] == [
+        {"id": "c1", "name": "get_status", "arguments": "{}"}
+    ]
+    call = FakeTester.tools_calls[0]
+    assert call["tools"] == tools
+    assert call["model"] == "model-x"
+    assert call["timeout"] == 90
+
+
+def test_chat_with_tools_reports_failure_without_tool_calls():
+    service = make_service()
+    FakeTester.tools_result = (False, "\u5f53\u524d\u6a21\u578b\u4e0d\u652f\u6301\u5de5\u5177\u8c03\u7528", {})
+    result = service.chat_with_tools(
+        {"provider": "SILICON", "api_url": "https://example.invalid/v1", "api_key": "k"},
+        [{"role": "user", "content": "hi"}],
+        [{"type": "function"}],
+    )
+    assert result["ok"] is False
+    assert result["tool_calls"] == []
+    assert "\u4e0d\u652f\u6301" in result["message"]

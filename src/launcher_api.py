@@ -80,3 +80,28 @@ class WebLauncherAPI:
 
     def stop_practice_mode(self):
         return self._launcher.stop_practice_mode_from_web()
+
+    def tianyi_agent_chat(self, payload):
+        return self._launcher.tianyi_agent_chat_from_web(payload)
+
+    def confirm_tianyi_action(self, payload):
+        return self._launcher.confirm_tianyi_action_from_web(payload)
+
+    def cancel_tianyi_action(self, payload):
+        return self._launcher.cancel_tianyi_action_from_web(payload)
+
+    def get_course_plans(self):
+        return self._launcher.get_course_plans_from_web()
+
+    def save_course_plans(self, payload):
+        return self._launcher.save_course_plans_from_web(payload)
+
+    def resolve_course(self, query, core=None, account_index=0):
+        return self._launcher.resolve_course_from_web(
+            query,
+            core,
+            account_index,
+        )
+
+    def start_course(self, payload):
+        return self._launcher.start_course_from_web(payload)

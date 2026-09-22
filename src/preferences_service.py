@@ -15,6 +15,7 @@ DEFAULT_PREFERENCES = {
     "theme": "dark",
     "autoStart": False,
     "autoShutdown": False,
+    "closeLauncherOnComplete": False,
     "autoRun": False,
     "minimizeToTray": False,
     "startMinimized": False,
@@ -28,6 +29,7 @@ DEFAULT_PREFERENCES = {
     "tianyiThemeUnlocked": False,
     "tianyiAchievementShown": False,
     "tianyiChatHistory": [],
+    "tianyiPersona": "",
     "achievements": {},
     "achievementResetToken": 0,
 }

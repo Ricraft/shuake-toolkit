@@ -171,6 +171,53 @@ class AIConnectivityService:
             "reply": reply_text,
         }
 
+    def chat_with_tools(self, config, messages, tools) -> dict:
+        normalized = self._normalize_config(config)
+        if normalized is None:
+            return self._failure("AI 聊天配置格式错误")
+        if not normalized["api_key"]:
+            return self._failure("API Key 不能为空，请先在右侧完成模型配置")
+        if normalized["provider"] == "OTHER" and not normalized["api_url"]:
+            return self._failure("API 地址不能为空")
+        if not isinstance(messages, list) or not messages:
+            return self._failure("聊天消息格式错误")
+        if not isinstance(tools, list) or not tools:
+            return self._failure("工具定义为空")
+
+        tester, failure = self._tester()
+        if failure:
+            return failure
+        chat_fn = getattr(tester, "chat_completion_with_tools", None)
+        if chat_fn is None:
+            return self._failure("AI 工具调用模块不可用")
+
+        provider = normalized["provider"]
+        model = normalized["model"] or getattr(tester, "DEFAULT_MODELS", {}).get(
+            provider, ""
+        )
+        try:
+            success, message, payload = chat_fn(
+                provider=provider,
+                api_url=normalized["api_url"],
+                api_key=normalized["api_key"],
+                model=model,
+                messages=messages,
+                tools=tools,
+                timeout=90,
+            )
+        except Exception as exc:
+            self.log(f"[AI工具] 调用过程发生错误: {exc}")
+            return self._failure(f"调用过程发生错误: {exc}")
+
+        payload = payload if isinstance(payload, dict) else {}
+        return {
+            "ok": bool(success),
+            "success": bool(success),
+            "message": str(message),
+            "reply": str(payload.get("content") or ""),
+            "tool_calls": list(payload.get("tool_calls") or []),
+        }
+
     def fetch_model_list(self, config) -> dict:
         normalized = self._normalize_config(config)
         if normalized is None:

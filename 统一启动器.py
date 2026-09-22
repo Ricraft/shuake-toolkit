@@ -25,6 +25,10 @@ from src.core_launch_service import CoreLaunchService
 from src.core_runtime_locator import CoreRuntimeLocator
 from src.course_api_service import CourseAPIService
 from src.course_catalog import CourseCatalogService
+from src.course_overlay_service import CourseOverlayService
+from src.course_plan_service import CoursePlanService
+from src.course_run_service import CourseRunService
+from src.tianyi_agent_service import TianyiAgentService
 from src.desktop_platform_service import DesktopPlatformService
 from src.dependencies import ensure_core_dependencies
 from src.launcher_api import WebLauncherAPI
@@ -79,7 +83,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.1.0"
+    LAUNCHER_VERSION = "v1.2.0"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -570,9 +574,11 @@ class UnifiedLauncher:
 
         self.core_manager = None
         self._shutdown_pending = False
+        self._launcher_close_pending = False
 
         startup_service = self._get_launcher_startup_service()
         startup_service.compose()
+        self._recover_course_run_overlays()
         self.log_system("统一启动器已就绪")
         startup_service.schedule_deferred_tasks()
 
@@ -790,6 +796,31 @@ class UnifiedLauncher:
         else:
             self.log_system(result.get('message') or "自动关机指令执行失败")
 
+    def _maybe_close_launcher_after_completion(self):
+        """按偏好设置在刷课完成后关闭启动器本身。"""
+        if not self._preference_enabled('closeLauncherOnComplete'):
+            return False
+        if getattr(self, '_shutdown_pending', False):
+            self.log_system("已启用刷完自动关机，跳过自动关闭启动器。")
+            return False
+        if getattr(self, '_launcher_close_pending', False):
+            return False
+        self._launcher_close_pending = True
+        self.log_system("已启用刷完自动关闭启动器，程序即将退出。")
+        self._spawn_launcher_close()
+        return True
+
+    def _spawn_launcher_close(self):
+        """在独立线程里执行已确认退出，避免阻塞完成回调。"""
+        def do_close():
+            try:
+                self.on_closing(confirmed=True)
+            except Exception as exc:
+                self.log_system(f"自动关闭启动器失败: {repr(exc)[:160]}")
+            finally:
+                self._launcher_close_pending = False
+
+        threading.Thread(target=do_close, daemon=True).start()
     def _cancel_shutdown(self):
         """取消正在进行的自动关机"""
         result = self._get_desktop_platform_service().cancel_shutdown()
@@ -846,6 +877,59 @@ class UnifiedLauncher:
     def save_settings_from_web(self, payload):
         return self._get_web_settings_service().save(payload)
 
+    def tianyi_agent_chat_from_web(self, payload):
+        payload = payload if isinstance(payload, dict) else {}
+        messages = payload.get('messages')
+        if not isinstance(messages, list) or not messages:
+            return {'ok': False, 'message': '聊天消息格式错误'}
+        return self._get_tianyi_agent_service().chat(
+            payload.get('config'),
+            messages,
+        )
+
+    def confirm_tianyi_action_from_web(self, payload):
+        payload = payload if isinstance(payload, dict) else {}
+        action_id = str(payload.get('id') or '').strip()
+        if not action_id:
+            return {'ok': False, 'message': '缺少待确认操作编号'}
+        return self._get_tianyi_agent_service().confirm(action_id)
+
+    def cancel_tianyi_action_from_web(self, payload):
+        payload = payload if isinstance(payload, dict) else {}
+        return self._get_tianyi_agent_service().cancel(
+            str(payload.get('id') or '')
+        )
+
+    def get_course_plans_from_web(self):
+        return {'ok': True, 'courses': self._get_course_plan_service().list()}
+
+    def save_course_plans_from_web(self, payload):
+        return self._get_course_plan_service().save(payload)
+
+    def resolve_course_from_web(self, query, core=None, account_index=0):
+        return self._get_course_run_service().resolve(
+            query,
+            core=core or None,
+            account_index=account_index,
+        )
+
+    def start_course_from_web(self, payload):
+        payload = payload if isinstance(payload, dict) else {}
+        query = str(payload.get('query') or payload.get('course') or '').strip()
+        if not query:
+            return {
+                'ok': False,
+                'code': 'empty_query',
+                'message': '没有识别到课程名',
+            }
+        return self._get_course_run_service().start(
+            query,
+            core=payload.get('core') or None,
+            account_index=payload.get('accountIndex'),
+            skip_questions=payload.get('skipQuestions'),
+            max_minutes=payload.get('maxMinutes'),
+        )
+
     def detect_browser_path_for_web(self, browser_name='Chrome'):
         normalized = self._normalize_browser_name(browser_name or 'Chrome')
         detected_path = self._find_browser_executable(normalized)
@@ -865,6 +949,93 @@ class UnifiedLauncher:
             if selection:
                 file_path = selection[0]
         return {'ok': bool(file_path), 'path': file_path or ''}
+
+    def _get_course_plan_service(self):
+        service = getattr(self, '_course_plan_service', None)
+        if service is None:
+            service = CoursePlanService(
+                os.path.join(self.get_base_dir(), 'data', 'course_plans.json'),
+                logger=self.log_system,
+            )
+            self._course_plan_service = service
+        return service
+
+    def _get_course_overlay_service(self):
+        service = getattr(self, '_course_overlay_service', None)
+        if service is None:
+            service = CourseOverlayService(
+                os.path.join(
+                    self.get_base_dir(),
+                    'data',
+                    'course_run_overlay.json',
+                ),
+                logger=self.log_system,
+            )
+            self._course_overlay_service = service
+        return service
+
+    def _get_course_run_service(self):
+        service = getattr(self, '_course_run_service', None)
+        if service is None:
+            service = CourseRunService(
+                self,
+                plans=self._get_course_plan_service(),
+                overlays=self._get_course_overlay_service(),
+                # 只有用户明确要“拉取课程”时才会调到这两个提供器，因此强制刷新。
+                autovisor_catalog=lambda index: self.get_autovisor_courses_from_web(
+                    index,
+                    force_refresh=True,
+                ),
+                yatori_catalog=lambda index: self.get_xuexitong_courses_from_web(
+                    index,
+                    force_refresh=True,
+                ),
+            )
+            self._course_run_service = service
+        return service
+
+    def _recover_course_run_overlays(self):
+        """启动时恢复上次崩溃残留的单课程配置。"""
+        try:
+            released = self._get_course_overlay_service().release_all()
+        except Exception as exc:
+            self.log_system(f"恢复单课程配置失败: {exc}")
+            return []
+        if released:
+            self.log_system(
+                "已恢复上次未清理的单课程配置: "
+                + ", ".join(released)
+            )
+        return released
+
+    def _release_course_run_overlay(self, core):
+        service = getattr(self, '_course_run_service', None)
+        if service is None:
+            return False
+        return service.release_overlay(core)
+
+    def _apply_course_limit_overlay(self, minutes):
+        return self._get_course_overlay_service().apply_ini(
+            core='autovisor',
+            config_path=self._get_autovisor_config_path(),
+            section='course-option',
+            option='limitMaxTime',
+            value=str(minutes),
+        )
+
+    def start_autovisor_course(self, course_url, account_id, max_minutes=None):
+        return self._get_core_launch_service().start_autovisor_course(
+            course_url=course_url,
+            account_id=account_id,
+            max_minutes=max_minutes,
+        )
+
+    def _get_tianyi_agent_service(self):
+        service = getattr(self, '_tianyi_agent_service', None)
+        if service is None:
+            service = TianyiAgentService(self, logger=self.log_system)
+            self._tianyi_agent_service = service
+        return service
 
     def _get_ai_service(self):
         service = getattr(self, '_ai_service', None)

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import io
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -223,9 +224,27 @@ print('COURSE_CATALOG_IMPORT_OK')
             ),
             [],
         )
+        # 实测：没有在修课程时接口返回 null，这是合法空结果而不是接口变化。
+        self.assertEqual(
+            fetch_zhs_courses.extract_share_course_rows(
+                {"code": "200", "result": {"courseOpenDtos": None}}
+            ),
+            [],
+        )
+        self.assertEqual(
+            fetch_zhs_courses.extract_share_course_rows(
+                {"code": 200, "result": {"totalCount": 0, "courseOpenDtos": None}}
+            ),
+            [],
+        )
         self.assertIsNone(
             fetch_zhs_courses.extract_share_course_rows(
                 {"code": 500, "result": {"courseOpenDtos": []}}
+            )
+        )
+        self.assertIsNone(
+            fetch_zhs_courses.extract_share_course_rows(
+                {"code": 200, "result": {"courseOpenDtos": "unexpected"}}
             )
         )
         self.assertIsNone(
@@ -597,6 +616,94 @@ print('COURSE_CATALOG_IMPORT_OK')
             self.assertIs(loaded_context, context)
             self.assertEqual(resolved_path, cookie_file)
             self.assertEqual(context.cookies[0]["name"], "session")
+
+    def test_zhs_fetch_context_falls_back_to_the_single_account_cookie_file(self):
+        """单账号登录把凭证写到 cookies.json，课程获取必须能找到它。
+
+        否则每次课程获取都会以未登录状态打开登录页，被迫再走一次易盾拼图。
+        """
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        legacy = root / "Autovisor" / "res" / "cookies.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(
+            json.dumps([{"name": "session", "value": "legacy"}]),
+            encoding="utf-8",
+        )
+        original_root = fetch_zhs_courses.SCRIPT_DIR
+        fetch_zhs_courses.SCRIPT_DIR = str(root)
+        try:
+            resolved, used_fallback = (
+                fetch_zhs_courses.resolve_cookie_path_with_fallback(
+                    SimpleNamespace(
+                        cookies_file="res/cookies_1.json",
+                        account_id=1,
+                    )
+                )
+            )
+        finally:
+            fetch_zhs_courses.SCRIPT_DIR = original_root
+
+        self.assertTrue(used_fallback)
+        self.assertEqual(resolved, legacy)
+
+    def test_zhs_fetch_context_keeps_an_explicit_cookie_file(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        legacy = root / "Autovisor" / "res" / "cookies.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("[]", encoding="utf-8")
+        original_root = fetch_zhs_courses.SCRIPT_DIR
+        fetch_zhs_courses.SCRIPT_DIR = str(root)
+        try:
+            resolved, used_fallback = (
+                fetch_zhs_courses.resolve_cookie_path_with_fallback(
+                    SimpleNamespace(
+                        cookies_file="res/custom_cookies.json",
+                        account_id=1,
+                    )
+                )
+            )
+            # 账号编号未解析（None）时同样不能猜测。
+            unresolved, unresolved_fallback = (
+                fetch_zhs_courses.resolve_cookie_path_with_fallback(
+                    SimpleNamespace(
+                        cookies_file="res/cookies_1.json",
+                        account_id=None,
+                    )
+                )
+            )
+        finally:
+            fetch_zhs_courses.SCRIPT_DIR = original_root
+
+        self.assertFalse(used_fallback)
+        self.assertEqual(resolved, root / "Autovisor" / "res" / "custom_cookies.json")
+        self.assertFalse(unresolved_fallback)
+        self.assertEqual(unresolved, root / "Autovisor" / "res" / "cookies_1.json")
+
+    def test_zhs_fetch_context_prefers_the_account_file_when_present(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        res_dir = root / "Autovisor" / "res"
+        res_dir.mkdir(parents=True)
+        (res_dir / "cookies_1.json").write_text("[]", encoding="utf-8")
+        (res_dir / "cookies.json").write_text("[]", encoding="utf-8")
+        original_root = fetch_zhs_courses.SCRIPT_DIR
+        fetch_zhs_courses.SCRIPT_DIR = str(root)
+        try:
+            resolved, used_fallback = (
+                fetch_zhs_courses.resolve_cookie_path_with_fallback(
+                    SimpleNamespace(
+                        cookies_file="res/cookies_1.json",
+                        account_id=1,
+                    )
+                )
+            )
+        finally:
+            fetch_zhs_courses.SCRIPT_DIR = original_root
+
+        self.assertFalse(used_fallback)
+        self.assertEqual(resolved, res_dir / "cookies_1.json")
 
     def test_zhs_browser_candidates_follow_account_preference(self):
         chrome_first = fetch_zhs_courses._browser_candidates("chrome")

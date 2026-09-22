@@ -184,6 +184,36 @@ def test_lessons_are_clicked_learned_and_rescanned_in_page_order():
     assert logger.infos[-1] == "所有课程已完成!"
 
 
+def test_rescan_uses_latest_card_id_for_remaining_lesson():
+    first = _lesson("a")
+    second = _lesson("b")
+    regenerated_second = {**second, "card_id": "b-new"}
+    calls, dependencies = _dependencies(
+        [
+            ([first, second], _summary(2, 2)),
+            ([regenerated_second], _summary(1, 1)),
+            ([], _summary(0, 0)),
+        ]
+    )
+
+    asyncio.run(
+        run_hike_course(
+            _Page(),
+            SimpleNamespace(
+                limitMaxTime=0,
+                course_urls=["course"],
+                remove_pause="js",
+            ),
+            _Logger(),
+            clock=lambda: 10,
+            **dependencies,
+        )
+    )
+
+    assert [click[0] for click in calls.clicks] == ["a", "b-new"]
+    assert len(calls.learns) == 2
+
+
 def test_click_failure_reports_unfinished_lesson():
     lesson = _lesson("a")
     calls, dependencies = _dependencies(

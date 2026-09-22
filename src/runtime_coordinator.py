@@ -101,6 +101,19 @@ class RuntimeCoordinator:
                 self.reset_failures_for_new_round()
             return claimed
 
+    def _release_course_overlay(self, script_type) -> None:
+        """恢复单课程临时写入的核心配置。"""
+        release = getattr(self.launcher, "_release_course_run_overlay", None)
+        if not callable(release):
+            return
+        try:
+            release(script_type)
+        except Exception as exc:
+            try:
+                self.launcher.log_system(f"单课程配置恢复失败: {exc}")
+            except Exception:
+                pass
+
     def _finalize_if_idle(self, *, allow_shutdown: bool) -> None:
         launcher = self.launcher
         if getattr(launcher, "_runtime_batch_starting", False):
@@ -128,11 +141,18 @@ class RuntimeCoordinator:
             launcher._runtime_failure_since_batch = False
         if had_failure:
             launcher.log_system("本轮任务存在异常退出，已跳过自动关机")
+            launcher.log_system("本轮任务存在异常退出，已跳过自动关闭启动器")
         elif allow_shutdown:
             launcher._maybe_shutdown_after_completion()
+            close_launcher = getattr(
+                launcher, "_maybe_close_launcher_after_completion", None
+            )
+            if callable(close_launcher):
+                close_launcher()
 
     def handle_runtime_exit(self, script_type, return_code, stop_requested):
         launcher = self.launcher
+        self._release_course_overlay(script_type)
         if stop_requested:
             self._finalize_if_idle(allow_shutdown=False)
             return
@@ -184,6 +204,7 @@ class RuntimeCoordinator:
     ):
         """Record an exception path and reconcile the round if it is now idle."""
         launcher = self.launcher
+        self._release_course_overlay(script_type)
         label = self.CORE_LABELS.get(script_type, script_type)
         with self._state_lock:
             sequence = getattr(launcher, "_runtime_event_sequence", 0) + 1

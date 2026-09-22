@@ -7,6 +7,8 @@ import os
 import socket
 import time
 
+from src.config_service import ConfigService
+
 
 class CoreLaunchService:
     """Validate one core, prepare its environment, and submit its process."""
@@ -322,3 +324,144 @@ class CoreLaunchService:
             before_launch=self.prepare_autovisor_question_bank,
             env_factory=self.build_autovisor_runtime_env,
         )
+
+
+    def start_autovisor_course(
+        self,
+        *,
+        course_url: str,
+        account_id: int,
+        max_minutes=None,
+    ) -> bool:
+        """用 --course-url 启动 Autovisor，只跑单一课程不改配置。"""
+        launcher = self.launcher
+        if launcher.running.get("autovisor") or launcher.starting.get(
+            "autovisor"
+        ):
+            launcher.log_system("Autovisor 已经在运行或启动中")
+            return True
+        if not launcher._get_runtime_coordinator().prepare_start("autovisor"):
+            return False
+        if launcher.autovisor_installing:
+            launcher.log_system(
+                "Autovisor 依赖安装中，请等待安装完成后自动启动。"
+            )
+            return True
+        if not ConfigService.is_zhihuishu_course_url(course_url):
+            return launcher._reject_runtime_start(
+                "autovisor",
+                "课程链接无效，必须是智慧树官方 HTTPS 地址",
+                failure_kind="configuration",
+            )
+
+        launcher.autovisor_path = launcher.find_autovisor_path(
+            launcher.get_base_dir()
+        )
+        (
+            script_path,
+            _script_name,
+            _exact_match,
+            is_executable,
+        ) = launcher._get_autovisor_entry_path(False)
+        if not script_path:
+            return launcher._reject_runtime_start(
+                "autovisor",
+                "未找到 Autovisor 单账号入口文件，请检查核心是否安装完整",
+            )
+        if is_executable:
+            return launcher._reject_runtime_start(
+                "autovisor",
+                "当前 Autovisor 是 EXE 版本，不支持单课程覆盖启动",
+                failure_kind="configuration",
+            )
+
+        config_path = os.path.join(launcher.autovisor_path, "configs.ini")
+        if not os.path.exists(config_path):
+            return launcher._reject_runtime_start(
+                "autovisor",
+                "未找到 Autovisor 的 configs.ini，请先保存配置",
+                failure_kind="configuration",
+            )
+
+        accounts = launcher._load_autovisor_config_data().get("accounts") or []
+        target = None
+        for account in accounts:
+            if not isinstance(account, dict):
+                continue
+            try:
+                if int(account.get("account_id") or 0) == int(account_id):
+                    target = account
+                    break
+            except (TypeError, ValueError):
+                continue
+        if target is None:
+            return launcher._reject_runtime_start(
+                "autovisor",
+                f"Autovisor 账号 {account_id} 不存在",
+                failure_kind="configuration",
+            )
+        if not str(target.get("username") or "").strip() or not str(
+            target.get("password") or ""
+        ):
+            return launcher._reject_runtime_start(
+                "autovisor",
+                f"Autovisor 账号 {account_id} 尚未完整填写账号和密码",
+                failure_kind="configuration",
+            )
+
+        runtime_state = launcher._prepare_autovisor_config(config_path, False)
+        for summary in runtime_state["browser_summaries"]:
+            launcher.log_system(summary)
+
+        runtime_status, python_executable = (
+            self._prepare_autovisor_python_runtime(
+                runtime_state=runtime_state,
+            )
+        )
+        if runtime_status != "ready":
+            return runtime_status == "installing"
+
+        if not launcher._claim_runtime_start("autovisor"):
+            if launcher._last_start_failure_kind.get("autovisor") == "system":
+                return False
+            launcher.log_system("Autovisor 已经在运行或启动中")
+            return True
+
+        if max_minutes is not None and str(max_minutes).strip():
+            try:
+                launcher._apply_course_limit_overlay(max_minutes)
+            except Exception as exc:
+                launcher._release_course_run_overlay("autovisor")
+                launcher.log_system(f"应用单课程时长上限失败: {exc}")
+
+        launcher.log_system("正在启动 Autovisor 单课程任务...")
+        launcher.log("autovisor", "正在启动单课程任务...")
+        launcher.log_system(f"仅运行课程: {course_url}")
+        command = [
+            python_executable,
+            script_path,
+            "--config",
+            config_path,
+            "--account-id",
+            str(int(account_id)),
+            "--course-url",
+            course_url,
+        ]
+        try:
+            return launcher._get_runtime_process_service().start(
+                core="autovisor",
+                label="Autovisor",
+                command=command,
+                cwd=launcher.autovisor_path,
+                encodings=launcher._build_encoding_candidates(
+                    locale.getpreferredencoding(False),
+                    "utf-8",
+                    "gb18030",
+                    "gbk",
+                ),
+                before_launch=self.prepare_autovisor_question_bank,
+                env_factory=self.build_autovisor_runtime_env,
+            )
+        except Exception:
+            launcher._release_course_run_overlay("autovisor")
+            raise

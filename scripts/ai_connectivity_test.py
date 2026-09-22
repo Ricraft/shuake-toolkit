@@ -354,6 +354,124 @@ class AIConnectivityTester:
         _, error_msg, _ = cls._handle_response(response, provider)
         return False, error_msg, ""
 
+    @staticmethod
+    def _clean_tool_messages(messages: list) -> list:
+        cleaned = []
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "user")
+            if role == "tool":
+                cleaned.append({
+                    "role": "tool",
+                    "tool_call_id": str(message.get("tool_call_id") or ""),
+                    "content": str(message.get("content") or ""),
+                })
+                continue
+            entry = {
+                "role": role,
+                "content": str(message.get("content") or ""),
+            }
+            if message.get("tool_calls"):
+                entry["tool_calls"] = message["tool_calls"]
+            if not entry["content"] and not entry.get("tool_calls"):
+                continue
+            cleaned.append(entry)
+        return cleaned
+
+    @classmethod
+    def chat_completion_with_tools(
+        cls,
+        provider: str,
+        api_url: str,
+        api_key: str,
+        model: str,
+        messages: list,
+        tools: list,
+        timeout: int = 90
+    ) -> Tuple[bool, str, dict]:
+        """带工具调用的对话补全；不支持时返回明确失败。"""
+        empty = {"content": "", "tool_calls": []}
+        if not api_key or not api_key.strip():
+            return False, "API Key 不能为空", empty
+        if provider == 'TONGYI':
+            return False, "当前提供商暂不支持工具调用", empty
+        if not tools:
+            return False, "未提供工具定义", empty
+        endpoint = cls._normalize_chat_endpoint(provider, api_url)
+        if not endpoint:
+            return False, "未提供有效的API地址", empty
+        chat_model = model if model else cls.DEFAULT_MODELS.get(provider, 'gpt-3.5-turbo')
+        clean_messages = cls._clean_tool_messages(messages)
+        if not clean_messages:
+            return False, "消息内容为空", empty
+        payload = {
+            "model": chat_model,
+            "messages": clean_messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_tokens": 1200,
+            "temperature": 0.3,
+        }
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        }
+        try:
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=timeout
+            )
+        except requests.exceptions.Timeout:
+            return False, f"请求超时 ({timeout}秒)", empty
+        except requests.exceptions.ConnectionError:
+            return False, "网络连接失败，请检查网络", empty
+        except requests.exceptions.RequestException as e:
+            return False, f"请求异常: {str(e)}", empty
+        except Exception as e:
+            return False, f"对话失败: {str(e)}", empty
+
+        if response.status_code != 200:
+            if response.status_code in (400, 404, 405, 415, 422):
+                return False, "当前模型或接口不支持工具调用", empty
+            _, error_msg, _ = cls._handle_response(response, provider)
+            return False, error_msg, empty
+
+        try:
+            data = response.json()
+        except Exception:
+            return False, "响应解析失败，返回的不是有效JSON", empty
+
+        message = {}
+        try:
+            choices = data.get("choices") or []
+            if choices:
+                message = choices[0].get("message") or {}
+        except Exception:
+            message = {}
+        content = message.get("content")
+        if content is None:
+            content = message.get("reasoning_content") or ""
+        content = str(content or "").strip()
+        tool_calls = []
+        for raw in message.get("tool_calls") or []:
+            if not isinstance(raw, dict):
+                continue
+            function = raw.get("function") or {}
+            name = str(function.get("name") or "").strip()
+            if not name:
+                continue
+            tool_calls.append({
+                "id": str(raw.get("id") or "").strip(),
+                "name": name,
+                "arguments": function.get("arguments") or "",
+            })
+        if not content and not tool_calls:
+            return False, "AI 未返回有效内容", empty
+        return True, "OK", {"content": content, "tool_calls": tool_calls}
+
     @classmethod
     def quick_test(cls, provider: str, api_key: str) -> Tuple[bool, str]:
         """快速测试（使用默认配置）"""

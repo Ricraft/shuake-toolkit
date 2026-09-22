@@ -12,6 +12,7 @@ sys.path.insert(0, _AUTOVISOR_ROOT)
 
 from modules.course_portal import (
     MY_COURSE_HOMEPAGE,
+    MY_COURSE_INDEX,
     MY_COURSE_LINK,
     MY_COURSE_PORTAL,
     PORTAL_READY_SELECTOR,
@@ -20,6 +21,7 @@ from modules.course_portal import (
     is_course_homepage_url,
     is_login_page,
     is_login_url,
+    is_portal_index_url,
     is_zhihuishu_host,
     navigate_to_my_course,
 )
@@ -121,6 +123,30 @@ def test_course_portal_url_checks_are_host_scoped():
     )
 
 
+def test_portal_index_recognizes_only_the_course_index_route():
+    """2026-09 实测：认证终点是门户的 /onlinestuh5 课程首页。"""
+    assert is_portal_index_url("https://onlineweb.zhihuishu.com/")
+    assert is_portal_index_url("https://onlineweb.zhihuishu.com/onlinestuh5")
+    assert is_portal_index_url("https://onlineweb.zhihuishu.com/onlinestuh5/")
+    assert not is_portal_index_url("https://onlineweb.zhihuishu.com/exam")
+    assert not is_portal_index_url("https://onlineweb.zhihuishu.com/stuStudy")
+    assert not is_portal_index_url("https://login.zhihuishu.com/onlinestuh5")
+    assert MY_COURSE_INDEX == "https://onlineweb.zhihuishu.com/onlinestuh5"
+
+
+def test_portal_readiness_targets_the_current_course_sections():
+    """旧卡片类名已消失；就绪判定必须落在现行板块容器上。"""
+    for selector in (
+        "#sharingClassed",
+        "#flipLessoned",
+        "#interestingClassed",
+        "#aiCourseed",
+    ):
+        assert selector in PORTAL_READY_SELECTOR
+    for retired in (".course-list", ".study-card", ".courseCard"):
+        assert retired not in PORTAL_READY_SELECTOR
+
+
 def test_rendered_login_panel_is_detected_before_url_redirect_finishes():
     page = _Page(MY_COURSE_PORTAL, login_panel=True)
 
@@ -150,18 +176,18 @@ def test_existing_portal_requires_a_rendered_course_container():
     ]
 
 
-def test_existing_portal_child_without_course_list_returns_to_portal_root():
+def test_existing_portal_child_without_course_sections_returns_to_portal_index():
     page = _Page("https://onlineweb.zhihuishu.com/exam", render=False)
 
-    async def render_after_root(url, **options):
+    async def render_after_index(url, **options):
         page.goto_calls.append((url, options))
         page.url = url
         page.render = True
 
-    page.goto = render_after_root
+    page.goto = render_after_index
     result = asyncio.run(navigate_to_my_course(page, _Logger()))
     assert result is True
-    assert page.goto_calls[-1][0] == MY_COURSE_PORTAL
+    assert page.goto_calls[-1][0] == MY_COURSE_INDEX
 
 
 def test_homepage_uses_verified_course_link_and_waits_for_render():
@@ -180,7 +206,7 @@ def test_missing_links_fall_back_to_direct_portal_navigation():
     )
     result = asyncio.run(navigate_to_my_course(page, _Logger()))
     assert result is True
-    assert page.goto_calls[-1][0] == MY_COURSE_PORTAL
+    assert page.goto_calls[-1][0] == MY_COURSE_INDEX
 
 
 def test_homepage_failure_still_tries_the_direct_portal():
@@ -193,6 +219,21 @@ def test_homepage_failure_still_tries_the_direct_portal():
     assert result is True
     assert [call[0] for call in page.goto_calls] == [
         MY_COURSE_HOMEPAGE,
+        MY_COURSE_INDEX,
+    ]
+
+
+def test_direct_portal_falls_back_to_the_generic_root_address():
+    page = _Page(
+        "https://example.com/",
+        goto_failures={MY_COURSE_HOMEPAGE, MY_COURSE_INDEX},
+        render=True,
+    )
+    result = asyncio.run(navigate_to_my_course(page, _Logger()))
+    assert result is True
+    assert [call[0] for call in page.goto_calls] == [
+        MY_COURSE_HOMEPAGE,
+        MY_COURSE_INDEX,
         MY_COURSE_PORTAL,
     ]
 

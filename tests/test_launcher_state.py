@@ -40,6 +40,7 @@ class LauncherStateTests(unittest.TestCase):
         visible_failures = []
         notifications = []
         shutdowns = []
+        closes = []
         system_logs = []
         launcher.log_history = {"yatori": [], "autovisor": [], "system": []}
         launcher.log = lambda core, message: visible_failures.append((core, message))
@@ -50,6 +51,7 @@ class LauncherStateTests(unittest.TestCase):
             )
         )
         launcher._maybe_shutdown_after_completion = lambda: shutdowns.append(True)
+        launcher._maybe_close_launcher_after_completion = lambda: closes.append(True)
 
         launcher._handle_runtime_exit("autovisor", 3, False)
 
@@ -75,10 +77,12 @@ class LauncherStateTests(unittest.TestCase):
         self.assertFalse(notifications[0][2])
         self.assertEqual(shutdowns, [])
         self.assertIn("本轮任务存在异常退出，已跳过自动关机", system_logs)
+        self.assertEqual(closes, [])
 
         launcher._runtime_failure_since_batch = False
         launcher._handle_runtime_exit("autovisor", 0, False)
         self.assertEqual(shutdowns, [True])
+        self.assertEqual(closes, [True])
 
     def test_shutdown_failure_is_visible_and_not_marked_pending(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
