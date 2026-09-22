@@ -128,6 +128,7 @@ def build(version: str, out_dir: Path, *, require_version_match: bool = False) -
         "size": archive_path.stat().st_size,
         "sha256": digest.hexdigest(),
         "files": len(payload),
+        "fileList": sorted(names),
         "replaceWhitelist": list(WHITELIST),
     }
     manifest_path = out_dir / "launcher-manifest.json"

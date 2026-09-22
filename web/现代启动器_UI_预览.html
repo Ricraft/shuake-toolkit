@@ -1310,6 +1310,13 @@
                         </div>
                         <div class="flex flex-col" id="changelog-list">
                             <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.3.1 - 自更新完整性加固</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">更新包改为按发布清单逐字节核对全部文件，缺任一文件（例如样式文件）都会拒绝暂存并回滚，不再出现新脚本配旧资源的混合安装</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
                                 <span class="changelog-badge feature">新增</span>
                                 <div>
                                     <div class="text-sm font-semibold">v1.3.0 - 界面主题滑块切换</div>

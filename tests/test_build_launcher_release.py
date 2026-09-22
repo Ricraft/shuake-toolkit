@@ -129,6 +129,15 @@ class BuildTests(unittest.TestCase):
             names = set(zf.namelist())
         missing = [name for name in builder.REQUIRED_FILES if name not in names]
         self.assertEqual(missing, [], f"required files missing from archive: {missing}")
+    def test_manifest_file_list_matches_archive_entries(self):
+        result = builder.build(builder.declared_launcher_version(), self.tmpdir)
+        manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+
+        with zipfile.ZipFile(result["archive"]) as zf:
+            names = sorted(zf.namelist())
+
+        self.assertEqual(manifest["fileList"], names)
+        self.assertEqual(len(manifest["fileList"]), manifest["files"])
     def test_version_match_guard_accepts_declared_version(self):
         version = builder.declared_launcher_version()
         result = builder.build(version, self.tmpdir, require_version_match=True)

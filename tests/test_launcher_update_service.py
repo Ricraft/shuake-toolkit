@@ -33,6 +33,7 @@ from src.launcher_update_service import (
     format_release_notes,
     normalize_sha256_digest,
     normalize_sha256_hex,
+    normalize_payload_paths,
     safe_extract_zip,
     select_latest_release,
     write_apply_script,
@@ -1023,3 +1024,82 @@ def test_apply_script_compares_content_instead_of_only_existence():
     ):
         expected = f'"%PAYLOAD%\\{relative}" "%ROOT%\\{relative}"'
         assert f"fc /b {expected}" in script, relative
+
+
+# ------------------------------------------------- R1：清单驱动的完整性校验
+
+
+def test_normalize_payload_paths_accepts_safe_relative_paths():
+    assert normalize_payload_paths(["src/a.py", "web/b.js"]) == ["src/a.py", "web/b.js"]
+    assert normalize_payload_paths(["src\\a.py"]) == ["src/a.py"]
+    assert normalize_payload_paths(["web/a.js", "web/a.js"]) == ["web/a.js"]
+
+
+def test_normalize_payload_paths_rejects_unsafe_entries():
+    """清单来自发布资产，必须当不可信输入处理（防越界与批处理注入）。"""
+    for bad in (
+        "../evil.py",
+        "src/../../evil.py",
+        "/absolute/x.py",
+        "src/a&b.py",
+        "src/a|b.py",
+        'src/a"b.py',
+        "src/a%b.py",
+        "src/a!b.py",
+        "src/a\nb.py",
+        "",
+        "   ",
+    ):
+        assert normalize_payload_paths([bad]) is None, bad
+    assert normalize_payload_paths([]) is None
+    assert normalize_payload_paths(None) is None
+    assert normalize_payload_paths([1, 2]) is None
+
+
+def test_apply_script_verifies_every_file_in_the_supplied_inventory():
+    inventory = ["统一启动器.py", "web/styles.css", "web/app.js"]
+    script = build_apply_script(
+        version=TAG,
+        current_version=CURRENT,
+        launcher_pid=0,
+        required_files=inventory,
+    )
+
+    assert script.count("fc /b") == len(inventory)
+    for relative in inventory:
+        batch = relative.replace("/", "\\")
+        assert f'fc /b "%PAYLOAD%\\{batch}" "%ROOT%\\{batch}"' in script, relative
+        assert f'if not exist "%ROOT%\\{batch}" set "FAILED=1"' in script, relative
+
+
+def test_package_missing_a_file_declared_by_manifest_is_rejected(workspace):
+    """R1 回归：清单声明了 web/styles.css 而包里没有，必须拒绝，不能留下新旧混合安装。"""
+    base = make_base_dir(workspace)
+    entries = {
+        "统一启动器.py": "# launcher\n",
+        "requirements.txt": "# req\n",
+        "src/web_action_service.py": "# actions\n",
+        "web/app.js": "// app\n",
+        "web/现代启动器_UI_预览.html": "<html></html>\n",
+    }
+    partial = workspace / "no-css.zip"
+    with zipfile.ZipFile(partial, "w") as handle:
+        for name, content in entries.items():
+            handle.writestr(name, content)
+
+    manifest = {
+        "version": TAG,
+        "fileList": sorted(list(entries) + ["web/styles.css"]),
+    }
+    release = _release(TAG, assets=[_zip_asset(TAG, partial), _manifest_asset_entry()])
+    service = make_service(
+        base, releases=[release], archive=str(partial), manifest=manifest
+    )
+    token = service.prepare_update_confirmation()["updateDialog"]["confirmationToken"]
+
+    result = service.install_confirmed(token)
+
+    assert result["ok"] is False
+    assert "web/styles.css" in result["message"]
+    assert "launcher-manifest.json" in result["message"]
+    assert not (base / UPDATE_STAGING_DIR_NAME / APPLY_SCRIPT_NAME).exists()

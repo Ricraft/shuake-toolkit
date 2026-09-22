@@ -178,6 +178,35 @@ def format_release_notes(body, *, max_lines=14, max_chars=900):
     return summary
 
 
+_UNSAFE_PAYLOAD_PATH_RE = re.compile(r'[\\%!"&|<>^?*\r\n\t]')
+
+
+def normalize_payload_paths(paths):
+    """Return safe posix-relative payload paths, or ``None`` when unusable.
+
+    The list comes from a downloaded release manifest, so it is treated as
+    untrusted input: entries that could escape the install root or break the
+    generated batch script are rejected outright rather than sanitised.
+    """
+    if not isinstance(paths, (list, tuple)) or not paths:
+        return None
+    normalized = []
+    seen = set()
+    for raw in paths:
+        if not isinstance(raw, str):
+            return None
+        text = raw.strip().replace("\\", "/")
+        if not text or text.startswith("/") or ".." in text.split("/"):
+            return None
+        if _UNSAFE_PAYLOAD_PATH_RE.search(text):
+            return None
+        if text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized or None
+
+
 def safe_version_dirname(version):
     return _UNSAFE_FILENAME_RE.sub("_", str(version or "").strip()).strip("_") or "unknown"
 
@@ -249,12 +278,19 @@ def build_apply_script(
     current_version,
     launcher_pid=0,
     payload_dir_name=None,
+    required_files=None,
 ):
     """Build the out-of-process apply script (CRLF, UTF-8).
 
     Every path is quoted; ``ROOT`` is derived from ``%~dp0..`` so the script
     keeps working when the launcher directory contains spaces or CJK
     characters and even if the whole folder is moved after staging.
+
+    ``required_files`` is the expected payload inventory (posix-relative
+    paths). It defaults to :data:`REQUIRED_STAGED_FILES`; the update service
+    passes the release manifest's full file list so the script verifies every
+    file it was supposed to install, not just a few key ones. A package that
+    omits any of them is rolled back instead of silently leaving old files.
     """
     payload_name = payload_dir_name or safe_version_dirname(version)
     try:
@@ -262,6 +298,12 @@ def build_apply_script(
     except (TypeError, ValueError):
         pid_text = "0"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    inventory = [
+        str(entry).strip().replace("/", "\\")
+        for entry in (required_files or REQUIRED_STAGED_FILES)
+        if str(entry).strip()
+    ]
 
     lines = [
         "@echo off",
@@ -272,7 +314,7 @@ def build_apply_script(
         f"rem  版本: {current_version} 到 {version}",
         "rem  替换白名单: 统一启动器.py requirements.txt src web",
         "rem  Yatori Autovisor data logs 与全部用户配置文件不会被修改",
-        "rem  先备份到 .update-backup，替换后校验关键文件，失败自动回滚",
+        "rem  先备份到 .update-backup，替换后逐字节校验，失败自动回滚",
         "rem ==============================================================",
         "",
         'for %%I in ("%~dp0..") do set "ROOT=%%~fI"',
@@ -296,7 +338,7 @@ def build_apply_script(
         "if not errorlevel 1 (",
         "    set /a WAITED+=1",
         "    if !WAITED! GEQ 60 (",
-        '        echo [错误] 统一启动器仍在运行，PID %LAUNCHER_PID%。请先关闭启动器，再重新运行本脚本。',
+        "        echo [错误] 统一启动器仍在运行，PID %LAUNCHER_PID%。请先关闭启动器，再重新运行本脚本。",
         "        goto fail",
         "    )",
         "    timeout /t 1 /nobreak >nul",
@@ -312,9 +354,9 @@ def build_apply_script(
         'echo 正在备份当前版本到 "%BACKUP%" ...',
         'mkdir "%BACKUP%" >nul 2>nul',
         'if exist "%ROOT%\\src" robocopy "%ROOT%\\src" "%BACKUP%\\src" /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
-        "if errorlevel 8 set \"FAILED=1\"",
+        'if errorlevel 8 set "FAILED=1"',
         'if exist "%ROOT%\\web" robocopy "%ROOT%\\web" "%BACKUP%\\web" /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
-        "if errorlevel 8 set \"FAILED=1\"",
+        'if errorlevel 8 set "FAILED=1"',
         'if exist "%ROOT%\\统一启动器.py" copy /Y "%ROOT%\\统一启动器.py" "%BACKUP%\\统一启动器.py" >nul',
         'if exist "%ROOT%\\requirements.txt" copy /Y "%ROOT%\\requirements.txt" "%BACKUP%\\requirements.txt" >nul',
         'if "%FAILED%"=="1" (',
@@ -324,27 +366,22 @@ def build_apply_script(
         "",
         "echo 正在替换白名单文件 ...",
         'robocopy "%PAYLOAD%\\src" "%ROOT%\\src" /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
-        "if errorlevel 8 set \"FAILED=1\"",
+        'if errorlevel 8 set "FAILED=1"',
         'robocopy "%PAYLOAD%\\web" "%ROOT%\\web" /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
-        "if errorlevel 8 set \"FAILED=1\"",
+        'if errorlevel 8 set "FAILED=1"',
         'copy /Y "%PAYLOAD%\\统一启动器.py" "%ROOT%\\统一启动器.py" >nul',
-        "if errorlevel 1 set \"FAILED=1\"",
+        'if errorlevel 1 set "FAILED=1"',
         'if exist "%PAYLOAD%\\requirements.txt" copy /Y "%PAYLOAD%\\requirements.txt" "%ROOT%\\requirements.txt" >nul',
         "",
-        "rem ---- 校验关键文件，任一缺失即回滚 ----",
-        'if not exist "%ROOT%\\统一启动器.py" set "FAILED=1"',
-        'if not exist "%ROOT%\\src\\web_action_service.py" set "FAILED=1"',
-        'if not exist "%ROOT%\\web\\app.js" set "FAILED=1"',
-        'if not exist "%ROOT%\\web\\现代启动器_UI_预览.html" set "FAILED=1"',
-        "rem ---- 再逐字节比对：只判断存在会让残缺包静默留下旧文件（新旧混合）----",
-        'fc /b "%PAYLOAD%\\统一启动器.py" "%ROOT%\\统一启动器.py" >nul 2>nul',
-        'if errorlevel 1 set "FAILED=1"',
-        'fc /b "%PAYLOAD%\\src\\web_action_service.py" "%ROOT%\\src\\web_action_service.py" >nul 2>nul',
-        'if errorlevel 1 set "FAILED=1"',
-        'fc /b "%PAYLOAD%\\web\\app.js" "%ROOT%\\web\\app.js" >nul 2>nul',
-        'if errorlevel 1 set "FAILED=1"',
-        'fc /b "%PAYLOAD%\\web\\现代启动器_UI_预览.html" "%ROOT%\\web\\现代启动器_UI_预览.html" >nul 2>nul',
-        'if errorlevel 1 set "FAILED=1"',
+        "rem ---- 逐一校验清单文件是否落地，缺失即回滚 ----",
+    ]
+    for rel in inventory:
+        lines.append(f'if not exist "%ROOT%\\{rel}" set "FAILED=1"')
+    lines.append("rem ---- 再逐字节比对：只判断存在会让残缺包静默留下旧文件（新旧混合）----")
+    for rel in inventory:
+        lines.append(f'fc /b "%PAYLOAD%\\{rel}" "%ROOT%\\{rel}" >nul 2>nul')
+        lines.append('if errorlevel 1 set "FAILED=1"')
+    lines += [
         'if "%FAILED%"=="1" goto rollback',
         "",
         'echo [完成] 统一启动器已更新到 "%VERSION%"。',
@@ -376,6 +413,7 @@ def build_apply_script(
         "exit /b 0",
     ]
     return "\r\n".join(lines) + "\r\n"
+
 
 
 def write_apply_script(path, text):
@@ -837,16 +875,23 @@ class LauncherUpdateService:
         with zipfile.ZipFile(archive_path) as zip_ref:
             safe_extract_zip(zip_ref, payload_dir)
 
+        expected_files, inventory_source = self._expected_payload_files(release)
         missing = [
             relative
-            for relative in REQUIRED_STAGED_FILES
-            if not os.path.exists(os.path.join(payload_dir, relative))
+            for relative in expected_files
+            if not os.path.exists(os.path.join(payload_dir, *relative.split("/")))
         ]
         if missing:
+            preview = "、".join(missing[:5])
+            if len(missing) > 5:
+                preview += f" 等共 {len(missing)} 项"
             return {
                 "ok": False,
-                "message": "更新包缺少必要文件: " + "、".join(missing),
+                "message": (
+                    f"更新包缺少必要文件（依据 {inventory_source}）: {preview}"
+                ),
             }
+        self._log(f"更新包文件清单校验通过（依据 {inventory_source}，{len(expected_files)} 项）")
 
         script_path = os.path.join(staging_root, APPLY_SCRIPT_NAME)
         write_apply_script(
@@ -856,6 +901,7 @@ class LauncherUpdateService:
                 current_version=current_version,
                 launcher_pid=self.pid,
                 payload_dir_name=payload_name,
+                required_files=expected_files,
             ),
         )
 
@@ -880,6 +926,28 @@ class LauncherUpdateService:
             ),
             "toastType": "success",
         }
+
+    def _expected_payload_files(self, release):
+        """Return ``(posix_relative_paths, source_label)`` for completeness checks.
+
+        The release manifest's ``fileList`` is authoritative when available, so
+        a package that silently omits files is rejected instead of producing a
+        mixed install. Older releases without a file list fall back to the
+        built-in required files.
+        """
+        manifest, _error = self._fetch_manifest(release)
+        if manifest is not None:
+            files = normalize_payload_paths(manifest.get("fileList"))
+            if files:
+                return files, "launcher-manifest.json"
+            self._log(
+                "launcher-manifest.json 未提供 fileList，改用内置必需文件清单"
+                "（完整性校验范围较小）"
+            )
+        return (
+            [str(item).replace(os.sep, "/") for item in REQUIRED_STAGED_FILES],
+            "内置必需文件清单",
+        )
 
     # -------------------------------------------------- verification
 
