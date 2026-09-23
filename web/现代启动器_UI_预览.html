@@ -1175,6 +1175,13 @@
                         </div>
                         <div class="setting-row">
                             <div class="setting-info">
+                                <label class="setting-title" for="pref-yatori-max-runtime">Yatori 最长运行时间（分钟）</label>
+                                <div class="setting-desc">0 为关闭，可设置 1～10080 分钟。Yatori 进入运行状态后开始计时；提前完成或手动停止会取消计时；达到上限仅停止 Yatori，不保证学习完成，也不会按 &quot;刷完自动关机&quot; 处理。运行中修改仅下次启动生效，与账号的学习时长设置不同。</div>
+                            </div>
+                            <input id="pref-yatori-max-runtime" type="number" min="0" max="10080" step="1" value="0" class="input-field" style="width: 110px;" aria-label="Yatori 最长运行时间（分钟）" onchange="saveYatoriMaxRuntime(this)">
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
                                 <div class="setting-title">刷完自动关机</div>
                                 <div class="setting-desc">所有账号课程刷完后自动关闭计算机</div>
                             </div>
@@ -1309,6 +1316,13 @@
                             <h2 class="font-bold text-lg">更新日志</h2>
                         </div>
                         <div class="flex flex-col" id="changelog-list">
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.6.3 - Yatori 平台设置与运行时间管理</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">Yatori 平台选项及视频、考试模式按官方生成器规则展示；学习通账号的学习时长传给 Yatori 核心执行，并非启动器倒计时。软件设置新增 Yatori 最长运行时间（分钟），默认 0 不限制，达到上限仅停止 Yatori；题库 AI 智能答题与本地题库未命中时的 AI 兜底继续保留。</div>
+                                </div>
+                            </div>
                             <div class="changelog-item">
                                 <span class="changelog-badge improve">优化</span>
                                 <div>

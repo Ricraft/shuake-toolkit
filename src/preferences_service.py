@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
@@ -17,6 +18,7 @@ DEFAULT_PREFERENCES = {
     "autoShutdown": False,
     "closeLauncherOnComplete": False,
     "autoRun": False,
+    "yatoriMaxRuntimeMinutes": 0,
     "minimizeToTray": False,
     "startMinimized": False,
     "alwaysOnTop": False,
@@ -33,6 +35,21 @@ DEFAULT_PREFERENCES = {
     "achievements": {},
     "achievementResetToken": 0,
 }
+
+
+def normalize_yatori_max_runtime(value):
+    """0 disables the limit; cap it to one week to avoid runaway timers."""
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):
+        raise ValueError("Yatori 最长运行时间须为 0 到 10080 分钟的数字")
+    try:
+        minutes = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Yatori 最长运行时间须为 0 到 10080 分钟的数字") from exc
+    if not math.isfinite(minutes) or not 0 <= minutes <= 10080:
+        raise ValueError("Yatori 最长运行时间须为 0 到 10080 分钟的数字")
+    return int(minutes) if minutes.is_integer() else minutes
 
 
 class PreferencesService:
@@ -64,6 +81,12 @@ class PreferencesService:
                 stored = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(stored, dict):
                     values.update(deepcopy(stored))
+                    try:
+                        values["yatoriMaxRuntimeMinutes"] = normalize_yatori_max_runtime(
+                            values["yatoriMaxRuntimeMinutes"]
+                        )
+                    except ValueError:
+                        values["yatoriMaxRuntimeMinutes"] = 0
         except Exception as exc:
             self.log(f"加载启动器偏好失败: {exc}")
         return values
@@ -107,6 +130,10 @@ class PreferencesService:
 
         try:
             normalized_payload = deepcopy(payload)
+            if "yatoriMaxRuntimeMinutes" in normalized_payload:
+                normalized_payload["yatoriMaxRuntimeMinutes"] = normalize_yatori_max_runtime(
+                    normalized_payload["yatoriMaxRuntimeMinutes"]
+                )
         except Exception as exc:
             return {
                 "ok": False,

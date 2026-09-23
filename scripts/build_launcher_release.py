@@ -35,8 +35,24 @@ WHITELIST = (
 )
 
 # Never packaged, even when they live under a whitelisted directory.
-EXCLUDED_DIR_NAMES = {"__pycache__", ".pytest_cache", "node_modules", ".git"}
+EXCLUDED_DIR_NAMES = {"__pycache__", ".pytest_cache", "node_modules", ".git", "data", "logs", "log", "output", "uploads", "attachments", "screenshots", ".dsh"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
+PRIVATE_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".log", ".bak", ".secret"}
+PRIVATE_NAMES = {"config.yaml", "configs.ini", "qb_config.json", "launcher_preferences.json", "cookies.json"}
+
+
+def is_private_payload(relative: str) -> bool:
+    """Never ship runtime accounts, session QR codes or credentials."""
+    relative = Path(relative).as_posix()
+    name = Path(relative).name.lower()
+    return (
+        name in PRIVATE_NAMES
+        or (name.startswith("cookies_") and name.endswith(".json"))
+        or name == ".env" or name.startswith(".env.")
+        or Path(name).suffix in PRIVATE_SUFFIXES
+        or (relative.lower().startswith("autovisor/res/qrcode.")
+            and Path(name).suffix in {".jpg", ".jpeg", ".png", ".webp"})
+    )
 
 VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
 
@@ -85,9 +101,10 @@ def iter_payload(root: Path):
             dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDED_DIR_NAMES)
             for name in sorted(filenames):
                 path = Path(dirpath) / name
-                if path.suffix in EXCLUDED_SUFFIXES:
+                arcname = path.relative_to(root).as_posix()
+                if path.suffix in EXCLUDED_SUFFIXES or is_private_payload(arcname):
                     continue
-                yield path, path.relative_to(root).as_posix()
+                yield path, arcname
 
 
 def build(version: str, out_dir: Path, *, require_version_match: bool = False) -> dict:

@@ -74,10 +74,13 @@ def test_platform_switch_toggles_xxt_settings_visibility():
     sync = _block(
         _frontend(),
         "function syncYatoriPlatformCard(",
-        "function updateYatoriCourseFilterUI(",
+        "function gatherYatoriSettings()",
     )
-    assert 'data-role="xxt-course-settings"' in sync
-    assert "pc==='XUEXITONG'" in sync
+    assert 'data-role="xxt-study-time"' in sync
+    assert 'data-role="xxt-cx-node"' in sync
+    assert "video?.value === '3'" in sync
+    assert 'data-role="exam-chapter-switches"' in sync
+    assert "pc === 'XUEXITONG'" in sync
 
 
 def _settings_html() -> str:

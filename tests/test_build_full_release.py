@@ -44,11 +44,30 @@ class PayloadTests(unittest.TestCase):
         self.assertTrue(any(name.startswith("Autovisor/") for name in entries))
         self.assertTrue(any(name.startswith("Yatori/") for name in entries))
 
+    def test_nested_secrets_qr_and_attachments_cannot_enter_full_release(self):
+        with tempfile.TemporaryDirectory(prefix="release-secrets-") as folder:
+            root = Path(folder)
+            for relative in (
+                "Autovisor/res/QRcode.jpg", "Autovisor/res/cookies_123.json",
+                "Autovisor/extra/configs.ini", "Yatori/extra/config.yaml",
+                "Autovisor/res/attachments/private.txt", "src/.env.local",
+                "web/uploads/user.txt", "web/launcher_preferences.json",
+                "Yatori/assets/cmap.json", "Autovisor/res/stealth.min.js",
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture", encoding="utf-8")
+            entries = {name for _, name in builder.iter_payload(root)}
+            self.assertEqual(entries, {
+                "Yatori/assets/cmap.json", "Autovisor/res/stealth.min.js"
+            })
+
     def test_payload_excludes_user_data_and_runtime_binaries(self):
         entries = {arcname for _, arcname in builder.iter_payload(PROJECT_ROOT)}
         forbidden = (
             "Autovisor/configs.ini",
             "Autovisor/res/cookies.json",
+            "Autovisor/res/QRcode.jpg",
             "Yatori/config.yaml",
             "data/",
             "logs/",

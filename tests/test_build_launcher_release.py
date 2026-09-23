@@ -67,6 +67,24 @@ class PayloadTests(unittest.TestCase):
             for forbidden in ("Yatori/", "Autovisor/", "data/", "logs/", "dist/"):
                 self.assertFalse(entry.startswith(forbidden), entry)
 
+    def test_payload_excludes_nested_runtime_secrets(self):
+        with tempfile.TemporaryDirectory(prefix="launcher-secrets-") as folder:
+            root = Path(folder)
+            (root / "统一启动器.py").write_text("launcher", encoding="utf-8")
+            (root / "requirements.txt").write_text("deps", encoding="utf-8")
+            for relative in (
+                "src/preferences.py", "src/config.yaml", "src/.env.local",
+                "src/data/personal.txt", "web/app.js", "web/cookies_abc.json",
+                "web/uploads/private.txt", "web/launcher_preferences.json",
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture", encoding="utf-8")
+            entries = {name for _, name in builder.iter_payload(root)}
+            self.assertEqual(entries, {
+                "统一启动器.py", "requirements.txt", "src/preferences.py", "web/app.js"
+            })
+
     def test_payload_skips_caches(self):
         entries = [arcname for _, arcname in builder.iter_payload(PROJECT_ROOT)]
         self.assertFalse([e for e in entries if "__pycache__" in e], "cache leaked")

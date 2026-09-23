@@ -18,9 +18,9 @@ import zipfile
 from pathlib import Path
 
 try:
-    from .build_launcher_release import declared_launcher_version, normalize_version
+    from .build_launcher_release import declared_launcher_version, normalize_version, is_private_payload
 except ImportError:  # pragma: no cover - direct script execution
-    from build_launcher_release import declared_launcher_version, normalize_version
+    from build_launcher_release import declared_launcher_version, normalize_version, is_private_payload
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,6 +50,10 @@ EXCLUDED_DIR_NAMES = {
     "runtime_deps",
     "logs",
     "log",
+    "uploads",
+    "attachments",
+    "screenshots",
+    ".dsh",
     "data",
     "output",
     "dist",
@@ -113,7 +117,7 @@ def iter_payload(root: Path):
             for name in sorted(filenames):
                 path = current / name
                 relative = path.relative_to(root).as_posix()
-                if path.suffix.lower() in EXCLUDED_SUFFIXES:
+                if path.suffix.lower() in EXCLUDED_SUFFIXES or is_private_payload(relative):
                     continue
                 if relative in EXCLUDED_RELATIVE_PATHS:
                     continue

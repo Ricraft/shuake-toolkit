@@ -49,6 +49,7 @@ from src.web_action_service import (
 from src.web_settings_service import WebSettingsService
 from src.web_state_service import WebStateService
 from src.web_window_controller import WebWindowController
+from src.yatori_runtime_limit import YatoriRuntimeLimit
 
 try:
     import webview
@@ -84,7 +85,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.6.2"
+    LAUNCHER_VERSION = "v1.6.3"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -1137,14 +1138,34 @@ class UnifiedLauncher:
     def _claim_runtime_start(self, script_type):
         return self._get_runtime_coordinator().claim_runtime_start(script_type)
 
+    def _get_yatori_runtime_limit(self):
+        service = getattr(self, '_yatori_runtime_limit', None)
+        if service is None:
+            service = YatoriRuntimeLimit(self)
+            self._yatori_runtime_limit = service
+        return service
+
     def _mark_runtime_running(self, script_type, process):
+        if script_type == 'yatori':
+            # Serialize the mark and timer registration against stop_yatori.
+            with self._runtime_lock:
+                self._get_process_supervisor().mark_running(script_type, process)
+                minutes = self.get_web_preferences().get('yatoriMaxRuntimeMinutes', 0)
+                self._get_yatori_runtime_limit().started(process, minutes)
+            return
         self._get_process_supervisor().mark_running(script_type, process)
 
     def _mark_runtime_stopped(self, script_type, process=None):
-        stopped = self._get_process_supervisor().mark_stopped(
-            script_type,
-            process,
-        )
+        if script_type == 'yatori':
+            with self._runtime_lock:
+                stopped = self._get_process_supervisor().mark_stopped(
+                    script_type, process,
+                )
+                self._get_yatori_runtime_limit().cancel(process)
+        else:
+            stopped = self._get_process_supervisor().mark_stopped(
+                script_type, process,
+            )
         if stopped and script_type == 'practice':
             self.practice_account_id = None
         return stopped
@@ -1188,17 +1209,19 @@ class UnifiedLauncher:
         return self.start_script(script_type)
 
     def stop_yatori(self):
-        """停止 Yatori"""
-        if self.starting.get('yatori') and not self.processes.get('yatori'):
-            self.stop_requested['yatori'] = True
-            self.log_system("正在取消 Yatori 启动...")
-            return
-        if self.processes['yatori'] and self.running['yatori']:
-            self.log_system("正在停止 Yatori...")
-            self.stop_requested['yatori'] = True
-            self._terminate_process_tree(self.processes['yatori'], "Yatori")
-            self._mark_runtime_stopped('yatori')
-            self.log_system("Yatori 已关闭刷课。")
+        """停止 Yatori；与超时回调共用状态锁，防止误停新进程。"""
+        with self._runtime_lock:
+            self._get_yatori_runtime_limit().cancel()
+            if self.starting.get('yatori') and not self.processes.get('yatori'):
+                self.stop_requested['yatori'] = True
+                self.log_system("正在取消 Yatori 启动...")
+                return
+            if self.processes['yatori'] and self.running['yatori']:
+                self.log_system("正在停止 Yatori...")
+                self.stop_requested['yatori'] = True
+                self._terminate_process_tree(self.processes['yatori'], "Yatori")
+                self._mark_runtime_stopped('yatori')
+                self.log_system("Yatori 已关闭刷课。")
 
     def stop_autovisor(self):
         """停止 Autovisor"""
@@ -1518,6 +1541,7 @@ class UnifiedLauncher:
             if not confirmed:
                 self.log_system("有核心任务正在运行，取消未确认的退出请求。")
                 return
+        self._get_yatori_runtime_limit().cancel()
         self._cancel_scheduled_callbacks()
         if core_task_running:
             self.stop_all()
