@@ -91,12 +91,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.version.outputs.value }}"
+          if [ -f "docs/releases/$tag.md" ]; then
+            notes=(--notes-file "docs/releases/$tag.md")
+          else
+            notes=(--generate-notes)
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag exists; uploading assets (clobber)."
+            echo "Release $tag exists; uploading assets and updating notes."
             gh release upload "$tag" dist/*.zip dist/launcher-manifest.json dist/full-manifest.json --clobber
+            gh release edit "$tag" --title "统一启动器 $tag" "${notes[@]}"
           else
             gh release create "$tag" \
               dist/*.zip dist/launcher-manifest.json dist/full-manifest.json \
               --title "统一启动器 $tag" \
-              --generate-notes
+              "${notes[@]}"
           fi
