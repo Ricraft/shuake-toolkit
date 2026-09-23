@@ -1309,7 +1309,14 @@
                             <h2 class="font-bold text-lg">更新日志</h2>
                         </div>
                         <div class="flex flex-col" id="changelog-list">
-<div class="changelog-item">
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.6.2 - 启动器更新检查备用探测</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">「检查启动器更新」遇 GitHub API 限流或网络错误时改用官方 Release 页面探测；下载仍须通过清单大小与 SHA256 校验，页面备用探测仅覆盖 latest 正式版，不包含 beta/prerelease</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
                                 <span class="changelog-badge fix">修复</span>
                                 <div>
                                     <div class="text-sm font-semibold">v1.6.1 - 启动与运行稳定性修复</div>

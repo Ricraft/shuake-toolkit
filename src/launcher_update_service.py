@@ -32,6 +32,8 @@ import urllib.error
 import urllib.request
 import zipfile
 from datetime import datetime
+from html.parser import HTMLParser
+from urllib.parse import unquote, urljoin, urlsplit
 
 try:
     from .core_manager import CoreManager
@@ -42,6 +44,14 @@ except ImportError:  # pragma: no cover - direct maintenance execution
 LAUNCHER_REPO = "Ricraft/shuake-toolkit"
 LAUNCHER_RELEASES_API_URL = (
     f"https://api.github.com/repos/{LAUNCHER_REPO}/releases?per_page=20"
+)
+LAUNCHER_LATEST_RELEASE_PAGE_URL = (
+    f"https://github.com/{LAUNCHER_REPO}/releases/latest"
+)
+# latest 是 GitHub 正式版入口；该回退不覆盖 beta/prerelease。
+_FALLBACK_RELEASE_NOTE = (
+    "回退探测读取 GitHub 官方 latest Release 页面，仅代表正式版；"
+    "beta/prerelease 不在此探测范围。"
 )
 
 # 发布侧契约：launcher-<version>.zip + launcher-manifest.json
@@ -80,7 +90,36 @@ REQUIRED_STAGED_FILES = (
 USER_AGENT = "shuake-toolkit-launcher-updater/1.0"
 _SHA256_HEX_RE = re.compile(r"[0-9a-fA-F]{64}")
 _UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_SAFE_RELEASE_TAG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}")
 _SSL_CONTEXT = ssl.create_default_context()
+
+
+class _HrefCollector(HTMLParser):
+    """Collect href values without interpreting untrusted HTML as code."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.hrefs = []
+
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            if name.lower() == "href" and isinstance(value, str):
+                self.hrefs.append(value)
+
+    handle_startendtag = handle_starttag
+
+
+class _OfficialGitHubRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never follow an HTML-page redirect away from official HTTPS GitHub."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        destination = urljoin(req.full_url, newurl)
+        parsed = urlsplit(destination)
+        if parsed.scheme != "https" or parsed.netloc != "github.com":
+            raise urllib.error.URLError(
+                "Release page redirected outside official https://github.com"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, destination)
 
 
 def _run_in_background(target):
@@ -446,6 +485,7 @@ class LauncherUpdateService:
         log=None,
         on_result=None,
         opener=None,
+        page_reader=None,
         downloader=None,
         repo=LAUNCHER_REPO,
         releases_api_url=None,
@@ -462,6 +502,9 @@ class LauncherUpdateService:
         self.log = log if callable(log) else (lambda _message: None)
         self.on_result = on_result if callable(on_result) else None
         self.opener = opener or self._default_opener
+        # Separate HTML reader keeps normal API checks unchanged and makes the
+        # narrowly-scoped official-page fallback deterministic in tests.
+        self.page_reader = page_reader or self._default_page_reader
         self.downloader = downloader or self._default_downloader
         self.pid = self._coerce_pid(pid)
         self.request_timeout = request_timeout
@@ -519,6 +562,35 @@ class LauncherUpdateService:
                 body = b""
             return int(exc.code), body
 
+    @staticmethod
+    def _default_page_reader(url, timeout=15):
+        """Return ``(status, body_bytes, final_url)`` for an HTML page.
+
+        The final URL is part of the security contract: urllib follows redirects,
+        so callers must validate it before trusting any page contents or links.
+        """
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        page_opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=_SSL_CONTEXT),
+            _OfficialGitHubRedirectHandler(),
+        )
+        try:
+            with page_opener.open(request, timeout=timeout) as response:
+                status = int(getattr(response, "status", 200) or 200)
+                return status, response.read(), response.geturl()
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read() or b""
+            except Exception:  # pragma: no cover - defensive
+                body = b""
+            return int(exc.code), body, exc.geturl()
+
     def _default_downloader(self, url, target_path, progress=None, timeout=120):
         request = urllib.request.Request(
             url, headers={"User-Agent": USER_AGENT}
@@ -550,23 +622,244 @@ class LauncherUpdateService:
 
     # -------------------------------------------------- checking
 
+    @staticmethod
+    def _official_release_page_url_kind(url):
+        """Validate a canonical GitHub URL and identify latest/tag pages."""
+        try:
+            parsed = urlsplit(str(url or ""))
+        except Exception:
+            return None, None
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "github.com"
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None, None
+        base = f"/{LAUNCHER_REPO}/releases/"
+        if parsed.path == base + "latest":
+            return "latest", None
+        if not parsed.path.startswith(base + "tag/"):
+            return None, None
+        raw_tag = parsed.path[len(base + "tag/"):]
+        if not raw_tag or "/" in raw_tag:
+            return None, None
+        tag = unquote(raw_tag)
+        if (
+            not _SAFE_RELEASE_TAG_RE.fullmatch(tag)
+            or parse_launcher_version(tag) is None
+        ):
+            return None, None
+        return "tag", tag
+
+    @staticmethod
+    def _release_asset_url(url, tag, filename):
+        """Accept only exact official download paths for this tag and filename."""
+        try:
+            parsed = urlsplit(str(url or ""))
+        except Exception:
+            return False
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "github.com"
+            or parsed.query
+            or parsed.fragment
+        ):
+            return False
+        decoded_segments = [unquote(part) for part in parsed.path.split("/")]
+        expected_segments = [
+            "", *LAUNCHER_REPO.split("/"), "releases", "download", tag, filename
+        ]
+        return decoded_segments == expected_segments
+
+    @staticmethod
+    def _html_hrefs(body):
+        if isinstance(body, bytes):
+            text = body.decode("utf-8", "replace")
+        elif isinstance(body, str):
+            text = body
+        else:
+            text = ""
+        parser = _HrefCollector()
+        try:
+            parser.feed(text)
+            parser.close()
+        except Exception:  # pragma: no cover - HTMLParser is deliberately forgiving
+            pass
+        return parser.hrefs
+
+    def _read_release_page(self, url):
+        """Read a page and reject failed/non-HTTPS or non-GitHub redirects."""
+        try:
+            response = self.page_reader(url, self.request_timeout)
+        except Exception as exc:
+            return None, f"无法读取 {url}：{exc}"
+        if not isinstance(response, (tuple, list)) or len(response) != 3:
+            return None, "页面读取器未返回 HTTP 状态、页面内容和最终 URL。"
+        status, body, final_url = response
+        try:
+            status = int(status)
+        except (TypeError, ValueError):
+            return None, "页面读取器返回了无效 HTTP 状态。"
+        if status < 200 or status >= 300:
+            return None, f"页面返回 HTTP {status}。"
+        # Every redirect target must remain on the exact official GitHub host.
+        try:
+            final = urlsplit(str(final_url or ""))
+        except Exception:
+            final = None
+        if (
+            final is None
+            or final.scheme != "https"
+            or final.netloc != "github.com"
+            or final.query
+            or final.fragment
+        ):
+            return None, "页面重定向到非官方或不安全 URL，已拒绝该回退响应。"
+        return (body, str(final_url)), ""
+
+    def _fetch_release_page_fallback(self):
+        """Read the official stable latest page and its exact launcher assets."""
+        if self.repo != LAUNCHER_REPO:
+            return None, "回退仅允许目标仓库 Ricraft/shuake-toolkit。"
+
+        latest_response, error = self._read_release_page(
+            LAUNCHER_LATEST_RELEASE_PAGE_URL
+        )
+        if error:
+            return None, error
+        body, final_url = latest_response
+        page_kind, tag = self._official_release_page_url_kind(final_url)
+        if page_kind == "latest":
+            # Some GitHub responses keep /latest instead of redirecting. Only
+            # accept one unambiguous official, parseable tag linked by the page.
+            linked_tags = set()
+            for href in self._html_hrefs(body):
+                try:
+                    candidate = urljoin(final_url, href)
+                except Exception:
+                    continue
+                candidate_kind, candidate_tag = self._official_release_page_url_kind(
+                    candidate
+                )
+                if candidate_kind == "tag":
+                    linked_tags.add(candidate_tag)
+            if len(linked_tags) != 1:
+                return None, (
+                    "latest 页面未重定向到单一、可解析的官方 Release 标签。"
+                )
+            tag = next(iter(linked_tags))
+        elif page_kind != "tag":
+            return None, "页面最终地址不是目标仓库的官方 latest/tag Release 页面。"
+
+        tag_url = f"https://github.com/{LAUNCHER_REPO}/releases/tag/{tag}"
+        assets_url = f"https://github.com/{LAUNCHER_REPO}/releases/expanded_assets/{tag}"
+        asset_page, asset_page_error = self._read_release_page(assets_url)
+        found = {}
+        install_unavailable_reason = ""
+        if asset_page_error:
+            install_unavailable_reason = (
+                f"无法确认该版本的发布资产（{asset_page_error}）"
+            )
+        else:
+            asset_body, assets_final_url = asset_page
+            if assets_final_url != assets_url:
+                install_unavailable_reason = (
+                    "资产页重定向到非预期地址，已拒绝自动安装。"
+                )
+            else:
+                expected_names = (
+                    f"{LAUNCHER_ASSET_PREFIX}{tag}{LAUNCHER_ASSET_SUFFIX}",
+                    LAUNCHER_MANIFEST_NAME,
+                )
+                for href in self._html_hrefs(asset_body):
+                    try:
+                        asset_url = urljoin(assets_url, href)
+                    except Exception:
+                        continue
+                    for filename in expected_names:
+                        if (
+                            filename not in found
+                            and self._release_asset_url(asset_url, tag, filename)
+                        ):
+                            found[filename] = asset_url
+                missing = [name for name in expected_names if name not in found]
+                if missing:
+                    install_unavailable_reason = (
+                        "官方资产页未同时提供精确的 "
+                        + " 与 ".join(missing)
+                        + "；已仅显示版本并禁止自动安装。"
+                    )
+
+        expected_zip = f"{LAUNCHER_ASSET_PREFIX}{tag}{LAUNCHER_ASSET_SUFFIX}"
+        assets = []
+        if expected_zip in found:
+            assets.append({
+                "name": expected_zip,
+                "browser_download_url": found[expected_zip],
+            })
+        if LAUNCHER_MANIFEST_NAME in found:
+            assets.append({
+                "name": LAUNCHER_MANIFEST_NAME,
+                "browser_download_url": found[LAUNCHER_MANIFEST_NAME],
+            })
+        if not install_unavailable_reason and len(assets) != 2:
+            install_unavailable_reason = (
+                "官方资产页未确认完整的 ZIP 与 manifest 资产，已禁止自动安装。"
+            )
+
+        # The /releases/latest route represents a published stable release. It
+        # intentionally does not discover prereleases, unlike the API listing.
+        return {
+            "tag_name": tag,
+            "draft": False,
+            "published_at": "",
+            "body": "",
+            "html_url": tag_url,
+            "assets": assets,
+            "_launcher_page_fallback": True,
+            "_install_unavailable_reason": install_unavailable_reason,
+        }, ""
+
+    def _fallback_after_api_error(self, original_error):
+        release, fallback_error = self._fetch_release_page_fallback()
+        if release is not None:
+            return [release], ""
+        return None, (
+            f"{original_error} GitHub 官方 Releases 页面回退失败：{fallback_error}"
+        )
+
     def _fetch_releases(self):
         try:
             status, body = self.opener(
                 self.releases_api_url, self.request_timeout
             )
         except Exception as exc:
-            return None, f"无法连接 GitHub 检查更新：{exc}"
-        if status == 403:
-            return None, (
-                "GitHub API 访问被拒绝（403，匿名请求可能已触发限流），"
-                "请稍后再试，或直接打开仓库的 Releases 页面查看。"
+            return self._fallback_after_api_error(
+                f"无法连接 GitHub 检查更新：{exc}"
             )
-        if status == 404:
-            return None, f"未找到 {self.repo} 的发布信息（404）。"
-        if status and int(status) >= 400:
-            return None, f"GitHub API 返回 HTTP {status}，暂时无法获取更新信息。"
         try:
+            status_code = int(status or 200)
+        except (TypeError, ValueError):
+            status_code = 200
+        if status_code in (403, 408, 429) or 500 <= status_code <= 599:
+            if status_code == 403:
+                original_error = (
+                    "GitHub API 访问被拒绝（403，匿名请求可能已触发限流），"
+                    "请稍后再试，或直接打开仓库的 Releases 页面查看。"
+                )
+            else:
+                original_error = (
+                    f"GitHub API 返回 HTTP {status_code}，暂时无法获取更新信息。"
+                )
+            return self._fallback_after_api_error(original_error)
+        if status_code == 404:
+            return None, f"未找到 {self.repo} 的发布信息（404）。"
+        if status_code >= 400:
+            return None, f"GitHub API 返回 HTTP {status_code}，暂时无法获取更新信息。"
+        try:
+            if isinstance(body, str):
+                body = body.encode("utf-8")
             data = json.loads(body.decode("utf-8"))
         except Exception as exc:
             return None, f"GitHub API 返回内容无法解析：{exc}"
@@ -579,24 +872,48 @@ class LauncherUpdateService:
     def _build_release_info(self, release, version):
         asset = select_release_asset(release, version)
         manifest_asset = find_manifest_asset(release)
-        return {
+        fallback = bool(release.get("_launcher_page_fallback"))
+        unavailable_reason = str(
+            release.get("_install_unavailable_reason") or ""
+        )
+        fallback_assets_complete = not fallback or (
+            asset is not None and manifest_asset is not None
+        )
+        if fallback and not fallback_assets_complete:
+            unavailable_reason = unavailable_reason or (
+                "官方 Releases 页面未确认 ZIP 和 manifest 两项精确资产；"
+                "已仅显示版本并禁止自动安装。"
+            )
+        info = {
             "version": version,
             "download_url": (
-                asset.get("browser_download_url") if asset else None
+                asset.get("browser_download_url")
+                if asset and fallback_assets_complete
+                else None
             ),
-            "asset_name": (asset.get("name") if asset else None),
-            "digest": (asset.get("digest") if asset else None),
-            "asset_size": (asset.get("size") if asset else None),
-            "asset_id": (asset.get("id") if asset else None),
+            "asset_name": (
+                asset.get("name") if asset and fallback_assets_complete else None
+            ),
+            "digest": (asset.get("digest") if asset and fallback_assets_complete else None),
+            "asset_size": (asset.get("size") if asset and fallback_assets_complete else None),
+            "asset_id": (asset.get("id") if asset and fallback_assets_complete else None),
             "manifest_url": (
                 manifest_asset.get("browser_download_url")
-                if manifest_asset
+                if manifest_asset and fallback_assets_complete
                 else None
             ),
             "published_at": release.get("published_at"),
             "body": release.get("body") or "",
             "html_url": release.get("html_url") or "",
         }
+        if fallback:
+            info.update({
+                "page_fallback": True,
+                "_launcher_page_fallback": True,
+                "fallback_note": _FALLBACK_RELEASE_NOTE,
+                "install_unavailable_reason": unavailable_reason,
+            })
+        return info
 
     def check_for_update(self):
         """Return a status dict; never raises for network/parse problems."""
@@ -626,6 +943,9 @@ class LauncherUpdateService:
         version = str(release.get("tag_name") or "").strip()
         comparison = compare_launcher_versions(version, current)
         info = self._build_release_info(release, version)
+        fallback_note = (
+            f" {info['fallback_note']}" if info.get("page_fallback") else ""
+        )
         if comparison is None:
             return {
                 "status": "error",
@@ -633,14 +953,21 @@ class LauncherUpdateService:
                 "latestVersion": version,
                 "message": (
                     f"无法比较版本：远端 {version} 或本地 {current} 不是可解析的版本号。"
+                    f"{fallback_note}"
                 ),
             }
         if comparison > 0:
+            install_note = info.get("install_unavailable_reason") or ""
+            if install_note:
+                install_note = f" {install_note}"
             return {
                 "status": "update_available",
                 "currentVersion": current,
                 "latestVersion": version,
-                "message": f"发现统一启动器新版本 {version}（当前 {current}）。",
+                "message": (
+                    f"发现统一启动器新版本 {version}（当前 {current}）。"
+                    f"{install_note}{fallback_note}"
+                ),
                 "release": info,
             }
         if comparison == 0:
@@ -648,14 +975,17 @@ class LauncherUpdateService:
                 "status": "up_to_date",
                 "currentVersion": current,
                 "latestVersion": version,
-                "message": f"当前已是最新版本 ({current})。",
+                "message": f"当前已是最新版本 ({current})。{fallback_note}",
                 "release": info,
             }
         return {
             "status": "local_newer",
             "currentVersion": current,
             "latestVersion": version,
-            "message": f"本地版本 ({current}) 高于远端版本 ({version})，已跳过降级。",
+            "message": (
+                f"本地版本 ({current}) 高于远端版本 ({version})，已跳过降级。"
+                f"{fallback_note}"
+            ),
             "release": info,
         }
 
@@ -714,7 +1044,24 @@ class LauncherUpdateService:
         notes = format_release_notes(release.get("body"))
         current = result.get("currentVersion")
         latest = result.get("latestVersion")
-        return {
+        fallback = bool(release.get("page_fallback"))
+        fallback_note = release.get("fallback_note") or ""
+        if fallback_note:
+            notes = "\n\n".join(part for part in (notes, fallback_note) if part)
+        downloadable = bool(release.get("download_url"))
+        if fallback:
+            downloadable = downloadable and bool(release.get("manifest_url"))
+        unavailable_reason = release.get("install_unavailable_reason") or ""
+        if unavailable_reason:
+            summary = (
+                f"已发现 {latest}，但该版本不可自动安装：{unavailable_reason}"
+            )
+        else:
+            summary = (
+                f"将从 {current} 更新到 {latest}。确认后只下载并暂存新版本，"
+                "不会在运行中覆盖当前文件。"
+            )
+        dialog = {
             "core": "launcher",
             "installed": True,
             "currentVersion": current,
@@ -724,12 +1071,12 @@ class LauncherUpdateService:
             "releaseNotes": notes or "该版本暂未提供更新说明。",
             "releaseNotesAvailable": bool(notes),
             "confirmationToken": token,
-            "downloadable": bool(release.get("download_url")),
-            "summary": (
-                f"将从 {current} 更新到 {latest}。确认后只下载并暂存新版本，"
-                "不会在运行中覆盖当前文件。"
-            ),
+            "downloadable": downloadable,
+            "summary": summary,
         }
+        if fallback:
+            dialog["installUnavailableReason"] = unavailable_reason
+        return dialog
 
     # -------------------------------------------------- install
 
@@ -824,6 +1171,22 @@ class LauncherUpdateService:
         download_url = release.get("download_url")
         if not version:
             return {"ok": False, "message": "缺少版本信息，无法安装更新。"}
+        if release.get("_launcher_page_fallback"):
+            expected_zip = f"{LAUNCHER_ASSET_PREFIX}{version}{LAUNCHER_ASSET_SUFFIX}"
+            if (
+                release.get("asset_name") != expected_zip
+                or not self._release_asset_url(download_url, version, expected_zip)
+                or not self._release_asset_url(
+                    release.get("manifest_url"), version, LAUNCHER_MANIFEST_NAME
+                )
+            ):
+                return {
+                    "ok": False,
+                    "message": (
+                        "官方 Release 页未确认精确的 launcher ZIP 与 manifest 资产，"
+                        "已拒绝自动安装。"
+                    ),
+                }
         if not download_url:
             return {
                 "ok": False,
@@ -973,12 +1336,26 @@ class LauncherUpdateService:
                     "已拒绝自动安装"
                 )
 
+        if release.get("_launcher_page_fallback"):
+            if expected_size in (None, ""):
+                return False, (
+                    "官方 Releases 页面回退没有可信的 ZIP size（manifest 缺少 size），"
+                    "已拒绝自动安装"
+                )
+            if (
+                isinstance(expected_size, bool)
+                or not isinstance(expected_size, (int, str))
+                or (isinstance(expected_size, str) and not re.fullmatch(r"[0-9]+", expected_size))
+            ):
+                return False, "launcher-manifest.json 中的 size 无效，已拒绝自动安装"
         try:
             expected_size = (
                 int(expected_size) if expected_size not in (None, "") else None
             )
         except (TypeError, ValueError):
             return False, "更新资源大小元数据无效，已拒绝自动安装"
+        if release.get("_launcher_page_fallback") and expected_size < 0:
+            return False, "launcher-manifest.json 中的 size 无效，已拒绝自动安装"
 
         if expected_size is not None and expected_size >= 0:
             actual_size = os.path.getsize(archive_path)

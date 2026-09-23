@@ -21,6 +21,7 @@ import pytest
 from src.launcher_update_service import (
     APPLY_SCRIPT_NAME,
     LAUNCHER_RELEASES_API_URL,
+    LAUNCHER_LATEST_RELEASE_PAGE_URL,
     LAUNCHER_REPO,
     PRESERVED_PATHS,
     REQUIRED_STAGED_FILES,
@@ -123,6 +124,14 @@ def make_service(base_dir, *, current_version=CURRENT, releases=None, manifest=N
             progress(size, size)
         return True
 
+    kwargs.setdefault(
+        "page_reader",
+        lambda url, timeout=None: (
+            503,
+            b"",
+            LAUNCHER_LATEST_RELEASE_PAGE_URL,
+        ),
+    )
     service = LauncherUpdateService(
         str(base_dir),
         current_version=current_version,
@@ -259,6 +268,81 @@ def test_rate_limit_and_network_errors_are_readable(workspace):
 
     missing = make_service(workspace, status=404)
     assert "404" in missing.prepare_update_confirmation()["message"]
+
+
+def test_api_403_falls_back_to_official_latest_page(workspace):
+    tag_url = f"https://github.com/{LAUNCHER_REPO}/releases/tag/{TAG}"
+    assets_url = (
+        f"https://github.com/{LAUNCHER_REPO}/releases/expanded_assets/{TAG}"
+    )
+    zip_url = (
+        f"https://github.com/{LAUNCHER_REPO}/releases/download/"
+        f"{TAG}/launcher-{TAG}.zip"
+    )
+    manifest_url = (
+        f"https://github.com/{LAUNCHER_REPO}/releases/download/"
+        f"{TAG}/launcher-manifest.json"
+    )
+    page_calls = []
+
+    def page_reader(url, timeout=None):
+        page_calls.append(url)
+        if url == LAUNCHER_LATEST_RELEASE_PAGE_URL:
+            return 200, b"<html>stable release</html>", tag_url
+        assert url == assets_url
+        html = f'<a href="{zip_url}">zip</a><a href="{manifest_url}">manifest</a>'
+        return 200, html.encode("utf-8"), assets_url
+
+    service = make_service(workspace, status=403, page_reader=page_reader)
+
+    result = service.check_for_update()
+
+    assert result["status"] == "update_available"
+    assert result["release"]["download_url"] == zip_url
+    assert result["release"]["manifest_url"] == manifest_url
+    assert "beta/prerelease" in result["message"]
+    assert page_calls == [LAUNCHER_LATEST_RELEASE_PAGE_URL, assets_url]
+
+
+def test_successful_api_does_not_request_release_pages(workspace):
+    service = make_service(
+        workspace,
+        releases=[_release(TAG)],
+        page_reader=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("normal API success must not request HTML")
+        ),
+    )
+
+    result = service.check_for_update()
+
+    assert result["status"] == "update_available"
+    assert service.test_calls["open"] == [LAUNCHER_RELEASES_API_URL]
+
+
+def test_fallback_without_exact_zip_and_manifest_is_not_installable(workspace):
+    tag_url = f"https://github.com/{LAUNCHER_REPO}/releases/tag/{TAG}"
+    assets_url = (
+        f"https://github.com/{LAUNCHER_REPO}/releases/expanded_assets/{TAG}"
+    )
+    zip_url = (
+        f"https://github.com/{LAUNCHER_REPO}/releases/download/"
+        f"{TAG}/launcher-{TAG}.zip"
+    )
+
+    def page_reader(url, timeout=None):
+        if url == LAUNCHER_LATEST_RELEASE_PAGE_URL:
+            return 200, b"", tag_url
+        return 200, f'<a href="{zip_url}">zip</a>'.encode("utf-8"), assets_url
+
+    service = make_service(workspace, status=429, page_reader=page_reader)
+
+    result = service.prepare_update_confirmation()
+
+    assert result["ok"] is True
+    dialog = result["updateDialog"]
+    assert dialog["downloadable"] is False
+    assert "不可自动安装" in dialog["summary"]
+    assert dialog["assetName"] == "未提供"
 
 
 def test_remote_not_newer_never_offers_update(workspace):
