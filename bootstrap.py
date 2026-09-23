@@ -86,21 +86,30 @@ class PythonProbe:
 class BootstrapLogger:
     """Print to the console and mirror everything into one log file."""
 
-    def __init__(self, log_dir: str | os.PathLike[str], *, echo: bool = True):
+    def __init__(
+        self,
+        log_dir: str | os.PathLike[str] | None,
+        *,
+        echo: bool = True,
+    ):
         self.echo = echo
-        self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.path = self.log_dir / f"bootstrap_{stamp}.log"
-        self._handle = self.path.open("a", encoding="utf-8", errors="replace")
+        self.log_dir = Path(log_dir) if log_dir is not None else None
+        self.path: Path | None = None
+        self._handle = None
+        if self.log_dir is not None:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.path = self.log_dir / f"bootstrap_{stamp}.log"
+            self._handle = self.path.open("a", encoding="utf-8", errors="replace")
 
     def _write(self, prefix: str, message: str) -> None:
         text = f"[{datetime.now().strftime('%H:%M:%S')}] {prefix}{message}"
-        try:
-            self._handle.write(text + "\n")
-            self._handle.flush()
-        except Exception:
-            pass
+        if self._handle is not None:
+            try:
+                self._handle.write(text + "\n")
+                self._handle.flush()
+            except Exception:
+                pass
         if self.echo:
             print(text, flush=True)
 
@@ -200,8 +209,8 @@ def _probe_python(
     run: Callable[..., Any] = subprocess.run,
 ) -> PythonProbe | None:
     probe_code = (
-        "import sys;"
-        "print(sys.version_info[0], sys.version_info[1], sys.executable)"
+        "import json,sys;"
+        "print(json.dumps([sys.version_info[0], sys.version_info[1], sys.executable]))"
     )
     try:
         result = run_process(
@@ -216,14 +225,28 @@ def _probe_python(
     output = str(getattr(result, "stdout", "") or "").strip().splitlines()
     if not output:
         return None
-    parts = output[-1].split()
-    if len(parts) < 3:
-        return None
+
+    # The probe emits JSON so sys.executable remains intact even when its path
+    # contains spaces.  Accept the earlier whitespace format as well for
+    # compatibility with existing callers and lightweight test doubles.
     try:
-        version = (int(parts[0]), int(parts[1]))
+        payload = json.loads(output[-1])
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, list) and len(payload) == 3:
+        raw_major, raw_minor, executable = payload
+    else:
+        parts = output[-1].split(maxsplit=2)
+        if len(parts) < 3:
+            return None
+        raw_major, raw_minor, executable = parts
+    try:
+        version = (int(raw_major), int(raw_minor))
     except (TypeError, ValueError):
         return None
-    return PythonProbe(parts[2], version)
+    if not isinstance(executable, str) or not executable:
+        return None
+    return PythonProbe(executable, version)
 
 
 def find_python(
@@ -706,7 +729,33 @@ def launch_launcher(
         command.append("--dev")
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    run(command, cwd=str(root_path), env=env)
+    process = run(command, cwd=str(root_path), env=env)
+
+    # Do not wait for the GUI for its full lifetime.  Give Popen a short
+    # bounded window to expose an immediate startup failure; a still-running
+    # process (or a simple test double without wait/poll) is considered started.
+    wait = getattr(process, "wait", None)
+    returncode: Any = None
+    if callable(wait):
+        try:
+            returncode = wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return 0
+        except TypeError:
+            # Some lightweight Popen fakes expose wait() without the timeout
+            # argument.  Never call that potentially-unbounded method.
+            poll = getattr(process, "poll", None)
+            if callable(poll):
+                returncode = poll()
+    else:
+        poll = getattr(process, "poll", None)
+        if callable(poll):
+            returncode = poll()
+
+    if returncode is None:
+        returncode = getattr(process, "returncode", None)
+    if isinstance(returncode, int):
+        raise RuntimeError(f"启动器在启动确认期间提前退出，返回码: {returncode}")
     return 0
 
 
@@ -753,8 +802,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    logger = BootstrapLogger(args.log_dir, echo=not args.quiet)
-    logger.info(f"一键引导日志: {logger.path}")
+    try:
+        # --check is documented as read-only: use a console-only logger and do
+        # not create the project's logs directory or a bootstrap log file.
+        logger = BootstrapLogger(
+            None if args.check else args.log_dir,
+            echo=not args.quiet,
+        )
+    except Exception as exc:
+        # Logger setup must not be the one failure that escapes the CLI with a
+        # traceback or attempts to log recursively to the failed destination.
+        print(
+            f"一键引导失败：无法初始化日志（{exc}）。"
+            "请检查日志目录的写入权限和磁盘空间。",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+    if logger.path is not None:
+        logger.info(f"一键引导日志: {logger.path}")
     try:
         if args.check:
             return run_checks(logger=logger)
@@ -804,12 +871,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except Exception as exc:
         logger.error(f"引导失败: {exc}")
-        logger.error(traceback.format_exc())
-        print()
-        print("=" * 60)
-        print("一键引导失败，请把 logs 下的 bootstrap 日志发给维护者。")
-        print(f"错误摘要: {exc}")
-        print("=" * 60)
+        if logger.path is not None:
+            logger.error(traceback.format_exc())
+            print()
+            print("=" * 60)
+            print("一键引导失败，请把 logs 下的 bootstrap 日志发给维护者。")
+            print(f"错误摘要: {exc}")
+            print("=" * 60)
+        else:
+            # --check has no log file by design; still expose errors when
+            # --quiet was requested rather than silently swallowing a failure.
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+            print(f"只读检查失败：{exc}", file=sys.stderr, flush=True)
         return 1
     finally:
         logger.close()

@@ -7,13 +7,15 @@ These tests never touch the network and never install real packages.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
-import shutil
 import sys
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = PROJECT_ROOT / "bootstrap.py"
@@ -55,6 +57,98 @@ class VersionTests(unittest.TestCase):
 
         found = bootstrap.find_python(run=fake_run, which=lambda _name: None)
         self.assertEqual(found, "C:/Python313/python.exe")
+
+    def test_probe_python_preserves_executable_path_with_spaces(self):
+        executable = r"C:\Users\Demo User\Python 3.13\python.exe"
+
+        def fake_run(_command, **_kwargs):
+            return fake_result(stdout=json.dumps([3, 13, executable]) + "\n")
+
+        probe = bootstrap._probe_python(["python"], run=fake_run)
+        self.assertIsNotNone(probe)
+        self.assertEqual(probe.executable, executable)
+
+    def test_check_mode_does_not_create_or_write_log_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_dir = Path(temp_dir) / "not-created" / "logs"
+            with redirect_stdout(io.StringIO()):
+                result = bootstrap.main(
+                    ["--check", "--quiet", "--log-dir", str(log_dir)]
+                )
+            self.assertIn(result, (0, 1))
+            self.assertFalse(log_dir.exists())
+
+    def test_logger_initialization_failure_is_user_visible_and_nonzero(self):
+        error_output = io.StringIO()
+        with mock.patch.object(
+            bootstrap, "BootstrapLogger", side_effect=OSError("disk full")
+        ):
+            with redirect_stderr(error_output):
+                result = bootstrap.main(["--install", "--quiet"])
+
+        self.assertEqual(result, 1)
+        self.assertIn("无法初始化日志", error_output.getvalue())
+        self.assertIn("disk full", error_output.getvalue())
+
+    def test_launcher_immediate_nonzero_exit_is_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / bootstrap.LAUNCHER_NAME).write_text("", encoding="utf-8")
+            venv_dir = root / "venv"
+            python_exe = bootstrap.venv_python_path(venv_dir)
+
+            def fake_popen(_command, **_kwargs):
+                return types.SimpleNamespace(wait=lambda timeout: 7)
+
+            with self.assertRaisesRegex(RuntimeError, "返回码: 7"):
+                bootstrap.launch_launcher(
+                    python_exe,
+                    root=root,
+                    run=fake_popen,
+                )
+
+    def test_launcher_early_zero_exit_is_not_reported_as_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / bootstrap.LAUNCHER_NAME).write_text("", encoding="utf-8")
+            python_exe = bootstrap.venv_python_path(root / "venv")
+
+            def fake_popen(_command, **_kwargs):
+                return types.SimpleNamespace(wait=lambda timeout: 0)
+
+            with self.assertRaisesRegex(RuntimeError, "返回码: 0"):
+                bootstrap.launch_launcher(
+                    python_exe,
+                    root=root,
+                    run=fake_popen,
+                )
+
+    def test_launcher_accepts_simple_fake_popen_and_prefers_pythonw(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / bootstrap.LAUNCHER_NAME).write_text("", encoding="utf-8")
+            venv_dir = root / "venv"
+            python_exe = bootstrap.venv_python_path(venv_dir)
+            python_exe.parent.mkdir(parents=True, exist_ok=True)
+            python_exe.write_text("", encoding="utf-8")
+            pythonw = bootstrap.venv_pythonw_path(venv_dir)
+            pythonw.write_text("", encoding="utf-8")
+            launched = {}
+
+            def fake_popen(command, **kwargs):
+                launched["command"] = command
+                launched["kwargs"] = kwargs
+                return types.SimpleNamespace(pid=1234)
+
+            result = bootstrap.launch_launcher(
+                python_exe,
+                root=root,
+                run=fake_popen,
+            )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(launched["command"][0], str(pythonw))
+            self.assertEqual(launched["command"][1], str(root / bootstrap.LAUNCHER_NAME))
 
 
 class DependencyTests(unittest.TestCase):
@@ -158,6 +252,26 @@ class DependencyTests(unittest.TestCase):
 
     def test_webview2_is_considered_ready_off_windows(self):
         self.assertTrue(bootstrap.webview2_installed(os_name="posix"))
+
+
+class BatchLauncherTests(unittest.TestCase):
+    def test_batch_fallback_is_limited_to_interpreter_probe_failure(self):
+        batch = (PROJECT_ROOT / "启动依赖.cmd").read_text(encoding="utf-8")
+        lines = batch.splitlines()
+        py_bootstrap_line = lines.index('py -3 "%~dp0bootstrap.py" --install')
+
+        version_probe = (
+            'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'
+        )
+        self.assertIn(f'py -3 -c "{version_probe}" >nul 2>nul', lines)
+        self.assertIn(f'python -c "{version_probe}" >nul 2>nul', lines)
+        self.assertIn('if errorlevel 1 goto use_python', lines[:py_bootstrap_line])
+        self.assertEqual(
+            lines[py_bootstrap_line + 1],
+            'set "BOOTSTRAP_EXIT_CODE=%errorlevel%"',
+        )
+        self.assertEqual(lines[py_bootstrap_line + 2], "goto report_result")
+        self.assertIn('python "%~dp0bootstrap.py" --install', lines)
 
 
 if __name__ == "__main__":

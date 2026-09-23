@@ -86,6 +86,38 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertTrue(supervisor.mark_stopped("core", new_process))
         self.assertFalse(running["core"])
 
+    def test_late_old_exit_preserves_new_start_reservation(self):
+        processes = {"core": None}
+        running = {"core": False}
+        starting = {"core": False}
+        stop_requested = {"core": False}
+        supervisor = ProcessSupervisor(
+            processes=processes,
+            running=running,
+            starting=starting,
+            stop_requested=stop_requested,
+            state_lock=threading.RLock(),
+        )
+        old_process = object()
+        new_process = object()
+
+        supervisor.mark_running("core", old_process)
+        self.assertTrue(supervisor.mark_stopped("core", old_process))
+        self.assertIsNone(processes["core"])
+        self.assertFalse(running["core"])
+        self.assertFalse(starting["core"])
+
+        self.assertTrue(supervisor.claim_start("core"))
+        self.assertFalse(supervisor.mark_stopped("core", old_process))
+        self.assertIsNone(processes["core"])
+        self.assertFalse(running["core"])
+        self.assertTrue(starting["core"])
+
+        supervisor.mark_running("core", new_process)
+        self.assertIs(processes["core"], new_process)
+        self.assertTrue(running["core"])
+        self.assertFalse(starting["core"])
+
     def test_windows_taskkill_failure_falls_back_to_process_terminate(self):
         logs = []
 

@@ -155,6 +155,10 @@ class PracticeModeService:
                 env=environment,
             )
             launcher._mark_runtime_running("practice", process)
+            if launcher.stop_requested.get("practice"):
+                launcher.log_system("[刷题模式] 启动已取消")
+                self._cleanup_failed_start(process)
+                return {"ok": False, "message": "刷题模式启动已取消"}
 
             encodings = launcher._build_encoding_candidates(
                 locale.getpreferredencoding(False),

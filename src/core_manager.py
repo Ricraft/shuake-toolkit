@@ -270,13 +270,20 @@ class CoreManager:
     
     def _load_local_versions(self):
         """加载本地版本信息"""
+        defaults = {'yatori': None, 'autovisor': None, 'last_check': None}
         if os.path.exists(self.version_file):
             try:
                 with open(self.version_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    versions = json.load(f)
+                if not isinstance(versions, dict):
+                    self._log(
+                        "版本文件顶层格式无效，期望 JSON 对象，使用默认版本信息"
+                    )
+                    return defaults
+                return versions
             except Exception as e:
                 self._log(f"加载版本文件失败: {e}")
-        return {'yatori': None, 'autovisor': None, 'last_check': None}
+        return defaults
     
     def _save_local_versions(self):
         """保存本地版本信息"""

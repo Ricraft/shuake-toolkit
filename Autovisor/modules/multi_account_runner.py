@@ -94,6 +94,28 @@ class MultiAccountManager:
         for process in processes:
             process.join()
 
+    @staticmethod
+    def _stop_processes_after_error(processes) -> None:
+        """Best-effort cleanup without masking the orchestration error."""
+        for process in processes:
+            try:
+                alive = process.is_alive()
+            except Exception:
+                # If liveness cannot be queried, try terminating it anyway.
+                alive = True
+            if alive:
+                try:
+                    process.terminate()
+                except Exception:
+                    # Continue so every other active child is also stopped.
+                    pass
+        for process in processes:
+            try:
+                process.join()
+            except Exception:
+                # Preserve the original exception while attempting every join.
+                pass
+
     def run_all(self, max_concurrent: Optional[int] = None) -> Dict[int, int]:
         accounts = list(self.multi_config.accounts)
         if not accounts:
@@ -137,6 +159,9 @@ class MultiAccountManager:
             self._stop_processes(list(active))
             for process, account_id in active.items():
                 exit_codes[account_id] = process.exitcode or -1
+        except Exception:
+            self._stop_processes_after_error(list(active))
+            raise
 
         print("=" * 50)
         print("所有账号运行完毕!")

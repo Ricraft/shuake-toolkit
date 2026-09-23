@@ -278,6 +278,33 @@ class InfrastructureTests(unittest.TestCase):
                 len(manager.GITHUB_MIRRORS),
             )
 
+    def test_non_object_core_versions_fall_back_for_downstream_consumers(self):
+        defaults = {"yatori": None, "autovisor": None, "last_check": None}
+        for payload in ("[]", "null"):
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                (root / ".core_versions.json").write_text(
+                    payload, encoding="utf-8"
+                )
+                logs = []
+
+                manager = CoreManager(temp_dir, logs.append)
+
+                self.assertEqual(manager.local_versions, defaults)
+                self.assertTrue(
+                    any("顶层格式无效" in message for message in logs)
+                )
+                info = manager.get_autovisor_local_version_info()
+                self.assertEqual(info["source"], "inferred")
+                self.assertEqual(
+                    info["compare"], manager.AUTOVISOR_FALLBACK_LOCAL_VERSION
+                )
+                self.assertTrue(manager._save_local_versions())
+                self.assertEqual(
+                    json.loads((root / ".core_versions.json").read_text(encoding="utf-8")),
+                    defaults,
+                )
+
     def test_yatori_fallback_does_not_invent_obsolete_release(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             logs = []

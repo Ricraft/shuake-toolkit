@@ -158,13 +158,15 @@ class _FinishedProcess:
 
     def start(self):
         self.started = True
-        self.context.started_account_ids.append(self.args[1])
+        account_id = self.args[1]
+        self.context.started_account_ids.append(account_id)
+        self.context.events.append(("start", account_id))
 
     def is_alive(self):
         return False
 
     def join(self):
-        return None
+        self.context.events.append(("join", self.args[1]))
 
     def terminate(self):
         self.exitcode = -1
@@ -173,6 +175,7 @@ class _FinishedProcess:
 class _ImmediateContext:
     def __init__(self):
         self.started_account_ids = []
+        self.events = []
 
     def Process(self, **kwargs):
         return _FinishedProcess(self, **kwargs)
@@ -192,7 +195,109 @@ def test_concurrency_limit_does_not_skip_later_accounts(tmp_path):
     exit_codes = manager.run_all(max_concurrent=2)
 
     assert context.started_account_ids == [2, 5, 9]
+    assert context.events == [
+        ("start", 2),
+        ("start", 5),
+        ("join", 2),
+        ("join", 5),
+        ("start", 9),
+        ("join", 9),
+    ]
     assert exit_codes == {2: 0, 5: 0, 9: 0}
+
+
+class _LifecycleProcess:
+    def __init__(self, context, *, target, args, name):
+        self.context = context
+        self.account_id = args[1]
+        self.name = name
+        self.exitcode = None
+        self.started = False
+        self.alive = False
+        self.is_alive_calls = 0
+        self.terminate_count = 0
+        self.join_count = 0
+
+    def start(self):
+        self.context.started_account_ids.append(self.account_id)
+        if self.account_id == self.context.fail_start_account:
+            raise self.context.start_error
+        self.started = True
+        self.alive = True
+
+    def is_alive(self):
+        self.is_alive_calls += 1
+        if (
+            self.account_id == self.context.fail_poll_account
+            and self.is_alive_calls == 1
+        ):
+            raise self.context.poll_error
+        return self.alive
+
+    def terminate(self):
+        self.terminate_count += 1
+        self.context.terminated_account_ids.append(self.account_id)
+        self.alive = False
+        self.exitcode = -15
+
+    def join(self):
+        self.join_count += 1
+        self.context.joined_account_ids.append(self.account_id)
+
+
+class _LifecycleContext:
+    def __init__(self, *, fail_start_account=None, fail_poll_account=None):
+        self.fail_start_account = fail_start_account
+        self.fail_poll_account = fail_poll_account
+        self.start_error = RuntimeError("account start failed")
+        self.poll_error = RuntimeError("orchestration poll failed")
+        self.started_account_ids = []
+        self.terminated_account_ids = []
+        self.joined_account_ids = []
+        self.processes = []
+
+    def Process(self, **kwargs):
+        process = _LifecycleProcess(self, **kwargs)
+        self.processes.append(process)
+        return process
+
+
+def test_later_process_start_error_stops_and_joins_active_account(tmp_path):
+    config_path = tmp_path / "configs.ini"
+    _write_config(config_path)
+    context = _LifecycleContext(fail_start_account=5)
+    manager = MultiAccountManager(
+        str(config_path), process_context=context, startup_delay=0
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        manager.run_all(max_concurrent=2)
+
+    assert caught.value is context.start_error
+    assert context.started_account_ids == [2, 5]
+    assert context.terminated_account_ids == [2]
+    assert context.joined_account_ids == [2]
+    assert context.processes[0].terminate_count == 1
+    assert context.processes[0].join_count == 1
+
+
+def test_orchestration_error_stops_and_joins_all_active_accounts(tmp_path):
+    config_path = tmp_path / "configs.ini"
+    _write_config(config_path)
+    context = _LifecycleContext(fail_poll_account=2)
+    manager = MultiAccountManager(
+        str(config_path), process_context=context, startup_delay=0
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        manager.run_all(max_concurrent=2)
+
+    assert caught.value is context.poll_error
+    assert context.started_account_ids == [2, 5]
+    assert context.terminated_account_ids == [2, 5]
+    assert context.joined_account_ids == [2, 5]
+    assert [process.terminate_count for process in context.processes] == [1, 1]
+    assert [process.join_count for process in context.processes] == [1, 1]
 
 
 def test_invalid_concurrency_limit_is_rejected(tmp_path):

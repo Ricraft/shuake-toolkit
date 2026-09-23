@@ -255,6 +255,14 @@ class ProcessSupervisor:
             current = self.processes.get(runtime)
             if process is not None and current is not None and current is not process:
                 return False
+            if (
+                process is not None
+                and current is None
+                and self.starting.get(runtime)
+            ):
+                # The exiting process may have been detached by stop() already.
+                # Do not let its late monitor callback release a new start claim.
+                return False
             self.processes[runtime] = None
             self.running[runtime] = False
             self.starting[runtime] = False
