@@ -57,6 +57,8 @@ class AutovisorDependencyManager:
         show_error: Callable[[str, str], None],
         run_async: Callable[[Callable[[], None]], None] = _run_in_background,
         mirrors=PYPI_MIRRORS,
+        source_ranker: Callable[..., object] | None = None,
+        playwright_host_resolver: Callable[..., object] | None = None,
     ):
         self.get_autovisor_path = get_autovisor_path
         self.log_system = log_system
@@ -68,6 +70,8 @@ class AutovisorDependencyManager:
         self.show_error = show_error
         self.run_async = run_async
         self.mirrors = tuple(mirrors)
+        self.source_ranker = source_ranker
+        self.playwright_host_resolver = playwright_host_resolver
         self.installing = False
         self._lock = threading.RLock()
 
@@ -270,7 +274,18 @@ class AutovisorDependencyManager:
         for index, package_spec in enumerate(install_args, 1):
             self.log_system(f"[{index}/{total}] 正在安装 {package_spec} ...")
         last_error = None
-        for mirror_name, mirror_url in self.mirrors:
+        mirrors = self.mirrors
+        if self.source_ranker is not None:
+            try:
+                ranked = tuple(
+                    self.source_ranker(self.mirrors, logger=self.log_system)
+                )
+            except Exception as exc:  # noqa: BLE001 - ranking must not block install
+                self.log_system(f"镜像源测速失败，按默认顺序尝试: {exc}")
+                ranked = ()
+            if ranked:
+                mirrors = ranked
+        for mirror_name, mirror_url in mirrors:
             self.log_system(f"正在尝试通过 {mirror_name} 镜像安装 {total} 个依赖...")
             environment = os.environ.copy()
             environment["PYTHONUNBUFFERED"] = "1"
@@ -315,6 +330,50 @@ class AutovisorDependencyManager:
             last_error = RuntimeError(f"{mirror_name} 镜像安装失败，返回码: {return_code}")
             self.log_system(str(last_error))
         raise last_error or RuntimeError("所有 PyPI 镜像均安装失败")
+
+    def _resolve_playwright_hosts(self, python_executable):
+        if self.playwright_host_resolver is None:
+            return ((None, None),)
+        try:
+            ranked = tuple(
+                self.playwright_host_resolver(
+                    python_executable,
+                    logger=self.log_system,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - ranking must not block install
+            self.log_system(f"Playwright 下载源测速失败，按默认顺序尝试: {exc}")
+            ranked = ()
+        return ranked or ((None, None),)
+
+    def _install_playwright_browser(self, python_executable):
+        self.log_system("正在准备 Playwright Chromium，下载进度将输出到系统日志...")
+        command = [python_executable, "-m", "playwright", "install", "chromium"]
+        last_code = 1
+        for host_name, host_url in self._resolve_playwright_hosts(python_executable):
+            if host_url:
+                self.log_system(f"正在通过 {host_name} 下载 Playwright Chromium...")
+                environment = os.environ.copy()
+                environment["PYTHONUNBUFFERED"] = "1"
+                environment["PLAYWRIGHT_DOWNLOAD_HOST"] = host_url
+                try:
+                    code = self.run_logged_command(
+                        command,
+                        self.autovisor_path,
+                        env=environment,
+                    )
+                except TypeError:
+                    # 回调未声明 env 参数时退回默认环境。
+                    code = self.run_logged_command(command, self.autovisor_path)
+            else:
+                code = self.run_logged_command(command, self.autovisor_path)
+            last_code = code
+            if code == 0:
+                return
+            self.log_system(
+                f"{host_name or '默认源'} 下载 Chromium 失败，换下一个源重试"
+            )
+        raise RuntimeError(f"playwright install 返回码: {last_code}")
 
     def install_async(
         self,
@@ -361,13 +420,7 @@ class AutovisorDependencyManager:
                     )
                     self.install_with_mirrors(python_executable, install_args)
                 if ensure_playwright_browser:
-                    self.log_system("正在准备 Playwright Chromium，下载进度将输出到系统日志...")
-                    code = self.run_logged_command(
-                        [python_executable, "-m", "playwright", "install", "chromium"],
-                        self.autovisor_path,
-                    )
-                    if code != 0:
-                        raise RuntimeError(f"playwright install 返回码: {code}")
+                    self._install_playwright_browser(python_executable)
                 success = True
                 self.log_system("Autovisor 依赖安装完成，准备重新启动。")
             except Exception as exc:

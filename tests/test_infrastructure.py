@@ -4,6 +4,7 @@ import json
 import os
 import ssl
 import tempfile
+import time
 import unittest
 import urllib.error
 import zipfile
@@ -133,6 +134,76 @@ class InfrastructureTests(unittest.TestCase):
             {dependency.module for dependency in CORE_DEPENDENCIES},
         )
 
+    def test_dependency_auto_install_falls_back_through_ranked_mirrors(self):
+        attempts = []
+        messages = []
+
+        def fake_import(name):
+            raise ImportError(name)
+
+        def fake_install(command, **_kwargs):
+            attempts.append(list(command))
+            if "https://slow.example/simple" in command:
+                raise OSError("slow mirror rejected")
+
+        ensure_core_dependencies(
+            include_optional=False,
+            python_executable="custom-python",
+            mirror_ranker=lambda: [
+                "https://slow.example/simple",
+                "https://fast.example/simple",
+            ],
+            import_module=fake_import,
+            install=fake_install,
+            output=messages.append,
+        )
+
+        self.assertEqual(attempts[0][6], "https://slow.example/simple")
+        self.assertEqual(attempts[1][6], "https://fast.example/simple")
+        self.assertEqual(attempts[1][4], CORE_DEPENDENCIES[0].requirement)
+        self.assertEqual(
+            len(attempts),
+            len(CORE_DEPENDENCIES) * 2,
+            "每个依赖都要在两个镜像之间降级重试",
+        )
+        self.assertTrue(
+            any("换下一个镜像重试" in message for message in messages)
+        )
+
+    def test_dependency_auto_install_survives_a_broken_mirror_ranker(self):
+        messages = []
+        installed = []
+        state = {"installed": False}
+
+        def fake_import(name):
+            if name == "yaml" and not state["installed"]:
+                raise ImportError(name)
+            return object()
+
+        def fake_install(command, **_kwargs):
+            installed.append(list(command))
+            state["installed"] = True
+            return None
+
+        def broken_ranker():
+            raise RuntimeError("probe down")
+
+        failures = ensure_core_dependencies(
+            include_optional=False,
+            python_executable="custom-python",
+            mirror_ranker=broken_ranker,
+            import_module=fake_import,
+            install=fake_install,
+            output=messages.append,
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(installed), 1)
+        self.assertEqual(installed[0][6], "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple")
+        self.assertTrue(
+            any("镜像源测速失败，使用默认源" in message for message in messages)
+        )
+
     def test_requirement_file_matches_launcher_dependency_policy(self):
         project_root = Path(__file__).resolve().parents[1]
         declared = {
@@ -231,6 +302,51 @@ class InfrastructureTests(unittest.TestCase):
         )
         self.assertNotIn("PLAYWRIGHT_DOWNLOAD_HOST", os.environ)
 
+    def test_dependency_installer_falls_back_to_the_next_index(self):
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(list(command))
+            if "https://slow.example/simple" in command:
+                return type("Result", (), {"returncode": 1})()
+            return type("Result", (), {"returncode": 0})()
+
+        failures = install_dependencies(
+            ["example>=1,<2"],
+            python_executable="custom-python",
+            index_url="https://slow.example/simple",
+            fallback_index_urls=["https://fast.example/simple"],
+            run=fake_run,
+            output=lambda _message: None,
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("https://slow.example/simple", calls[0])
+        self.assertIn("https://fast.example/simple", calls[1])
+
+    def test_playwright_installer_falls_back_to_the_official_cdn(self):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            code = 1 if "PLAYWRIGHT_DOWNLOAD_HOST" in kwargs["env"] else 0
+            return type("Result", (), {"returncode": code})()
+
+        with patch.dict(os.environ, {}, clear=True):
+            installed = install_playwright_browser(
+                python_executable="custom-python",
+                download_host="https://browser.example",
+                fallback_download_hosts=[""],
+                run=fake_run,
+                output=lambda _message: None,
+            )
+
+        self.assertTrue(installed)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("PLAYWRIGHT_DOWNLOAD_HOST", calls[0][1]["env"])
+        self.assertNotIn("PLAYWRIGHT_DOWNLOAD_HOST", calls[1][1]["env"])
+
     def test_launcher_api_is_a_thin_delegate(self):
         class FakeLauncher:
             def get_web_runtime_state(self):
@@ -251,32 +367,257 @@ class InfrastructureTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     CoreManager._safe_extract_zip(handle, root / "output")
 
-    def test_core_downloads_verify_tls_and_disable_proxies_by_default(self):
+    def test_core_downloads_verify_tls_and_offer_mirrors_by_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("LAUNCHER_ALLOW_GITHUB_PROXIES", None)
                 manager = CoreManager(temp_dir)
             self.assertEqual(manager.ssl_context.verify_mode, ssl.CERT_REQUIRED)
             self.assertTrue(manager.ssl_context.check_hostname)
-            self.assertFalse(manager.allow_github_proxies)
-            direct = manager._build_github_candidate_urls(
-                "https://github.com/example/project/releases/latest"
-            )
+            self.assertTrue(manager.allow_github_proxies)
+            self.assertTrue(manager.probe_github_sources)
             self.assertEqual(
-                direct,
+                manager._build_github_candidate_urls(
+                    "https://github.com/example/project/releases/latest"
+                ),
                 [
                     (
                         "GitHub 直连",
                         "https://github.com/example/project/releases/latest",
-                    )
+                    ),
+                    *[
+                        (name, prefix + "https://github.com/example/project/releases/latest")
+                        for name, prefix in manager.GITHUB_MIRRORS
+                        if prefix
+                    ],
                 ],
             )
-
-            manager.allow_github_proxies = True
             self.assertEqual(
                 len(manager._build_github_candidate_urls("https://github.com/a/b")),
                 len(manager.GITHUB_MIRRORS),
             )
+
+    def test_mirror_downloads_can_be_disabled_by_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                os.environ, {"LAUNCHER_ALLOW_GITHUB_PROXIES": "0"}, clear=False
+            ):
+                manager = CoreManager(temp_dir)
+            self.assertFalse(manager.allow_github_proxies)
+            self.assertEqual(
+                manager._build_github_candidate_urls("https://github.com/a/b"),
+                [("GitHub 直连", "https://github.com/a/b")],
+            )
+            self.assertFalse(
+                manager._is_github_asset_url(
+                    "https://api.github.com/repos/a/b/releases/latest"
+                )
+            )
+            self.assertTrue(
+                manager._is_github_asset_url(
+                    "https://github.com/a/b/releases/download/v1/core.zip"
+                )
+            )
+
+    def test_download_sources_are_ranked_by_measured_speed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+
+            def fake_probe(name, url, expected_size=None):
+                speeds = {"GitHub 直连": 0.2, "ghfast.top": 3.0}
+                speed = speeds.get(name, 0.0)
+                return {
+                    "name": name,
+                    "url": url,
+                    "reachable": speed > 0,
+                    "speed": speed * 1024 * 1024,
+                    "latency": 0.1,
+                    "error": None,
+                }
+
+            manager._probe_download_source = fake_probe
+            ranked = manager._ranked_download_sources(
+                "https://github.com/a/b/releases/download/v1/core.zip",
+                expected_size=123,
+            )
+
+            self.assertEqual(
+                [name for name, _url in ranked[:2]],
+                ["ghfast.top", "GitHub 直连"],
+            )
+            self.assertIn("gh-proxy.com", [name for name, _url in ranked])
+            self.assertTrue(any("已选择 ghfast.top 加速 下载" in item for item in logs))
+            self.assertTrue(any("gh-proxy.com 不可用" in item for item in logs))
+
+            # 探测结果短时缓存，重复下载不再重新测速
+            calls = []
+            manager._probe_download_source = lambda *args, **kwargs: calls.append(args)
+            manager._ranked_download_sources(
+                "https://github.com/a/b/releases/download/v1/core.zip",
+                expected_size=123,
+            )
+            self.assertEqual(calls, [])
+
+    def test_slow_sources_do_not_block_the_probe_deadline(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            manager.SOURCE_PROBE_DEADLINE = 0.3
+
+            def fake_probe(name, url, expected_size=None):
+                if name == "ghproxy.net":
+                    time.sleep(0.8)
+                speed = 2.0 if name == "ghfast.top" else 0.5
+                return {
+                    "name": name,
+                    "url": url,
+                    "reachable": True,
+                    "speed": speed * 1024 * 1024,
+                    "latency": 0.1,
+                    "error": None,
+                }
+
+            manager._probe_download_source = fake_probe
+            started = time.monotonic()
+            ranked = manager._ranked_download_sources(
+                "https://github.com/a/b/releases/download/v1/core.zip",
+                expected_size=123,
+            )
+            elapsed = time.monotonic() - started
+
+            self.assertLess(elapsed, 0.75, "慢源不能拖住整轮探测")
+            self.assertEqual(ranked[0][0], "ghfast.top")
+            self.assertIn("ghproxy.net", [name for name, _url in ranked])
+            self.assertTrue(any("ghproxy.net 不可用" in item for item in logs))
+            self.assertTrue(any("已选择 ghfast.top 加速 下载" in item for item in logs))
+
+    def test_download_file_uses_fastest_source_and_falls_back(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            payload = b"x" * 2048
+            target = Path(temp_dir) / "core.zip"
+            manager._ranked_download_sources = lambda url, expected_size=None: [
+                ("ghfast.top", "https://ghfast.top/" + url),
+                ("GitHub 直连", url),
+            ]
+
+            class FakeResponse:
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(payload))}
+                    self.reads = 0
+
+                def read(self, size):
+                    offset = self.reads * size
+                    self.reads += 1
+                    return payload[offset : offset + size]
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+            requested = []
+
+            def fake_urlopen(request, **_kwargs):
+                requested.append(request.full_url)
+                if "ghfast.top" in request.full_url:
+                    raise urllib.error.URLError("mirror down")
+                return FakeResponse()
+
+            with patch("src.core_manager.urllib.request.urlopen", side_effect=fake_urlopen):
+                self.assertTrue(
+                    manager.download_file(
+                        "https://github.com/a/b/releases/download/v1/core.zip",
+                        str(target),
+                        expected_size=len(payload),
+                    )
+                )
+
+            self.assertEqual(
+                requested,
+                [
+                    "https://ghfast.top/https://github.com/a/b/releases/download/v1/core.zip",
+                    "https://github.com/a/b/releases/download/v1/core.zip",
+                ],
+            )
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertTrue(any("ghfast.top 加速 失败" in item for item in logs))
+            self.assertTrue(any("下载成功" in item for item in logs))
+
+    def test_download_file_switches_away_from_a_throttled_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            manager.DOWNLOAD_SLOW_GRACE_SECONDS = 0.05
+            manager.DOWNLOAD_SLOW_WINDOW_SECONDS = 0.05
+            manager.DOWNLOAD_SLOW_MIN_SPEED = 1024 * 1024
+            payload = b"y" * 4096
+            target = Path(temp_dir) / "core.zip"
+            manager._ranked_download_sources = lambda url, expected_size=None: [
+                ("ghfast.top", "https://ghfast.top/" + url),
+                ("GitHub 直连", url),
+            ]
+
+            class SlowResponse:
+                """先返回一点数据，随后每个分块都拖慢窗口速度。"""
+
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(payload))}
+                    self.sent = 0
+
+                def read(self, size):
+                    time.sleep(0.04)
+                    chunk = payload[self.sent : self.sent + 64]
+                    self.sent += len(chunk)
+                    return chunk
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+            class FastResponse:
+                def __init__(self):
+                    self.headers = {"Content-Length": str(len(payload))}
+                    self.sent = 0
+
+                def read(self, size):
+                    chunk = payload[self.sent : self.sent + size]
+                    self.sent += len(chunk)
+                    return chunk
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+            requested = []
+
+            def fake_urlopen(request, **_kwargs):
+                requested.append(request.full_url)
+                if "ghfast.top" in request.full_url:
+                    return SlowResponse()
+                return FastResponse()
+
+            with patch("src.core_manager.urllib.request.urlopen", side_effect=fake_urlopen):
+                self.assertTrue(
+                    manager.download_file(
+                        "https://github.com/a/b/releases/download/v1/core.zip",
+                        str(target),
+                        expected_size=len(payload),
+                    )
+                )
+
+            self.assertEqual(len(requested), 2)
+            self.assertIn("ghfast.top", requested[0])
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertTrue(any("速度过慢" in item for item in logs))
+            self.assertTrue(any("下载成功" in item for item in logs))
 
     def test_non_object_core_versions_fall_back_for_downstream_consumers(self):
         defaults = {"yatori": None, "autovisor": None, "last_check": None}
@@ -478,7 +819,7 @@ class InfrastructureTests(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertTrue(any("Windows amd64/x64" in message for message in logs))
 
-    def test_yatori_update_check_queries_releases_list_before_latest_endpoint(self):
+    def test_yatori_update_check_prefers_releases_list_over_latest(self):
         class Response:
             def __init__(self, payload):
                 self.payload = payload
@@ -514,7 +855,9 @@ class InfrastructureTests(unittest.TestCase):
 
             def open_url(request, **_kwargs):
                 requested.append(request.full_url)
-                return Response(releases)
+                if "per_page" in request.full_url:
+                    return Response(releases)
+                return Response({"tag_name": "v2.0.0", "assets": []})
 
             with patch(
                 "src.core_manager.urllib.request.urlopen",
@@ -522,8 +865,117 @@ class InfrastructureTests(unittest.TestCase):
             ):
                 result = manager.get_yatori_latest_release()
 
-        self.assertEqual(requested, [manager.YATORI_RELEASES_API_URL])
+        # releases 列表与 latest 现在并行请求，列表结果优先。
+        self.assertEqual(
+            set(requested),
+            {manager.YATORI_RELEASES_API_URL, manager.YATORI_API_URL},
+        )
         self.assertEqual(result["version"], "v2.6.1-beta.11")
+
+    def test_yatori_update_check_falls_back_to_api_mirror_when_rate_limited(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        release = {
+            "tag_name": "v2.6.2-beta.14",
+            "published_at": "2026-10-26T16:10:44Z",
+            "assets": [
+                {
+                    "name": "yatori-go-console.v2.6.2-beta.14-windows-amd64-release.zip",
+                    "browser_download_url": "https://github.com/a/b/releases/download/v1/core.zip",
+                    "digest": "sha256:" + "b" * 64,
+                    "size": 2048,
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = []
+            manager = CoreManager(temp_dir, logs.append)
+            requested = []
+
+            def open_url(request, **_kwargs):
+                url = request.full_url
+                requested.append(url)
+                if url.startswith("https://api.github.com"):
+                    raise urllib.error.HTTPError(
+                        url, 403, "rate limit exceeded", {"x-ratelimit-remaining": "0"}, None
+                    )
+                return Response(release)
+
+            with patch(
+                "src.core_manager.urllib.request.urlopen",
+                side_effect=open_url,
+            ):
+                result = manager.get_yatori_latest_release()
+
+        self.assertEqual(result["version"], "v2.6.2-beta.14")
+        self.assertTrue(
+            any(url.startswith("https://gh-proxy.com/https://api.github.com") for url in requested)
+        )
+        self.assertTrue(any("403" in message for message in logs))
+
+    def test_yatori_update_check_skips_direct_api_after_rate_limit(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        release = {
+            "tag_name": "v2.6.2-beta.14",
+            "assets": [
+                {
+                    "name": "yatori-windows-amd64.zip",
+                    "browser_download_url": "https://example.test/core.zip",
+                    "digest": "sha256:" + "c" * 64,
+                    "size": 10,
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = CoreManager(temp_dir)
+            direct_calls = []
+
+            def open_url(request, **_kwargs):
+                url = request.full_url
+                if url.startswith("https://api.github.com"):
+                    direct_calls.append(url)
+                    raise urllib.error.HTTPError(
+                        url, 403, "rate limit exceeded", {"x-ratelimit-remaining": "0"}, None
+                    )
+                return Response(release)
+
+            with patch("src.core_manager.urllib.request.urlopen", side_effect=open_url):
+                manager.get_yatori_latest_release()
+            first_round = len(direct_calls)
+            direct_calls.clear()
+            with patch("src.core_manager.urllib.request.urlopen", side_effect=open_url):
+                manager.get_yatori_latest_release()
+
+        # 第一轮可能命中一次或两次直连 403（两个请求并行），
+        # 第二轮必须完全跳过直连，避免每次都白白挨一次限流。
+        self.assertGreaterEqual(first_round, 1)
+        self.assertLessEqual(first_round, 2)
+        self.assertEqual(direct_calls, [])
 
     def test_yatori_update_uses_fallback_local_version_when_record_is_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -623,7 +1075,7 @@ class InfrastructureTests(unittest.TestCase):
             marker.write_text("keep", encoding="utf-8")
             download_calls = []
 
-            def fake_download(_url, target_path, _progress=None):
+            def fake_download(_url, target_path, _progress=None, **_kwargs):
                 download_calls.append(target_path)
                 with zipfile.ZipFile(target_path, "w") as archive:
                     archive.writestr("new-core.txt", "new")
@@ -668,7 +1120,7 @@ class InfrastructureTests(unittest.TestCase):
                 "asset_size": len(payload),
             }
 
-            def fake_download(_url, target_path, _progress=None):
+            def fake_download(_url, target_path, _progress=None, **_kwargs):
                 Path(target_path).write_bytes(payload)
                 return True
 
@@ -702,7 +1154,7 @@ class InfrastructureTests(unittest.TestCase):
             with zipfile.ZipFile(source_archive, "w") as archive:
                 archive.writestr("yatori-go-console.exe", b"new executable")
             payload = source_archive.read_bytes()
-            manager.download_file = lambda _url, target, _progress=None: (
+            manager.download_file = lambda _url, target, _progress=None, **_kwargs: (
                 Path(target).write_bytes(payload) >= 0
             )
 
@@ -727,7 +1179,7 @@ class InfrastructureTests(unittest.TestCase):
             with zipfile.ZipFile(source_archive, "w") as archive:
                 archive.writestr("README.txt", "missing executable")
             payload = source_archive.read_bytes()
-            manager.download_file = lambda _url, target, _progress=None: (
+            manager.download_file = lambda _url, target, _progress=None, **_kwargs: (
                 Path(target).write_bytes(payload) >= 0
             )
 
@@ -756,7 +1208,7 @@ class InfrastructureTests(unittest.TestCase):
             with zipfile.ZipFile(source_archive, "w") as archive:
                 archive.writestr("yatori-go-console.exe", b"new executable")
             payload = source_archive.read_bytes()
-            manager.download_file = lambda _url, target, _progress=None: (
+            manager.download_file = lambda _url, target, _progress=None, **_kwargs: (
                 Path(target).write_bytes(payload) >= 0
             )
             release = {
@@ -801,7 +1253,7 @@ class InfrastructureTests(unittest.TestCase):
             with zipfile.ZipFile(source_archive, "w") as archive:
                 archive.writestr("yatori-go-console.exe", b"new executable")
             payload = source_archive.read_bytes()
-            manager.download_file = lambda _url, target, _progress=None: (
+            manager.download_file = lambda _url, target, _progress=None, **_kwargs: (
                 Path(target).write_bytes(payload) >= 0
             )
             manager._save_local_versions = lambda: False

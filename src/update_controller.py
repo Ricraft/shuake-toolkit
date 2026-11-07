@@ -5,7 +5,25 @@ from __future__ import annotations
 import copy
 import secrets
 import threading
+import time
 from collections.abc import Callable
+
+
+def _empty_install_progress() -> dict:
+    """Idle install-progress snapshot consumed by the Web update dialog."""
+    return {
+        "core": None,
+        "phase": "idle",
+        "percent": 0.0,
+        "downloaded": 0,
+        "total": 0,
+        "speed": 0.0,
+        "eta": None,
+        "mode": "",
+        "message": "",
+        "version": "",
+        "updated_at": 0.0,
+    }
 
 
 def _run_in_background(target: Callable[[], None]) -> None:
@@ -88,6 +106,21 @@ class UpdateController:
         self.autovisor_checking = False
         self._yatori_confirmation = None
         self._lock = threading.RLock()
+        self._install_progress = _empty_install_progress()
+
+    # ------------------------------------------------------------------ #
+    # 安装进度（供 Web 端下载进度条轮询）
+    # ------------------------------------------------------------------ #
+    def _update_install_progress(self, **fields) -> None:
+        with self._lock:
+            self._install_progress.update(fields)
+            self._install_progress["updated_at"] = time.monotonic()
+
+    def install_progress_snapshot(self) -> dict:
+        """Return a copy of the current install progress for UI polling."""
+        with self._lock:
+            return copy.deepcopy(self._install_progress)
+
 
     def check_yatori_async(self, *, explicit: bool = False) -> bool:
         if not self.core_manager:
@@ -207,7 +240,7 @@ class UpdateController:
         if not result:
             with self._lock:
                 self._yatori_confirmation = None
-            message = "无法连接至 GitHub 节点，请检查网络环境。"
+            message = "无法获取 Yatori 版本信息，请检查网络环境或稍后重试（GitHub 匿名接口可能已限流）。"
             self.show_error("管理中心", message)
             return {"ok": False, "message": message}
 
@@ -486,18 +519,52 @@ class UpdateController:
             self.installing_core = core
 
         self.log(f"开始安装 {label} {release_info.get('version', 'unknown')}...")
+        self._update_install_progress(
+            core=core,
+            phase="downloading",
+            percent=0.0,
+            downloaded=0,
+            total=0,
+            speed=0.0,
+            eta=None,
+            mode="",
+            message="",
+            version=str(release_info.get("version") or ""),
+        )
 
         def on_progress(info):
             progress = info.get("progress", 0) or 0
             downloaded = info.get("downloaded") or 0
             total = info.get("total")
+            mode = str(info.get("mode") or "")
+            speed = float(info.get("speed") or 0)
+            eta = info.get("eta")
             if total:
                 self.log(
                     f"{label} 下载中: {progress:.1f}% ({downloaded}/{total} bytes)",
                     replace_last=True,
                 )
+                finished = float(progress) >= 100
+                self._update_install_progress(
+                    phase="installing" if finished else "downloading",
+                    percent=100.0 if finished else round(float(progress), 1),
+                    downloaded=int(downloaded),
+                    total=int(total),
+                    speed=speed,
+                    eta=eta,
+                    mode=mode,
+                    message="正在解压并替换核心文件…" if finished else "",
+                )
             else:
                 self.log(f"{label} 下载中: {downloaded} bytes", replace_last=True)
+                self._update_install_progress(
+                    phase="downloading",
+                    downloaded=int(downloaded),
+                    speed=speed,
+                    eta=eta,
+                    mode=mode,
+                    percent=0.0,
+                )
 
         def worker():
             success = False
@@ -518,10 +585,19 @@ class UpdateController:
                     else:
                         self.autovisor_update_info = None
                     self.on_installed(core)
+                    self._update_install_progress(
+                        phase="completed",
+                        percent=100.0,
+                        message=f"{label} 更新完成",
+                    )
                     self.log(f"✅ {label} 核心处理完成")
                     self.show_info(f"{label} 更新", f"{label} 核心已成功安装/更新。")
                 else:
                     message = str(error) if error else "下载或安装失败"
+                    self._update_install_progress(
+                        phase="failed",
+                        message=message,
+                    )
                     self.log(f"❌ {label} 安装失败: {message}")
                     self.show_error(
                         f"{label} 更新",

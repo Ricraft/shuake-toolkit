@@ -29,6 +29,22 @@ def _empty_autovisor_activity() -> dict[str, Any]:
     }
 
 
+def _empty_core_update() -> dict[str, Any]:
+    return {
+        "core": None,
+        "phase": "idle",
+        "percent": 0.0,
+        "downloaded": 0,
+        "total": 0,
+        "speed": 0.0,
+        "eta": None,
+        "mode": "",
+        "message": "",
+        "version": "",
+        "updated_at": 0.0,
+    }
+
+
 class WebStateService:
     """Build JSON-friendly launcher state without one optional probe taking it down."""
 
@@ -240,6 +256,19 @@ class WebStateService:
         runtime_event = getattr(launcher, "_last_runtime_event", None)
         runtime_event = dict(runtime_event) if isinstance(runtime_event, dict) else None
 
+        core_update = _empty_core_update()
+        update_controller = getattr(launcher, "update_controller", None)
+        snapshot = getattr(update_controller, "install_progress_snapshot", None)
+        if callable(snapshot):
+            core_update = self._safe(
+                "核心更新进度",
+                snapshot,
+                _empty_core_update,
+                issues,
+                validator=lambda value: isinstance(value, dict)
+                and isinstance(value.get("phase"), str),
+            )
+
         core_paths = "\n".join(
             [
                 f"Yatori: {yatori_path}",
@@ -277,6 +306,7 @@ class WebStateService:
             "qb_stats": qb_stats,
             "logs": logs,
             "autovisor_activity": autovisor_activity,
+            "core_update": core_update,
             "shutdown_pending": bool(
                 getattr(launcher, "_shutdown_pending", False)
             ),

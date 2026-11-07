@@ -31,6 +31,12 @@ from src.course_run_service import CourseRunService
 from src.tianyi_agent_service import TianyiAgentService
 from src.desktop_platform_service import DesktopPlatformService
 from src.dependencies import ensure_core_dependencies
+from src.install_sources import (
+    PLAYWRIGHT_HOSTS,
+    rank_playwright_hosts,
+    rank_pypi_index_urls,
+    rank_pypi_mirrors,
+)
 from src.launcher_api import WebLauncherAPI
 from src.launcher_startup_service import LauncherStartupService
 from src.launcher_update_service import LauncherUpdateService
@@ -85,7 +91,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.6.3"
+    LAUNCHER_VERSION = "v1.6.4"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -367,6 +373,15 @@ class UnifiedLauncher:
                 self,
                 '_show_error',
                 lambda title, message: logger(f"[{title}] {message}"),
+            ),
+            source_ranker=lambda mirrors, logger=None: rank_pypi_mirrors(
+                mirrors,
+                logger=logger,
+            ),
+            playwright_host_resolver=lambda python_exe, logger=None: rank_playwright_hosts(
+                PLAYWRIGHT_HOSTS,
+                python_exe=python_exe,
+                logger=logger,
             ),
         )
         self.autovisor_dependencies = manager
@@ -1557,8 +1572,10 @@ def main():
     """主程序入口"""
     install_crash_hook(os.path.dirname(os.path.abspath(__file__)))
 
-    # 启动时自动检查并安装缺失依赖
-    dependency_failures = ensure_core_dependencies()
+    # 启动时自动检查并安装缺失依赖（PyPI 镜像按实测速度排序，逐个降级重试）
+    dependency_failures = ensure_core_dependencies(
+        mirror_ranker=lambda: rank_pypi_index_urls(logger=print),
+    )
     if dependency_failures:
         raise RuntimeError(
             "项目依赖未就绪: "

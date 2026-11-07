@@ -17,12 +17,18 @@ import re
 import time
 import glob
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 try:
     from .atomic_io import atomic_dump_json
 except ImportError:  # pragma: no cover - direct maintenance execution
     from atomic_io import atomic_dump_json
+
+try:
+    from .source_probe import collect_probes
+except ImportError:  # pragma: no cover - direct maintenance execution
+    from source_probe import collect_probes
 
 
 class CoreManager:
@@ -69,17 +75,39 @@ class CoreManager:
     AUTOVISOR_REPO = "CXRunfree/Autovisor"
     AUTOVISOR_API_URL = f"https://api.github.com/repos/{AUTOVISOR_REPO}/releases/latest"
     
-    # GitHub 代理加速列表
+    # GitHub 加速源列表（顺序仅作探测失败时的兜底顺序，实际下载前会并发测速重排）
     GITHUB_MIRRORS = (
         ("GitHub 直连", ""),
+        ("ghfast.top", "https://ghfast.top/"),
+        ("gh-proxy.com", "https://gh-proxy.com/"),
+        ("gh.h233.eu.org", "https://gh.h233.eu.org/"),
         ("ghproxy.net", "https://ghproxy.net/"),
-        ("ghproxy.com", "https://ghproxy.com/"),
-        ("mirror.ghproxy.com", "https://mirror.ghproxy.com/"),
-        ("gh.ddlc.top", "https://gh.ddlc.top/"),
+        ("gh.llkk.cc", "https://gh.llkk.cc/"),
         ("github.moeyy.xyz", "https://github.moeyy.xyz/"),
         ("hub.gitmirror.com", "https://hub.gitmirror.com/"),
     )
     GITHUB_PROXIES = [prefix for _, prefix in GITHUB_MIRRORS if prefix]
+
+    # GitHub API 中转：api.github.com 的匿名额度按 IP 计算，被限流后
+    # 直连会一直返回 403。以下中转会把请求转发到自己的出口，额度独立。
+    GITHUB_API_MIRRORS = (
+        ("gh-proxy.com", "https://gh-proxy.com/"),
+        ("gh.h233.eu.org", "https://gh.h233.eu.org/"),
+    )
+    GITHUB_API_TIMEOUT = 6.0
+    GITHUB_PAGE_TIMEOUT = 8.0
+    GITHUB_API_RATE_LIMIT_COOLDOWN = 600.0
+
+    # 下载源并发测速：下载前先抢一小段数据，按实测吞吐排序，避免卡在慢速源上
+    SOURCE_PROBE_TIMEOUT = 6.0
+    SOURCE_PROBE_SECONDS = 2.5
+    SOURCE_PROBE_BYTES = 768 * 1024
+    SOURCE_PROBE_CACHE_SECONDS = 300.0
+    SOURCE_PROBE_WORKERS = 6
+    SOURCE_PROBE_DEADLINE = 5.0
+    DOWNLOAD_SLOW_GRACE_SECONDS = 12.0
+    DOWNLOAD_SLOW_WINDOW_SECONDS = 6.0
+    DOWNLOAD_SLOW_MIN_SPEED = 300 * 1024
     
     def __init__(self, base_dir, log_callback=None):
         self.base_dir = base_dir
@@ -97,12 +125,30 @@ class CoreManager:
         
         # Never disable certificate validation for executable/core downloads.
         self.ssl_context = ssl.create_default_context()
-        self.allow_github_proxies = os.environ.get(
-            "LAUNCHER_ALLOW_GITHUB_PROXIES", ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
-        self.allow_unverified_core_updates = os.environ.get(
-            "LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES", ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.allow_github_proxies = self._read_env_flag(
+            "LAUNCHER_ALLOW_GITHUB_PROXIES", True
+        )
+        self.probe_github_sources = self._read_env_flag(
+            "LAUNCHER_PROBE_GITHUB_SOURCES", True
+        )
+        self.allow_unverified_core_updates = self._read_env_flag(
+            "LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES", False
+        )
+        self._source_probe_cache = {}
+        self._source_probe_lock = threading.Lock()
+        # GitHub API 通道状态：记住可用的中转，限流后短时间内直接跳过直连
+        self._api_preferred_source = None
+        self._api_direct_blocked_until = 0.0
+        self._api_rate_limit_notice = False
+        self._api_last_logged_source = None
+
+    @staticmethod
+    def _read_env_flag(name, default=False):
+        """Read a boolean environment flag, falling back to ``default``."""
+        raw = os.environ.get(name)
+        if raw is None or not str(raw).strip():
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
     
     def _log(self, message):
         """记录日志"""
@@ -233,6 +279,225 @@ class CoreManager:
                 if prefix
             )
         return candidates
+
+    @staticmethod
+    def _is_github_asset_url(url):
+        """Only release assets are worth mirroring; API endpoints stay direct."""
+        text = str(url or "")
+        if "api.github.com" in text:
+            return False
+        return "github.com" in text or "githubusercontent.com" in text
+
+    def _build_github_api_candidate_urls(self, url):
+        """Build direct and explicitly enabled proxy candidates for an API URL."""
+        candidates = [("GitHub 直连", url)]
+        if self.allow_github_proxies:
+            candidates.extend(
+                (name, prefix + url) for name, prefix in self.GITHUB_API_MIRRORS
+            )
+        return candidates
+
+    def _fetch_github_api_json(self, url):
+        """Fetch GitHub API JSON, falling back to API-capable mirrors.
+
+        ``api.github.com`` counts anonymous requests per IP and answers 403
+        once the quota is gone, so a proxy with its own egress is the only
+        way to recover without asking the user for a token.
+        """
+        candidates = self._build_github_api_candidate_urls(url)
+        if self._api_preferred_source:
+            candidates.sort(
+                key=lambda item: 0 if item[0] == self._api_preferred_source else 1
+            )
+        if time.time() < self._api_direct_blocked_until:
+            proxies_only = [item for item in candidates if item[0] != "GitHub 直连"]
+            candidates = proxies_only or candidates
+        last_error = None
+        for source_name, try_url in candidates:
+            try:
+                request = urllib.request.Request(
+                    try_url,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept': 'application/vnd.github.v3+json',
+                    },
+                )
+                with urllib.request.urlopen(
+                    request, timeout=self.GITHUB_API_TIMEOUT, context=self.ssl_context
+                ) as response:
+                    payload = response.read()
+                if source_name != "GitHub 直连" and (
+                    source_name != self._api_last_logged_source
+                ):
+                    self._api_last_logged_source = source_name
+                    self._log(f"GitHub API 直连不可用，已通过 {source_name} 查询")
+                self._api_preferred_source = source_name
+                return json.loads(payload.decode('utf-8'))
+            except Exception as exc:
+                last_error = exc
+                if source_name == "GitHub 直连" and self._is_rate_limited(exc):
+                    self._api_direct_blocked_until = time.time() + self.GITHUB_API_RATE_LIMIT_COOLDOWN
+                    if not self._api_rate_limit_notice:
+                        self._api_rate_limit_notice = True
+                        self._log(
+                            "GitHub API 匿名请求已达上限 (403 rate limit)，"
+                            "改走镜像查询..."
+                        )
+                elif source_name == self._api_preferred_source:
+                    self._api_preferred_source = None
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("没有可用的 GitHub API 查询通道")
+
+    @staticmethod
+    def _is_rate_limited(error):
+        if not isinstance(error, urllib.error.HTTPError):
+            return False
+        if error.code not in (403, 429):
+            return False
+        headers = getattr(error, "headers", None) or {}
+        if str(headers.get("x-ratelimit-remaining") or "").strip() == "0":
+            return True
+        return "rate limit" in str(getattr(error, "reason", "") or "").lower()
+
+    @staticmethod
+    def _prefer_known_proxies(candidates):
+        """Put known-good API/page proxies right after the direct URL."""
+        preferred_names = {"GitHub 直连", "gh-proxy.com"}
+        head = [item for item in candidates if item[0] in preferred_names]
+        tail = [item for item in candidates if item[0] not in preferred_names]
+        return head + tail
+
+    @staticmethod
+    def _download_mode_name(source_name):
+        if not source_name or source_name == "GitHub 直连":
+            return "直接下载"
+        return f"{source_name} 加速"
+
+    @staticmethod
+    def _response_total_size(response, fallback=None):
+        """Read the full resource size from Content-Range or Content-Length."""
+        content_range = response.headers.get("Content-Range") or ""
+        if "/" in content_range:
+            total = content_range.rsplit("/", 1)[1].strip()
+            if total.isdigit():
+                return int(total)
+        content_length = response.headers.get("Content-Length") or ""
+        if content_length.strip().isdigit():
+            return int(content_length.strip())
+        return fallback
+
+    def _probe_download_source(self, name, url, expected_size=None):
+        """Pull a short byte range from one source to estimate its real speed."""
+        info = {
+            "name": name,
+            "url": url,
+            "reachable": False,
+            "speed": 0.0,
+            "latency": None,
+            "error": None,
+        }
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Range': f'bytes=0-{self.SOURCE_PROBE_BYTES - 1}',
+            'Accept': '*/*',
+        }
+        started = time.time()
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(
+                request,
+                timeout=self.SOURCE_PROBE_TIMEOUT,
+                context=self.ssl_context,
+            ) as response:
+                status = getattr(response, "status", 200)
+                if status not in (200, 206):
+                    info["error"] = f"HTTP {status}"
+                    return info
+                content_type = (response.headers.get("Content-Type") or "").lower()
+                total_size = self._response_total_size(response)
+                if expected_size and total_size and total_size != expected_size:
+                    info["error"] = f"文件大小不符（{total_size} 字节）"
+                    return info
+                if content_type.startswith("text/html") and not str(url).endswith(".html"):
+                    info["error"] = "返回的不是文件（text/html）"
+                    return info
+                first_byte_at = time.time()
+                info["latency"] = first_byte_at - started
+                received = 0
+                deadline = first_byte_at + self.SOURCE_PROBE_SECONDS
+                while received < self.SOURCE_PROBE_BYTES and time.time() < deadline:
+                    chunk = response.read(
+                        min(64 * 1024, self.SOURCE_PROBE_BYTES - received)
+                    )
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                elapsed = max(time.time() - first_byte_at, 0.001)
+                info["speed"] = received / elapsed
+                info["reachable"] = received > 0
+                if not info["reachable"]:
+                    info["error"] = "未读到数据"
+        except urllib.error.HTTPError as exc:
+            info["latency"] = time.time() - started
+            info["error"] = f"HTTP {exc.code}"
+        except Exception as exc:  # noqa: BLE001 - 探测失败只影响排序
+            info["latency"] = time.time() - started if info["latency"] is None else info["latency"]
+            info["error"] = f"{type(exc).__name__}: {exc}"
+        return info
+
+    @staticmethod
+    def _source_probe_failure(name, url, error):
+        return {
+            "name": name,
+            "url": url,
+            "reachable": False,
+            "speed": 0.0,
+            "latency": None,
+            "error": error,
+        }
+
+    def _ranked_download_sources(self, url, expected_size=None):
+        """Probe every candidate concurrently and return them fastest-first."""
+        candidates = self._build_github_candidate_urls(url)
+        if len(candidates) <= 1 or not self.probe_github_sources:
+            return candidates
+
+        cache_key = (url, expected_size)
+        now = time.time()
+        with self._source_probe_lock:
+            cached = self._source_probe_cache.get(cache_key)
+            if cached and now - cached[0] < self.SOURCE_PROBE_CACHE_SECONDS:
+                return list(cached[1])
+
+        self._log(f"正在检测 {len(candidates)} 个下载源的连通性与速度...")
+        results = collect_probes(
+            candidates,
+            self._probe_download_source,
+            probe_kwargs={"expected_size": expected_size},
+            deadline=self.SOURCE_PROBE_DEADLINE,
+            workers=self.SOURCE_PROBE_WORKERS,
+            failure_factory=self._source_probe_failure,
+        )
+        summary = []
+        for item in results:
+            if item["reachable"]:
+                summary.append(f"{item['name']} {self._format_size(item['speed'])}/s")
+            else:
+                summary.append(f"{item['name']} 不可用")
+        self._log("下载源检测结果: " + "；".join(summary))
+
+        ranked = [(item["name"], item["url"]) for item in results]
+        working = [item for item in results if item["reachable"]]
+        if working:
+            self._log(f"已选择 {self._download_mode_name(working[0]['name'])} 下载")
+        else:
+            self._log("所有下载源探测均失败，将按原始顺序逐个尝试")
+
+        with self._source_probe_lock:
+            self._source_probe_cache[cache_key] = (now, list(ranked))
+        return ranked
+
     
     def _format_size(self, size_bytes):
         """格式化字节大小"""
@@ -373,49 +638,51 @@ class CoreManager:
         """获取 Yatori 最新 release 信息 (增加代理支持)"""
         try:
             self._log("正在检查 Yatori 最新版本...")
-            
-            # 1. 优先读取 releases 列表。GitHub /releases/latest 对 beta/
-            # prerelease 版本并不总是可靠，Yatori 的可用更新经常发布在 beta
-            # 通道，因此这里主动从发布列表里选择最新可安装的 Windows ZIP。
-            try:
-                req = urllib.request.Request(
-                    self.YATORI_RELEASES_API_URL,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=5, context=self.ssl_context) as response:
-                    data = json.loads(response.read().decode('utf-8'))
-                    release = self._select_yatori_release(data)
-                    if release:
-                        return release
-                    self._log("发布列表中未找到可安装的 Yatori Windows ZIP，尝试 latest API...")
-            except Exception as e:
-                self._log(f"访问发布列表失败 ({e})，尝试 latest API...")
 
-            # 2. 兼容旧路径：当 releases 列表不可用时再读取 latest。
-            try:
-                req = urllib.request.Request(
-                    self.YATORI_API_URL,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
+            # 1. 并行请求 releases 列表与 latest：两者共享同一套镜像回退，
+            # 串行等待在限流时会把「检查更新」拖到十几秒。列表结果优先，
+            # 因为它能覆盖 beta/prerelease 通道。
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                releases_future = pool.submit(
+                    self._fetch_github_api_json, self.YATORI_RELEASES_API_URL
                 )
-                with urllib.request.urlopen(req, timeout=5, context=self.ssl_context) as response:
-                    data = json.loads(response.read().decode('utf-8'))
-                    return self._parse_yatori_release(data)
-            except Exception as e:
-                self._log(f"访问 latest API 失败 ({e})，尝试备用方式...")
-            
+                latest_future = pool.submit(
+                    self._fetch_github_api_json, self.YATORI_API_URL
+                )
+                releases_data, releases_error = self._await_future(releases_future)
+                latest_data, latest_error = self._await_future(latest_future)
+
+            if releases_data is not None:
+                release = self._select_yatori_release(releases_data)
+                if release:
+                    return release
+                self._log("发布列表中未找到可安装的 Yatori Windows ZIP，尝试 latest API...")
+            elif releases_error is not None:
+                self._log(f"访问发布列表失败 ({releases_error})，尝试 latest API...")
+
+            # 2. 兼容旧路径：当 releases 列表不可用或不含可安装资源时用 latest。
+            if latest_data is not None:
+                release = self._parse_yatori_release(latest_data)
+                if release:
+                    return release
+                self._log("latest API 中没有可安装的 Yatori Windows ZIP，尝试备用方式...")
+            elif latest_error is not None:
+                self._log(f"访问 latest API 失败 ({latest_error})，尝试备用方式...")
+
             # 3. 尝试备用方式
             return self._get_yatori_latest_fallback()
-                
+
         except Exception as e:
             self._log(f"获取版本信息完全失败: {e}")
-        
+
         return None
+
+    def _await_future(self, future):
+        """Wait for an API future and turn failures into (None, error)."""
+        try:
+            return future.result(timeout=self.GITHUB_API_TIMEOUT * 2 + 2), None
+        except Exception as exc:  # noqa: BLE001 - 交由调用方记录
+            return None, exc
 
     @staticmethod
     def _github_release_time_key(release):
@@ -438,7 +705,7 @@ class CoreManager:
         for release in releases:
             if not isinstance(release, dict) or release.get("draft"):
                 continue
-            parsed = self._parse_yatori_release(release)
+            parsed = self._parse_yatori_release(release, log=False)
             if parsed:
                 parsed["prerelease"] = bool(release.get("prerelease"))
                 candidates.append(
@@ -470,7 +737,10 @@ class CoreManager:
                     selected = candidate
             elif candidate[1] > selected[1]:
                 selected = candidate
-        return selected[2]
+        chosen = selected[2]
+        self._log(f"最新版本: {chosen.get('version')}")
+        self._log(f"匹配到资源: {chosen.get('asset_name')}")
+        return chosen
 
     @staticmethod
     def _is_yatori_windows_amd64_asset(name):
@@ -493,7 +763,7 @@ class CoreManager:
         }.issubset(tokens)
         return windows and amd64
 
-    def _parse_yatori_release(self, data):
+    def _parse_yatori_release(self, data, *, log=True):
         """解析 Yatori release 数据"""
         if not isinstance(data, dict):
             return None
@@ -520,11 +790,13 @@ class CoreManager:
                 break
 
         if not download_url:
-            self._log("未找到明确标注 Windows amd64/x64 的 ZIP 发行资源")
+            if log:
+                self._log("未找到明确标注 Windows amd64/x64 的 ZIP 发行资源")
             return None
 
-        self._log(f"最新版本: {version}")
-        self._log(f"匹配到资源: {asset_name}")
+        if log:
+            self._log(f"最新版本: {version}")
+            self._log(f"匹配到资源: {asset_name}")
 
         return {
             'version': version,
@@ -542,7 +814,9 @@ class CoreManager:
         """备用方式获取最新版本（爬取 releases 页面获取实际下载链接）"""
         latest_url = f"https://github.com/{self.YATORI_REPO}/releases/latest"
         last_error = None
-        for source_name, try_url in self._build_github_candidate_urls(latest_url):
+        for source_name, try_url in self._prefer_known_proxies(
+            self._build_github_candidate_urls(latest_url)
+        ):
             try:
                 self._log(f"探测 Yatori 版本 ({source_name})")
                 req = urllib.request.Request(
@@ -551,7 +825,9 @@ class CoreManager:
                     method='HEAD'
                 )
 
-                with urllib.request.urlopen(req, timeout=10, context=self.ssl_context) as response:
+                with urllib.request.urlopen(
+                    req, timeout=self.GITHUB_PAGE_TIMEOUT, context=self.ssl_context
+                ) as response:
                     final_url = response.geturl()
                     # 从 URL 中提取版本号，例如 /releases/tag/v1.2.3
                     if '/tag/' in final_url:
@@ -591,7 +867,9 @@ class CoreManager:
         last_error = None
 
         for page_url in page_urls:
-            for source_name, try_url in self._build_github_candidate_urls(page_url):
+            for source_name, try_url in self._prefer_known_proxies(
+                self._build_github_candidate_urls(page_url)
+            ):
                 try:
                     page_kind = "资源列表" if page_url == expanded_url else "发行页面"
                     self._log(f"解析 Yatori {page_kind} ({source_name})")
@@ -606,7 +884,7 @@ class CoreManager:
                     )
                     with urllib.request.urlopen(
                         req,
-                        timeout=15,
+                        timeout=self.GITHUB_PAGE_TIMEOUT,
                         context=self.ssl_context,
                     ) as response:
                         html = response.read().decode('utf-8', errors='replace')
@@ -664,30 +942,25 @@ class CoreManager:
         try:
             self._log("正在检查 Autovisor 最新版本...")
             try:
-                req = urllib.request.Request(
-                    self.AUTOVISOR_API_URL,
-                    headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/vnd.github.v3+json'}
-                )
-                with urllib.request.urlopen(req, timeout=8, context=self.ssl_context) as response:
-                    data = json.loads(response.read().decode('utf-8'))
-                    version = data.get('tag_name', 'latest')
+                data = self._fetch_github_api_json(self.AUTOVISOR_API_URL)
+                version = data.get('tag_name', 'latest')
 
-                    # 优先使用 zipball_url，没有就报错
-                    zipball_url = data.get('zipball_url')
-                    if not zipball_url:
-                        self._log("[错误] API 响应中未找到 zipball_url，无法获取下载链接")
-                        return None
+                # 优先使用 zipball_url，没有就报错
+                zipball_url = data.get('zipball_url')
+                if not zipball_url:
+                    self._log("[错误] API 响应中未找到 zipball_url，无法获取下载链接")
+                    return None
 
-                    self._log(f"Autovisor 最新版本: {version}")
-                    return {
-                        'version': version,
-                        'download_url': zipball_url,
-                        'digest': None,
-                        'asset_size': None,
-                        'verification_source': 'unavailable',
-                        'published_at': data.get('published_at'),
-                        'source': 'zipball_url'
-                    }
+                self._log(f"Autovisor 最新版本: {version}")
+                return {
+                    'version': version,
+                    'download_url': zipball_url,
+                    'digest': None,
+                    'asset_size': None,
+                    'verification_source': 'unavailable',
+                    'published_at': data.get('published_at'),
+                    'source': 'zipball_url'
+                }
             except urllib.error.HTTPError as e:
                 self._log(f"[错误] Autovisor API 获取失败: HTTP {e.code} - {e.reason}")
             except urllib.error.URLError as e:
@@ -706,7 +979,9 @@ class CoreManager:
         """通过 GitHub releases/latest 页面及代理回退探测 Autovisor 最新版本"""
         latest_url = f"https://github.com/{self.AUTOVISOR_REPO}/releases/latest"
         last_error = None
-        for source_name, try_url in self._build_github_candidate_urls(latest_url):
+        for source_name, try_url in self._prefer_known_proxies(
+            self._build_github_candidate_urls(latest_url)
+        ):
             try:
                 self._log(f"探测 Autovisor 版本 ({source_name})")
                 req = urllib.request.Request(
@@ -715,7 +990,9 @@ class CoreManager:
                     method='HEAD'
                 )
 
-                with urllib.request.urlopen(req, timeout=10, context=self.ssl_context) as response:
+                with urllib.request.urlopen(
+                    req, timeout=self.GITHUB_PAGE_TIMEOUT, context=self.ssl_context
+                ) as response:
                     final_url = response.geturl()
                     if '/tag/' in final_url:
                         version = final_url.split('/tag/')[-1].split('?')[0]
@@ -738,17 +1015,18 @@ class CoreManager:
             self._log(f"Autovisor 版本探测失败: {last_error}")
         return None
 
-    def download_file(self, url, target_path, progress_callback=None):
-        """下载文件 (支持代理切换、重试、速度/耗时/进度显示)"""
-        urls_to_try = [url]
-        if self.allow_github_proxies and ("github.com" in url or "githubusercontent.com" in url):
-            for proxy in self.GITHUB_PROXIES:
-                urls_to_try.append(proxy + url)
+    def download_file(self, url, target_path, progress_callback=None, expected_size=None):
+        """下载文件 (自动测速选源、失败降级、速度/耗时/进度显示)"""
+        if self.allow_github_proxies and self._is_github_asset_url(url):
+            sources = self._ranked_download_sources(url, expected_size)
+        else:
+            sources = [(None, url)]
 
         last_error = None
 
-        for i, try_url in enumerate(urls_to_try):
-            mode = "直接下载" if i == 0 else f"代理加速 {i}"
+        for source_index, (source_name, try_url) in enumerate(sources):
+            mode = self._download_mode_name(source_name)
+            has_fallback = source_index < len(sources) - 1
 
             try:
                 self._log(f"正在尝试 {mode}: {try_url}")
@@ -765,6 +1043,8 @@ class CoreManager:
                     start_time = time.time()
                     last_log_time = 0
                     last_ui_time = 0
+                    slow_window_start = start_time
+                    slow_window_bytes = 0
 
                     if total_size:
                         self._log(f"{mode} 已连接，文件大小: {self._format_size(total_size)}")
@@ -804,6 +1084,19 @@ class CoreManager:
                                     'url': try_url,
                                 })
                                 last_ui_time = now
+
+                            # 自适应降级：探测很快但实际被限速的源，按窗口速度切换下一个
+                            if has_fallback and elapsed >= self.DOWNLOAD_SLOW_GRACE_SECONDS:
+                                window_elapsed = now - slow_window_start
+                                if window_elapsed >= self.DOWNLOAD_SLOW_WINDOW_SECONDS:
+                                    window_speed = (downloaded - slow_window_bytes) / max(window_elapsed, 0.001)
+                                    if window_speed < self.DOWNLOAD_SLOW_MIN_SPEED:
+                                        raise IOError(
+                                            f"速度过慢（{self._format_size(window_speed)}/s），"
+                                            "切换到下一个下载源"
+                                        )
+                                    slow_window_start = now
+                                    slow_window_bytes = downloaded
 
                             # 日志更新频率低一点，避免刷屏
                             if now - last_log_time >= 1.0:
@@ -1002,7 +1295,12 @@ class CoreManager:
                 with open(config_file, "rb") as handle:
                     config_bytes = handle.read()
 
-            if not self.download_file(download_url, temp_zip, progress_callback):
+            if not self.download_file(
+                download_url,
+                temp_zip,
+                progress_callback,
+                expected_size=release_info.get('asset_size'),
+            ):
                 return False
             if not self._verify_release_archive(temp_zip, release_info):
                 return False
@@ -1147,7 +1445,12 @@ class CoreManager:
                     self._restore_path(src, dst)
             self._log("已备份 Autovisor 用户配置和运行数据")
 
-            if not self.download_file(download_url, temp_zip, progress_callback):
+            if not self.download_file(
+                download_url,
+                temp_zip,
+                progress_callback,
+                expected_size=release_info.get('asset_size'),
+            ):
                 return False
             if not self._verify_release_archive(temp_zip, release_info):
                 return False

@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+patch = mock.patch
 SCRIPT_PATH = PROJECT_ROOT / "bootstrap.py"
 
 
@@ -252,6 +253,55 @@ class DependencyTests(unittest.TestCase):
 
     def test_webview2_is_considered_ready_off_windows(self):
         self.assertTrue(bootstrap.webview2_installed(os_name="posix"))
+
+
+    def test_ranked_pypi_mirrors_uses_measured_order(self):
+        ranked = tuple(reversed(bootstrap.PYPI_MIRRORS))
+
+        with patch.object(bootstrap, "rank_pypi_mirrors", lambda mirrors, logger=None: ranked):
+            self.assertEqual(bootstrap.ranked_pypi_mirrors(), ranked)
+
+    def test_ranked_pypi_mirrors_falls_back_to_configured_order(self):
+        logs = []
+
+        def broken(_mirrors, logger=None):
+            raise OSError("probe refused")
+
+        with patch.object(bootstrap, "rank_pypi_mirrors", broken):
+            self.assertEqual(
+                bootstrap.ranked_pypi_mirrors(logger=logs.append),
+                bootstrap.PYPI_MIRRORS,
+            )
+
+        self.assertTrue(any("PyPI 镜像测速失败" in line for line in logs))
+
+    def test_ranked_pypi_mirrors_without_probe_module(self):
+        with patch.object(bootstrap, "rank_pypi_mirrors", None):
+            self.assertEqual(
+                bootstrap.ranked_pypi_mirrors(), bootstrap.PYPI_MIRRORS
+            )
+
+    def test_ranked_playwright_hosts_passes_python_and_falls_back(self):
+        ranked = tuple(reversed(bootstrap.PLAYWRIGHT_HOSTS))
+        seen = []
+
+        def fake_rank(hosts, *, python_exe=None, logger=None):
+            seen.append((tuple(hosts), python_exe))
+            return ranked
+
+        with patch.object(bootstrap, "rank_playwright_hosts", fake_rank):
+            self.assertEqual(bootstrap.ranked_playwright_hosts("python.exe"), ranked)
+
+        self.assertEqual(seen, [(bootstrap.PLAYWRIGHT_HOSTS, "python.exe")])
+
+        def broken(*_args, **_kwargs):
+            raise RuntimeError("dry-run failed")
+
+        with patch.object(bootstrap, "rank_playwright_hosts", broken):
+            self.assertEqual(
+                bootstrap.ranked_playwright_hosts("python.exe"),
+                bootstrap.PLAYWRIGHT_HOSTS,
+            )
 
 
 class BatchLauncherTests(unittest.TestCase):

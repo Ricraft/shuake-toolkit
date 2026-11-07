@@ -24,6 +24,8 @@ class AutovisorDependencyManagerTests(unittest.TestCase):
         run_async=None,
         schedule=None,
         mirrors=(("one", "https://one.invalid/simple"),),
+        source_ranker=None,
+        playwright_host_resolver=None,
     ):
         logs = []
         lines = []
@@ -31,8 +33,8 @@ class AutovisorDependencyManagerTests(unittest.TestCase):
         ready = []
         commands = []
 
-        def run_command(command, cwd):
-            commands.append((command, cwd))
+        def run_command(command, cwd, **kwargs):
+            commands.append((command, cwd, kwargs))
             return 0
 
         manager = AutovisorDependencyManager(
@@ -46,6 +48,8 @@ class AutovisorDependencyManagerTests(unittest.TestCase):
             show_error=lambda title, message: errors.append((title, message)),
             run_async=run_async or (lambda target: target()),
             mirrors=mirrors,
+            source_ranker=source_ranker,
+            playwright_host_resolver=playwright_host_resolver,
         )
         return manager, logs, lines, errors, ready, commands
 
@@ -138,6 +142,116 @@ class AutovisorDependencyManagerTests(unittest.TestCase):
             self.assertEqual(popen.call_count, 2)
             self.assertTrue(any("second" in entry and "完成" in entry for entry in logs))
             self.assertTrue(any(item[2].get("replace_last") for item in lines))
+
+    def test_install_with_mirrors_uses_ranked_order(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager, _logs, _lines, _errors, _ready, _commands = self.make_manager(
+                Path(temp_dir),
+                mirrors=(
+                    ("first", "https://first.invalid/simple"),
+                    ("second", "https://second.invalid/simple"),
+                ),
+                source_ranker=lambda mirrors, logger=None: tuple(
+                    reversed(tuple(mirrors))
+                ),
+            )
+
+            with patch(
+                "src.autovisor_dependency_manager.subprocess.Popen",
+                side_effect=[_Process(0, [])],
+            ) as popen:
+                manager.install_with_mirrors(
+                    "python.exe", ["requests>=2.32,<3"]
+                )
+
+            self.assertEqual(popen.call_count, 1)
+            command = popen.call_args_list[0][0][0]
+            self.assertIn("https://second.invalid/simple", command)
+
+    def test_install_with_mirrors_survives_a_broken_ranker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            def broken(_mirrors, logger=None):
+                raise RuntimeError("probe down")
+
+            manager, logs, *_rest = self.make_manager(
+                Path(temp_dir),
+                source_ranker=broken,
+            )
+
+            with patch(
+                "src.autovisor_dependency_manager.subprocess.Popen",
+                side_effect=[_Process(0, [])],
+            ) as popen:
+                manager.install_with_mirrors(
+                    "python.exe", ["requests>=2.32,<3"]
+                )
+
+            command = popen.call_args_list[0][0][0]
+            self.assertIn("https://one.invalid/simple", command)
+            self.assertTrue(any("镜像源测速失败" in line for line in logs))
+
+    def test_playwright_browser_download_falls_back_to_next_host(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager, logs, _lines, errors, ready, _commands = self.make_manager(
+                Path(temp_dir),
+                playwright_host_resolver=lambda python_exe, logger=None: (
+                    ("mirror", "https://mirror.invalid"),
+                    ("官方", None),
+                ),
+            )
+            manager.install_with_mirrors = lambda *_args, **_kwargs: None
+            calls = []
+
+            def fake_command(command, cwd, env=None, **_kwargs):
+                calls.append((command, cwd, env))
+                return 1 if env else 0
+
+            manager.run_logged_command = fake_command
+
+            result = manager.install_async(
+                "python.exe",
+                [("playwright", "playwright", "missing")],
+                ensure_playwright_browser=True,
+            )
+
+            self.assertTrue(result)
+            self.assertEqual(errors, [])
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(
+                calls[0][2]["PLAYWRIGHT_DOWNLOAD_HOST"], "https://mirror.invalid"
+            )
+            self.assertIsNone(calls[1][2])
+            self.assertEqual(
+                calls[1][0][-3:], ["playwright", "install", "chromium"]
+            )
+            self.assertTrue(
+                any("下载 Chromium 失败" in line for line in logs)
+            )
+
+    def test_playwright_browser_download_tolerates_two_argument_callback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager, _logs, _lines, errors, ready, _commands = self.make_manager(
+                Path(temp_dir),
+                playwright_host_resolver=lambda python_exe, logger=None: (
+                    ("mirror", "https://mirror.invalid"),
+                ),
+            )
+            manager.install_with_mirrors = lambda *_args, **_kwargs: None
+
+            def two_argument_command(command, cwd):
+                return 0
+
+            manager.run_logged_command = two_argument_command
+
+            result = manager.install_async(
+                "python.exe",
+                [("playwright", "playwright", "missing")],
+                ensure_playwright_browser=True,
+            )
+
+            self.assertTrue(result)
+            self.assertEqual(errors, [])
+            self.assertEqual(ready, [True])
 
     def test_prepare_config_preserves_data_and_writes_detected_browser(self):
         with tempfile.TemporaryDirectory() as temp_dir:

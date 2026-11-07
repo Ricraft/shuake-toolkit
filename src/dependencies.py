@@ -60,6 +60,7 @@ def ensure_core_dependencies(
     include_optional: bool = True,
     python_executable: str | None = None,
     index_url: str = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
+    mirror_ranker: Callable[[], Iterable[str]] | None = None,
     import_module: Callable[[str], object] = importlib.import_module,
     install: Callable[..., object] = subprocess.check_call,
     output: Callable[[str], None] = print,
@@ -68,6 +69,8 @@ def ensure_core_dependencies(
 
     Auto-install is retained for compatibility with the existing launcher, but
     it is now isolated behind a function and reports failures to the caller.
+    ``mirror_ranker`` lets the caller supply speed-ranked index URLs; every
+    requirement then falls through them instead of pinning a single mirror.
     Heavy OpenCV/NumPy wheels are intentionally managed by Autovisor's local
     ``runtime_deps`` directory instead of being installed into global Python.
     """
@@ -85,6 +88,15 @@ def ensure_core_dependencies(
         return missing
 
     executable = python_executable or sys.executable
+    index_urls = [index_url]
+    if mirror_ranker is not None:
+        try:
+            ranked = [str(url) for url in mirror_ranker() if url]
+        except Exception as exc:  # noqa: BLE001 - fall back to the pinned mirror
+            output(f"[启动器] 镜像源测速失败，使用默认源: {exc}")
+            ranked = []
+        if ranked:
+            index_urls = ranked
     output(
         f"[启动器] 检测到 {len(missing)} 个依赖缺失或损坏，"
         "正在自动安装..."
@@ -96,14 +108,23 @@ def ensure_core_dependencies(
     }
     failures = []
     for requirement in missing:
-        try:
-            install(
-                [executable, "-m", "pip", "install", requirement, "-i", index_url],
-                timeout=120,
-            )
-        except Exception as exc:
+        install_error = None
+        installed = False
+        for candidate_index in index_urls:
+            try:
+                install(
+                    [executable, "-m", "pip", "install", requirement, "-i", candidate_index],
+                    timeout=120,
+                )
+                installed = True
+                break
+            except Exception as exc:
+                install_error = exc
+                if len(index_urls) > 1:
+                    output(f"[启动器]   {candidate_index} 安装失败，换下一个镜像重试")
+        if not installed:
             failures.append(requirement)
-            output(f"[启动器] ✗ {requirement} 安装失败: {exc}")
+            output(f"[启动器] ✗ {requirement} 安装失败: {install_error}")
             output(f"[启动器]   可手动运行: pip install {requirement}")
             continue
 

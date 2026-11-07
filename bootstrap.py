@@ -39,6 +39,12 @@ try:
 except Exception:  # pragma: no cover - defensive fallback
     CORE_DEPENDENCIES = ()
 
+try:
+    from src.install_sources import rank_playwright_hosts, rank_pypi_mirrors
+except Exception:  # pragma: no cover - bootstrap must remain standalone
+    rank_playwright_hosts = None  # type: ignore
+    rank_pypi_mirrors = None  # type: ignore
+
 FALLBACK_CORE_MODULES = (
     "yaml",
     "requests",
@@ -510,6 +516,34 @@ def ensure_playwright_browser(
     raise RuntimeError(f"Playwright Chromium 安装失败：{last_error}")
 
 
+def ranked_pypi_mirrors(*, logger=None) -> tuple[tuple[str, str], ...]:
+    """Order the PyPI mirrors by measured speed (default order on failure)."""
+    if rank_pypi_mirrors is None:
+        return PYPI_MIRRORS
+    try:
+        return tuple(rank_pypi_mirrors(PYPI_MIRRORS, logger=logger))
+    except Exception as exc:  # noqa: BLE001 - probing must never block setup
+        _emit(logger, f"PyPI 镜像测速失败，按默认顺序尝试: {exc}", "warning")
+        return PYPI_MIRRORS
+
+
+def ranked_playwright_hosts(venv_python, *, logger=None):
+    """Order the Playwright download hosts by measured speed."""
+    if rank_playwright_hosts is None:
+        return PLAYWRIGHT_HOSTS
+    try:
+        return tuple(
+            rank_playwright_hosts(
+                PLAYWRIGHT_HOSTS,
+                python_exe=venv_python,
+                logger=logger,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - probing must never block setup
+        _emit(logger, f"Playwright 下载源测速失败，按默认顺序尝试: {exc}", "warning")
+        return PLAYWRIGHT_HOSTS
+
+
 def autovisor_runtime_ready(
     venv_python: str | os.PathLike[str],
     *,
@@ -839,8 +873,16 @@ def main(argv: list[str] | None = None) -> int:
             venv_dir=args.venv_dir,
             logger=logger,
         )
-        ensure_requirements(venv_python, logger=logger)
-        ensure_playwright_browser(venv_python, logger=logger)
+        ensure_requirements(
+            venv_python,
+            mirrors=ranked_pypi_mirrors(logger=logger),
+            logger=logger,
+        )
+        ensure_playwright_browser(
+            venv_python,
+            hosts=ranked_playwright_hosts(venv_python, logger=logger),
+            logger=logger,
+        )
 
         if not args.skip_autovisor_runtime:
             ensure_autovisor_runtime(venv_python, logger=logger)

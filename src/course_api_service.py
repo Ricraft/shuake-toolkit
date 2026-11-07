@@ -14,6 +14,11 @@ from src.course_catalog import (
     normalize_account_index,
     parse_zhs_course_data,
 )
+from src.install_sources import (
+    PLAYWRIGHT_HOSTS,
+    rank_playwright_hosts,
+    rank_pypi_index_urls,
+)
 
 
 class CourseAPIService:
@@ -80,27 +85,32 @@ class CourseAPIService:
             f"[课程获取] 检测到缺少playwright依赖，正在安装...{suffix}"
         )
         env = os.environ.copy()
-        env["PLAYWRIGHT_DOWNLOAD_HOST"] = (
-            "https://npmmirror.com/mirrors/playwright"
-        )
         env["PYTHONUNBUFFERED"] = "1"
         try:
-            install_code = self.launcher._run_logged_command(
-                [
-                    python_exe,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--disable-pip-version-check",
-                    "--no-color",
-                    "--prefer-binary",
-                    "-i",
-                    "https://pypi.tuna.tsinghua.edu.cn/simple",
-                    "playwright>=1.52,<2",
-                ],
-                base_dir,
-                env=env,
-            )
+            index_urls = rank_pypi_index_urls(logger=self.launcher.log_system)
+            install_code = 1
+            for index_url in index_urls:
+                install_code = self.launcher._run_logged_command(
+                    [
+                        python_exe,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--disable-pip-version-check",
+                        "--no-color",
+                        "--prefer-binary",
+                        "-i",
+                        index_url,
+                        "playwright>=1.52,<2",
+                    ],
+                    base_dir,
+                    env=env,
+                )
+                if install_code == 0:
+                    break
+                self.launcher.log_system(
+                    f"[课程获取] {index_url} 安装playwright失败，换下一个镜像重试"
+                )
             if install_code != 0:
                 return {
                     "ok": False,
@@ -110,15 +120,34 @@ class CourseAPIService:
             self.launcher.log_system(
                 "[课程获取] 正在安装Playwright Chromium浏览器..."
             )
-            install_code = self.launcher._run_logged_command(
-                [python_exe, "-m", "playwright", "install", "chromium"],
-                base_dir,
-                env=env,
+            hosts = rank_playwright_hosts(
+                PLAYWRIGHT_HOSTS,
+                python_exe=python_exe,
+                logger=self.launcher.log_system,
             )
-            if install_code != 0:
+            browser_code = 1
+            for host_name, host_url in hosts:
+                browser_env = os.environ.copy()
+                browser_env["PYTHONUNBUFFERED"] = "1"
+                if host_url:
+                    browser_env["PLAYWRIGHT_DOWNLOAD_HOST"] = host_url
+                self.launcher.log_system(
+                    f"[课程获取] 通过 {host_name} 下载 Chromium..."
+                )
+                browser_code = self.launcher._run_logged_command(
+                    [python_exe, "-m", "playwright", "install", "chromium"],
+                    base_dir,
+                    env=browser_env,
+                )
+                if browser_code == 0:
+                    break
+                self.launcher.log_system(
+                    f"[课程获取] {host_name} 下载Chromium失败，换下一个源重试"
+                )
+            if browser_code != 0:
                 return {
                     "ok": False,
-                    "message": f"安装Chromium浏览器失败，返回码: {install_code}",
+                    "message": f"安装Chromium浏览器失败，返回码: {browser_code}",
                 }
         except Exception as exc:
             return {"ok": False, "message": f"准备Playwright环境失败: {exc}"}
@@ -164,9 +193,7 @@ class CourseAPIService:
                 self.launcher._get_subprocess_window_kwargs()
             )
             env = os.environ.copy()
-            env["PLAYWRIGHT_DOWNLOAD_HOST"] = (
-                "https://npmmirror.com/mirrors/playwright"
-            )
+            env["PLAYWRIGHT_DOWNLOAD_HOST"] = PLAYWRIGHT_HOSTS[0][1]
             process = self.process_factory(
                 [python_exe, str(script_path), str(account_number)],
                 stdout=subprocess.PIPE,

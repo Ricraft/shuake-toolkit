@@ -1317,6 +1317,13 @@
                         </div>
                         <div class="flex flex-col" id="changelog-list">
                             <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.6.4 - 课程进度、下载测源与更新体验</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">学习通课程列表显示任务点进度与课程截止日期，是否结束改按教务页面状态判定并置底不可选；勾选结果直接就是包含课程列表。核心与依赖下载改为并发测速选源，更新弹窗内嵌下载进度并在完成后自动关闭；「检查更新」遇 GitHub 匿名接口限流时自动改走镜像通道。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
                                 <span class="changelog-badge improve">优化</span>
                                 <div>
                                     <div class="text-sm font-semibold">v1.6.3 - Yatori 平台设置与运行时间管理</div>
@@ -1679,8 +1686,18 @@
             </div>
             <div class="update-notes-title">最新版本介绍</div>
             <pre class="update-release-notes" id="yatori-update-notes">该版本暂未提供更新说明。</pre>
+            <div class="update-progress" id="yatori-update-progress" data-phase="downloading" hidden>
+                <div class="update-progress-head">
+                    <span id="yatori-update-progress-label">正在下载</span>
+                    <strong id="yatori-update-progress-percent">0%</strong>
+                </div>
+                <div class="update-progress-track">
+                    <div class="update-progress-bar" id="yatori-update-progress-bar"></div>
+                </div>
+                <div class="update-progress-detail" id="yatori-update-progress-detail"></div>
+            </div>
             <div class="modal-actions">
-                <button class="btn btn-outline" onclick="closeYatoriUpdateModal()">稍后再说</button>
+                <button class="btn btn-outline" id="yatori-update-cancel-btn" onclick="closeYatoriUpdateModal()">稍后再说</button>
                 <button class="btn btn-primary" id="yatori-update-confirm-btn" onclick="confirmYatoriUpdate()">
                     <i class="fas fa-download"></i> 确认更新
                 </button>

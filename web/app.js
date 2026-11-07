@@ -241,6 +241,7 @@
                 !!n.dependency_installing.autovisor
             );
             renderAutovisorActivity(n.autovisor_activity);
+            handleCoreUpdateRuntime(n.core_update);
             if (n.about_version) {
                 document.getElementById('about-version').textContent = n.about_version;
                 const m = n.about_version.match(/统一启动器\s*([^|]+)/);
@@ -546,17 +547,6 @@
             });
             return merged;
         }
-        function mergeCourseNames(existingNames, selectedNames) {
-            const merged = [];
-            const seen = new Set();
-            [...(existingNames || []), ...(selectedNames || [])].forEach(value => {
-                const name = String(value || '').trim();
-                if (!name || seen.has(name)) return;
-                seen.add(name);
-                merged.push(name);
-            });
-            return merged;
-        }
         function isZhihuishuCourseUrl(value) {
             try {
                 const parsed = new URL(String(value || '').trim());
@@ -610,7 +600,7 @@
                             <button class="btn btn-outline btn-sm" onclick="selectNewCoursesOnly()"><i class="fas fa-plus"></i> 仅选新课程</button>
                         </div>
                         <div class="course-select-list">
-                            ${coursesWithStatus.map((c, i) => `<div class="course-select-item${c.isDuplicate ? ' course-duplicate' : ''}" onclick="toggleCourseItem(this)">
+                            ${coursesWithStatus.map((c, i) => `<div class="course-select-item${c.isDuplicate ? ' course-duplicate' : ''}" onclick="toggleCourseItem(this, event)">
                                 <input type="checkbox" id="course-cb-${i}" ${c.isDuplicate ? '' : 'checked'} ${c.isDuplicate ? 'data-duplicate="true"' : ''}>
                                 <div class="course-select-info">
                                     <div class="course-select-name">
@@ -644,9 +634,13 @@
             window._courseSelectCourses = null;
             window._courseSelectExistingUrls = null;
         }
-        function toggleCourseItem(el) {
+        function toggleCourseItem(el, event) {
+            if (!el) return;
             const cb = el.querySelector('input[type="checkbox"]');
-            if (cb) cb.checked = !cb.checked;
+            if (!cb) return;
+            // 直接点方框时浏览器已经切换过，这里不再翻转，避免"点了没反应"
+            if (event && (event.target === cb || cb.contains(event.target))) return;
+            cb.checked = !cb.checked;
         }
         function selectAllCourses() {
             document.querySelectorAll('#course-select-overlay input[type="checkbox"]').forEach(cb => cb.checked = true);
@@ -755,70 +749,92 @@
             const existingCourseNames = (card ? (card.querySelector('[data-field="includeCourses"]')?.value || '') : '')
                 .split('\n').map(s => s.trim()).filter(Boolean);
             const existingNames = new Set(existingCourseNames);
-            const coursesWithStatus = courses.map(c => ({
+            // 已结束的课程固定排到列表末尾；同组内保持接口原有顺序（稳定排序）。
+            const orderedCourses = courses
+                .map((course, index) => ({ course, index }))
+                .sort((a, b) => (Number(Boolean(a.course.ended)) - Number(Boolean(b.course.ended)))
+                    || (a.index - b.index))
+                .map(entry => entry.course);
+            const coursesWithStatus = orderedCourses.map(c => ({
                 ...c,
-                isDuplicate: existingNames.has(c.name) || existingNames.has(c.name?.trim())
+                isEnded: Boolean(c.ended),
+                // 勾选状态即最终写回 includeCourses 的内容，打开时回显当前已配置的课程。
+                isSelected: !c.ended && (existingNames.has(c.name) || existingNames.has(c.name?.trim()))
             }));
-            const newCount = coursesWithStatus.filter(c => !c.isDuplicate).length;
-            const dupCount = coursesWithStatus.filter(c => c.isDuplicate).length;
             const overlay = document.createElement('div');
             overlay.id = 'xxt-course-select-overlay';
             overlay.className = 'modal-overlay active';
-            overlay.innerHTML = `<div class="course-modal"><div class="modal-header"><div><h3 class="modal-title">选择要刷的学习通课程 (账号 ${accountIndex + 1})</h3><div class="modal-subtitle">共 ${courses.length} 门课程，${newCount} 门新课程，${dupCount} 门已添加</div></div><button class="modal-close" onclick="closeXuexitongCourseDialog()">&times;</button></div><div class="modal-body"><div class="course-select-actions"><button class="btn btn-outline btn-sm" onclick="xxtSelectAllCourses()"><i class="fas fa-check-double"></i> 全选</button><button class="btn btn-outline btn-sm" onclick="xxtDeselectAllCourses()"><i class="fas fa-times"></i> 取消全选</button><button class="btn btn-outline btn-sm" onclick="xxtSelectNewCoursesOnly()"><i class="fas fa-plus"></i> 仅选新课程</button></div><div class="course-select-list">${coursesWithStatus.map((c, i) => `<div class="course-select-item${c.isDuplicate ? ' course-duplicate' : ''}" onclick="xxtToggleCourseItem(this)"><input type="checkbox" id="xxt-cb-${i}" ${c.isDuplicate ? '' : 'checked'} ${c.isDuplicate ? 'data-duplicate="true"' : ''}><div class="course-select-info"><div class="course-select-name">${escapeHtml(c.name)}${c.isretire ? '<span class="course-archived-badge">已归档</span>' : ''}${c.isDuplicate ? '<span class="course-duplicate-badge">已添加</span>' : ''}</div><div class="course-select-meta"><span>${escapeHtml(c.courseId || '')}</span>${c.teacher ? `<span>${escapeHtml(c.teacher)}</span>` : ''}${c.school ? `<span>${escapeHtml(c.school)}</span>` : ''}</div></div></div>`).join('')}</div></div><div class="modal-footer"><button class="btn btn-outline" onclick="closeXuexitongCourseDialog()">取消</button><button class="btn btn-primary" onclick="confirmXuexitongCourseSelection(${accountIndex})"><i class="fas fa-check"></i> 确认添加</button></div></div>`;
+            overlay.innerHTML = `<div class="course-modal"><div class="modal-header"><div><h3 class="modal-title">选择要刷的学习通课程 (账号 ${accountIndex + 1})</h3><div class="modal-subtitle" id="xxt-course-select-subtitle"></div></div><button class="modal-close" onclick="closeXuexitongCourseDialog()">&times;</button></div><div class="modal-body"><div class="course-select-actions"><button class="btn btn-outline btn-sm" onclick="xxtSelectAllCourses()"><i class="fas fa-check-double"></i> 全选</button><button class="btn btn-outline btn-sm" onclick="xxtDeselectAllCourses()"><i class="fas fa-times"></i> 取消全选</button></div><div class="course-select-list">${coursesWithStatus.map((c, i) => `<div class="course-select-item${c.isEnded ? ' course-select-item-ended' : ''}"${c.isEnded ? '' : ' onclick="xxtToggleCourseItem(this, event)"'}><input type="checkbox" id="xxt-cb-${i}"${c.isEnded ? ' disabled data-ended="true"' : (c.isSelected ? ' checked' : '')}><div class="course-select-info"><div class="course-select-name">${escapeHtml(c.name)}${c.isEnded ? '<span class="course-archived-badge">已结束</span>' : ''}</div><div class="course-select-meta"><span>${escapeHtml(c.courseId || '')}</span>${c.teacher ? `<span>${escapeHtml(c.teacher)}</span>` : ''}${c.school ? `<span>${escapeHtml(c.school)}</span>` : ''}${c.hasJobs ? `<span class="course-progress">任务点 ${c.jobFinishCount}/${c.jobCount} · ${c.jobRate}%</span>` : ''}${c.endDate ? `<span class="course-deadline">截止 ${escapeHtml(c.endDate)}</span>` : ''}</div></div></div>`).join('')}</div></div><div class="modal-footer"><button class="btn btn-outline" onclick="closeXuexitongCourseDialog()">取消</button><button class="btn btn-primary" onclick="confirmXuexitongCourseSelection(${accountIndex})"><i class="fas fa-check"></i> 保存选中课程</button></div></div>`;
             document.body.appendChild(overlay);
             window._xxtSelectCourses = coursesWithStatus;
-            window._xxtExistingCourseNames = existingCourseNames;
+            xxtUpdateCourseSelectSummary();
         }
 
         function closeXuexitongCourseDialog() {
             const overlay = document.getElementById('xxt-course-select-overlay');
             if (overlay) overlay.remove();
             window._xxtSelectCourses = null;
-            window._xxtExistingCourseNames = null;
         }
 
-        function xxtToggleCourseItem(el) {
+        function xxtUpdateCourseSelectSummary() {
+            const subtitle = document.getElementById('xxt-course-select-subtitle');
+            if (!subtitle) return;
+            const boxes = Array.from(
+                document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]')
+            );
+            const selected = boxes.filter(cb => cb.checked).length;
+            const ended = boxes.filter(cb => cb.dataset.ended === 'true').length;
+            subtitle.textContent = ended
+                ? `共 ${boxes.length} 门课程，已选 ${selected} 门（${ended} 门已结束不可选）`
+                : `共 ${boxes.length} 门课程，已选 ${selected} 门`;
+        }
+
+        function xxtToggleCourseItem(el, event) {
+            if (!el || el.classList.contains('course-select-item-ended')) return;
             const cb = el.querySelector('input[type="checkbox"]');
-            if (cb && !cb.dataset.duplicate) cb.checked = !cb.checked;
-            else if (cb && cb.dataset.duplicate) { cb.checked = !cb.checked; cb.dataset.duplicate = cb.checked ? '' : 'true'; el.classList.toggle('course-duplicate', !cb.checked); }
+            if (!cb || cb.disabled) return;
+            // 直接点方框时浏览器已经切换过，这里只刷新统计，避免翻转两次导致"点了没反应"
+            if (event && (event.target === cb || cb.contains(event.target))) {
+                xxtUpdateCourseSelectSummary();
+                return;
+            }
+            cb.checked = !cb.checked;
+            xxtUpdateCourseSelectSummary();
         }
 
         function xxtSelectAllCourses() {
-            document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]').forEach(cb => cb.checked = true);
+            document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]:not(:disabled)').forEach(cb => cb.checked = true);
+            xxtUpdateCourseSelectSummary();
         }
 
         function xxtDeselectAllCourses() {
-            document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]').forEach(cb => cb.checked = false);
-        }
-
-        function xxtSelectNewCoursesOnly() {
-            document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]').forEach(cb => {
-                cb.checked = !cb.dataset.duplicate;
-            });
+            document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]:not(:disabled)').forEach(cb => cb.checked = false);
+            xxtUpdateCourseSelectSummary();
         }
 
         async function confirmXuexitongCourseSelection(accountIndex) {
             const courses = window._xxtSelectCourses;
-            const existingCourseNames = window._xxtExistingCourseNames || [];
             if (!courses) { closeXuexitongCourseDialog(); return; }
+            // 勾选结果即最终课程列表，不再与旧配置合并。
             const checkboxes = document.querySelectorAll('#xxt-course-select-overlay input[type="checkbox"]');
             const selected = [];
             checkboxes.forEach((cb, i) => {
-                if (cb.checked && courses[i]) { selected.push(courses[i].name); }
+                if (cb.checked && !cb.disabled && courses[i] && !courses[i].ended) {
+                    selected.push(courses[i].name);
+                }
             });
             if (!selected.length) { showToast('请至少选择一门课程', 'warning'); return; }
-            const merged = mergeCourseNames(existingCourseNames, selected);
             closeXuexitongCourseDialog();
             const card = document.querySelector(`.yatori-account-card[data-index="${accountIndex}"]`);
             if (!card) return;
             const ta = card.querySelector('[data-field="includeCourses"]');
-            if (ta) ta.value = merged.join('\n');
+            if (ta) ta.value = selected.join('\n');
             const saveResult = await saveSettings(false);
             if (!saveResult?.ok) {
-                showToast('课程已添加到当前页面，但尚未保存，请重试', 'warning');
+                showToast('课程已更新到当前页面，但尚未保存，请重试', 'warning');
                 return;
             }
-            showToast(`已添加 ${selected.length} 门课程，共 ${merged.length} 门`, 'success');
+            showToast(`已保存 ${selected.length} 门课程`, 'success');
         }
 
         function syncYatoriPlatformCard(card) {
@@ -1102,6 +1118,135 @@
         }
 
         let yatoriUpdateConfirming = false;
+        let yatoriUpdateInstalling = false;
+        let yatoriUpdateLastPhase = 'idle';
+
+        function formatUpdateBytes(value) {
+            const size = Number(value);
+            if (!Number.isFinite(size) || size <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let index = 0;
+            let current = size;
+            while (current >= 1024 && index < units.length - 1) {
+                current /= 1024;
+                index += 1;
+            }
+            return `${current.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+        }
+
+        function formatUpdateDuration(value) {
+            const seconds = Number(value);
+            if (!Number.isFinite(seconds) || seconds <= 0) return '';
+            const total = Math.round(seconds);
+            if (total < 60) return `${total} 秒`;
+            const minutes = Math.floor(total / 60);
+            const rest = total % 60;
+            if (minutes < 60) return `${minutes} 分 ${rest} 秒`;
+            return `${Math.floor(minutes / 60)} 时 ${minutes % 60} 分`;
+        }
+
+        function setYatoriUpdateBusy(busy, label = '正在更新...') {
+            const btn = document.getElementById('yatori-update-confirm-btn');
+            const cancel = document.getElementById('yatori-update-cancel-btn');
+            const box = document.getElementById('yatori-update-progress');
+            if (btn) {
+                btn.disabled = !!busy;
+                btn.innerHTML = busy
+                    ? `<i class="fas fa-spinner fa-spin"></i> ${escapeHtml(label)}`
+                    : '<i class="fas fa-download"></i> 确认更新';
+            }
+            if (cancel) cancel.disabled = !!busy;
+            if (box) box.hidden = !busy;
+        }
+
+        function updateYatoriProgressView(info) {
+            const box = document.getElementById('yatori-update-progress');
+            if (!box) return;
+            box.hidden = false;
+            const phase = ['downloading', 'installing', 'completed', 'failed'].includes(info?.phase)
+                ? info.phase
+                : 'downloading';
+            const rawPercent = Number(info?.percent);
+            const percent = phase === 'completed'
+                ? 100
+                : Math.max(0, Math.min(100, Number.isFinite(rawPercent) ? rawPercent : 0));
+            box.dataset.phase = phase;
+            setText(
+                'yatori-update-progress-label',
+                phase === 'completed' ? '更新完成'
+                    : phase === 'failed' ? '更新失败'
+                    : phase === 'installing' ? '正在安装'
+                    : '正在下载'
+            );
+            setText('yatori-update-progress-percent', `${percent.toFixed(percent >= 100 ? 0 : 1)}%`);
+            const bar = document.getElementById('yatori-update-progress-bar');
+            if (bar) bar.style.width = `${percent}%`;
+            const parts = [];
+            const source = String(info?.mode || '').trim();
+            if (source) parts.push(source === '直接下载' ? 'GitHub 直连' : source);
+            if (Number(info?.total) > 0) {
+                parts.push(`${formatUpdateBytes(info.downloaded)} / ${formatUpdateBytes(info.total)}`);
+            } else if (Number(info?.downloaded) > 0) {
+                parts.push(`已下载 ${formatUpdateBytes(info.downloaded)}`);
+            }
+            const speed = formatUpdateDuration(info?.eta);
+            if (Number(info?.speed) > 0) parts.push(`${formatUpdateBytes(info.speed)}/s`);
+            if (speed) parts.push(`剩余 ${speed}`);
+            const message = String(info?.message || '').trim();
+            if (message) parts.push(message);
+            setText('yatori-update-progress-detail', parts.filter(Boolean).join(' · ') || (
+                phase === 'completed' ? '核心文件已替换完成'
+                    : phase === 'failed' ? '请稍后重试'
+                    : '正在准备下载...'
+            ));
+        }
+
+        function handleCoreUpdateRuntime(info) {
+            if (!info || typeof info !== 'object') return;
+            const core = String(info.core || '');
+            const phase = String(info.phase || 'idle');
+            if (core !== 'yatori') return;
+            const wasActive = yatoriUpdateLastPhase === 'downloading' || yatoriUpdateLastPhase === 'installing';
+            if (phase === 'downloading' || phase === 'installing') {
+                yatoriUpdateLastPhase = phase;
+                if (yatoriUpdateInstalling) updateYatoriProgressView(info);
+                return;
+            }
+            if (wasActive) {
+                if (phase === 'completed' && yatoriUpdateInstalling) {
+                    updateYatoriProgressView({ ...info, phase: 'completed', percent: 100 });
+                    yatoriUpdateInstalling = false;
+                    yatoriUpdateConfirming = false;
+                    yatoriUpdateLastPhase = 'completed';
+                    showToast('Yatori 更新完成', 'success');
+                    setTimeout(() => {
+                        document.getElementById('yatori-update-modal')?.classList.remove('active');
+                        window.pendingYatoriUpdateDialog = null;
+                        setYatoriUpdateBusy(false);
+                        yatoriUpdateLastPhase = 'idle';
+                    }, 900);
+                    return;
+                }
+                if (phase === 'failed' && yatoriUpdateInstalling) {
+                    yatoriUpdateInstalling = false;
+                    yatoriUpdateLastPhase = 'failed';
+                    setYatoriUpdateBusy(false);
+                    updateYatoriProgressView({ ...info, phase: 'failed' });
+                    const btn = document.getElementById('yatori-update-confirm-btn');
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="fas fa-rotate"></i> 重新检查更新';
+                        btn.onclick = () => {
+                            closeYatoriUpdateModal();
+                            openYatoriUpdateDialog();
+                        };
+                    }
+                    showToast('Yatori 更新失败，请查看系统日志', 'error');
+                    return;
+                }
+            }
+            yatoriUpdateLastPhase = phase;
+        }
 
         async function openYatoriUpdateDialog() {
             return runWebActionLocked('show_update_dialog', [], async () => {
@@ -1132,6 +1277,20 @@
             const modal = document.getElementById('yatori-update-modal');
             if (!modal) return;
             window.pendingYatoriUpdateDialog = info || {};
+            yatoriUpdateInstalling = false;
+            yatoriUpdateConfirming = false;
+            yatoriUpdateLastPhase = 'idle';
+            const confirmBtn = document.getElementById('yatori-update-confirm-btn');
+            if (confirmBtn) {
+                confirmBtn.onclick = null;
+                confirmBtn.setAttribute('onclick', 'confirmYatoriUpdate()');
+            }
+            setYatoriUpdateBusy(false);
+            const progressBox = document.getElementById('yatori-update-progress');
+            if (progressBox) {
+                progressBox.hidden = true;
+                progressBox.dataset.phase = 'downloading';
+            }
             setText('yatori-update-current', info?.currentVersion || '未知');
             setText('yatori-update-latest', info?.latestVersion || '未知');
             setText('yatori-update-asset', info?.assetName || '未知资源');
@@ -1147,25 +1306,23 @@
         }
 
         function closeYatoriUpdateModal() {
-            if (yatoriUpdateConfirming) return;
+            if (yatoriUpdateConfirming || yatoriUpdateInstalling) return;
             document.getElementById('yatori-update-modal')?.classList.remove('active');
             window.pendingYatoriUpdateDialog = null;
+            const progressBox = document.getElementById('yatori-update-progress');
+            if (progressBox) progressBox.hidden = true;
+            yatoriUpdateLastPhase = 'idle';
         }
 
         async function confirmYatoriUpdate() {
-            if (yatoriUpdateConfirming) return;
+            if (yatoriUpdateConfirming || yatoriUpdateInstalling) return;
             const confirmationToken = window.pendingYatoriUpdateDialog?.confirmationToken;
             if (!confirmationToken) {
                 showToast('更新确认已失效，请重新点击更新按钮', 'error');
                 return;
             }
             yatoriUpdateConfirming = true;
-            const btn = document.getElementById('yatori-update-confirm-btn');
-            const oldHtml = btn ? btn.innerHTML : '';
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在启动更新...';
-            }
+            setYatoriUpdateBusy(true, '正在启动更新...');
             try {
                 const result = await apiCall(
                     'perform_action',
@@ -1173,18 +1330,25 @@
                     confirmationToken
                 );
                 if (handleWebActionResult(result, 'Yatori 更新启动失败')) {
-                    document.getElementById('yatori-update-modal')?.classList.remove('active');
-                    window.pendingYatoriUpdateDialog = null;
-                    showToast('Yatori 更新已开始，请查看系统日志进度', 'success');
+                    yatoriUpdateInstalling = true;
+                    yatoriUpdateLastPhase = 'downloading';
+                    updateYatoriProgressView({
+                        phase: 'downloading',
+                        percent: 0,
+                        downloaded: 0,
+                        total: 0,
+                        message: '正在检测最快下载源...',
+                    });
+                    setYatoriUpdateBusy(true, '正在下载...');
+                    showToast('Yatori 更新已开始，完成后会自动关闭该窗口', 'info');
+                } else {
+                    setYatoriUpdateBusy(false);
                 }
             } catch (error) {
+                setYatoriUpdateBusy(false);
                 if (!error?.silent) showToast(error.message || 'Yatori 更新启动失败', 'error');
             } finally {
                 yatoriUpdateConfirming = false;
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = oldHtml || '<i class="fas fa-download"></i> 确认更新';
-                }
             }
         }
 

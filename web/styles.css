@@ -2701,6 +2701,8 @@ a.contributor-card:focus-visible .contributor-link-icon { opacity: 1; }
 
 .update-modal-box {
     width: 580px;
+    max-height: 90vh;
+    overflow-y: auto;
 }
 
 .update-version-grid {
@@ -2753,6 +2755,73 @@ a.contributor-card:focus-visible .contributor-link-icon { opacity: 1; }
     font-size: 0.8rem;
     line-height: 1.65;
     margin: 0 0 1rem;
+}
+
+.update-progress {
+    margin: 0 0 1rem;
+    padding: 0.8rem 0.875rem;
+    border-radius: 14px;
+    background: var(--info-soft);
+    border: 1px solid rgba(94, 162, 255, 0.2);
+}
+
+.update-progress[data-phase="completed"] {
+    background: var(--success-soft);
+    border-color: rgba(58, 201, 139, 0.22);
+}
+
+.update-progress[data-phase="failed"] {
+    background: var(--danger-soft);
+    border-color: rgba(242, 109, 109, 0.22);
+}
+
+.update-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.update-progress-head strong {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.update-progress-track {
+    height: 8px;
+    margin-top: 0.5rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--bg-input);
+}
+
+.update-progress-bar {
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #5ea2ff, #7c5cff);
+    transition: width 0.25s ease;
+}
+
+.update-progress[data-phase="completed"] .update-progress-bar {
+    background: var(--success);
+}
+
+.update-progress[data-phase="failed"] .update-progress-bar {
+    background: var(--danger);
+}
+
+.update-progress-detail {
+    margin-top: 0.45rem;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    line-height: 1.5;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .achievement-button-count {
@@ -3016,7 +3085,31 @@ a.contributor-card:focus-visible .contributor-link-icon { opacity: 1; }
     font-weight: 600;
 }
 
+.course-deadline {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
 .course-duplicate { opacity: 0.55; }
+
+/* 已结束的学习通课程：变暗、不可勾选，统一排在列表末尾 */
+.course-select-item.course-select-item-ended {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.course-select-item.course-select-item-ended:hover {
+    background: var(--bg-surface);
+    border-color: var(--border-subtle);
+}
+
+.course-select-item.course-select-item-ended input[type="checkbox"] {
+    cursor: not-allowed;
+}
+
+.course-select-item.course-select-item-ended .course-select-name {
+    color: var(--text-secondary);
+}
 
 .course-duplicate-badge,
 .course-archived-badge {

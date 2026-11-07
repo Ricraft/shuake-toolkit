@@ -699,16 +699,13 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("if (resultBtn.isConnected)", xxt_source)
         self.assertNotIn("const btn2 = document.getElementById", xxt_source)
 
-    def test_course_selection_dialogs_preserve_existing_entries(self):
+    def test_zhihuishu_course_selection_dialog_preserves_existing_urls(self):
         frontend = (
             Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
         ).read_text(encoding="utf-8")
         zhs_source = frontend.split(
             "function showCourseSelectionDialog", 1
         )[1].split("let xxtCourseFetchRunning", 1)[0]
-        xxt_source = frontend.split(
-            "function showXuexitongCourseDialog", 1
-        )[1].split("function syncYatoriPlatformCard", 1)[0]
 
         self.assertIn("window._courseSelectExistingUrls = existingUrls", zhs_source)
         self.assertIn("mergeCourseUrls(existingUrls, selected)", zhs_source)
@@ -719,17 +716,35 @@ class WebOnlyLauncherTests(unittest.TestCase):
         self.assertIn("课程已添加到当前页面，但尚未保存，请重试", zhs_source)
         self.assertNotIn("textarea.value = selected.join('\\n')", zhs_source)
 
-        self.assertIn(
-            "window._xxtExistingCourseNames = existingCourseNames", xxt_source
-        )
-        self.assertIn(
-            "mergeCourseNames(existingCourseNames, selected)", xxt_source
-        )
-        self.assertIn("ta.value = merged.join('\\n')", xxt_source)
+    def test_xuexitong_course_selection_replaces_include_courses(self):
+        frontend = (
+            Path(launcher_module.__file__).resolve().parent / "web" / "app.js"
+        ).read_text(encoding="utf-8")
+        xxt_source = frontend.split(
+            "function showXuexitongCourseDialog", 1
+        )[1].split("function syncYatoriPlatformCard", 1)[0]
+
+        # 勾选结果直接覆盖 includeCourses，不再与旧配置合并
+        self.assertIn("ta.value = selected.join('\\n')", xxt_source)
+        self.assertNotIn("mergeCourseNames(", xxt_source)
+        self.assertNotIn("window._xxtExistingCourseNames", xxt_source)
         self.assertIn("const saveResult = await saveSettings(false)", xxt_source)
         self.assertIn("if (!saveResult?.ok)", xxt_source)
-        self.assertIn("课程已添加到当前页面，但尚未保存，请重试", xxt_source)
-        self.assertNotIn("ta.value = selected.join('\\n')", xxt_source)
+        self.assertIn("课程已更新到当前页面，但尚未保存，请重试", xxt_source)
+
+        # 已结束课程变暗、禁用勾选，并排到列表末尾
+        self.assertIn("course-select-item-ended", xxt_source)
+        self.assertIn('disabled data-ended="true"', xxt_source)
+        self.assertIn(
+            "Number(Boolean(a.course.ended)) - Number(Boolean(b.course.ended))",
+            xxt_source,
+        )
+        self.assertIn("cb.disabled", xxt_source)
+        self.assertNotIn("xxtSelectNewCoursesOnly", xxt_source)
+
+        # 打开时回显当前已配置的课程
+        self.assertIn("isSelected: !c.ended && (existingNames.has(c.name)", xxt_source)
+        self.assertIn("xxtUpdateCourseSelectSummary", xxt_source)
 
     def test_web_save_rejects_non_zhihuishu_course_urls(self):
         frontend = (

@@ -6,6 +6,7 @@ import base64
 import configparser
 import hashlib
 import json
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,10 @@ from src.atomic_io import atomic_dump_json
 
 CACHE_TTL = timedelta(minutes=30)
 XUEXITONG_AES_KEY = "u2oh6Vu^HWe4_AES"
+# 「已结束」课程卡会带 not-open-tip 遮罩；卡片的 info 属性是 clazzId_cpi。
+XUEXITONG_CARD_PATTERN = re.compile(
+    r'<div class="[^"]*learnCourse stu_(\d+)"\s+info="(\d+_\d+)"'
+)
 
 
 class CourseCatalogError(ValueError):
@@ -235,48 +240,111 @@ def parse_xuexitong_course_data(data: dict) -> list[dict]:
     if not isinstance(data, dict):
         return []
     courses = []
-    seen_names = set()
+    seen_keys = set()
     for channel in _safe_list(data.get("channelList")):
         if not isinstance(channel, dict):
             continue
         content = channel.get("content")
         content = content if isinstance(content, dict) else {}
+        clazz_id = str(channel.get("key") or "").strip()
+        cpi = str(channel.get("cpi") or "").strip()
+        begin_date = str(content.get("beginDate") or "").strip()
+        end_date = str(content.get("endDate") or "").strip()
         course_object = content.get("course")
         course_object = course_object if isinstance(course_object, dict) else {}
         course_data = _safe_list(course_object.get("data"))
         main_name = str(content.get("name") or "").strip()
+        entries = []
         if course_data:
             for raw in course_data:
                 if not isinstance(raw, dict):
                     continue
                 name = str(raw.get("name") or main_name).strip()
-                if not name or name in seen_names:
+                if not name:
                     continue
-                seen_names.add(name)
-                courses.append(
+                entries.append(
                     {
                         "name": name,
                         "courseId": str(raw.get("id") or ""),
                         "teacher": str(raw.get("teacherfactor") or ""),
                         "school": str(raw.get("schools") or ""),
                         "imageurl": str(raw.get("imageurl") or ""),
-                        "isstart": bool(content.get("isstart", False)),
-                        "isretire": content.get("isretire", 0),
                     }
                 )
-        elif main_name and main_name not in seen_names:
-            seen_names.add(main_name)
-            courses.append(
+        elif main_name:
+            entries.append(
                 {
                     "name": main_name,
-                    "courseId": str(channel.get("key") or ""),
+                    "courseId": clazz_id,
                     "teacher": "",
                     "school": "",
                     "imageurl": "",
-                    "isstart": bool(content.get("isstart", False)),
-                    "isretire": content.get("isretire", 0),
                 }
             )
+        for entry in entries:
+            # 同一班级内部按课程名去重；不同班级即使同名也各自保留，
+            # 因为它们是不同 clazzId 的两门课（如两门「大学物理A2」）。
+            dedup_key = (clazz_id, entry["name"])
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+            courses.append(
+                {
+                    **entry,
+                    "clazzId": clazz_id,
+                    "cpi": cpi,
+                    "beginDate": begin_date,
+                    "endDate": end_date,
+                    "isstart": bool(content.get("isstart", False)),
+                    "isretire": content.get("isretire", 0),
+                    "ended": False,
+                    "hasJobs": False,
+                    "jobCount": 0,
+                    "jobFinishCount": 0,
+                    "jobRate": 0.0,
+                }
+            )
+    return courses
+
+
+def apply_xuexitong_course_state(
+    courses: list[dict],
+    job_map: dict,
+    ended_clazz_ids: set | None,
+) -> list[dict]:
+    """Merge 任务点进度 and 课程已结束 state into parsed courses.
+
+    ``ended_clazz_ids`` is ``None`` when the course-status page could not be
+    fetched, in which case the legacy ``isretire`` flag is used as a fallback.
+    """
+    for course in courses:
+        clazz_id = str(course.get("clazzId") or "")
+        if ended_clazz_ids is None:
+            course["ended"] = bool(course.get("isretire"))
+        else:
+            course["ended"] = clazz_id in ended_clazz_ids
+        job = job_map.get(clazz_id) if isinstance(job_map, dict) else None
+        if isinstance(job, dict):
+            try:
+                count = max(int(job.get("jobCount") or 0), 0)
+            except (TypeError, ValueError):
+                count = 0
+            try:
+                finish = max(int(job.get("jobFinishCount") or 0), 0)
+            except (TypeError, ValueError):
+                finish = 0
+            try:
+                rate = float(job.get("jobRate") or 0)
+            except (TypeError, ValueError):
+                rate = 0.0
+            if not rate and count:
+                rate = finish * 100.0 / count
+            course["jobCount"] = count
+            course["jobFinishCount"] = min(finish, count) if count else 0
+            course["jobRate"] = round(rate, 1)
+            course["hasJobs"] = count > 0
+        else:
+            course["hasJobs"] = False
     return courses
 
 
@@ -302,6 +370,17 @@ class CourseCatalogService:
         "https://mooc1-api.chaoxing.com/mycourse/"
         "backclazzdata?view=json&rss=1"
     )
+    JOB_INFO_URL = (
+        "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/stu-job-info"
+    )
+    COURSE_LIST_DATA_URL = (
+        "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/courselistdata"
+    )
+    USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36"
+    )
+    JOB_INFO_CHUNK_SIZE = 30
 
     def __init__(
         self,
@@ -347,6 +426,90 @@ class CourseCatalogService:
             self._session_identity = username
         return self._session
 
+    def _fetch_xuexitong_job_progress(self, session, courses: list[dict]) -> dict:
+        """Fetch 任务点进度 for every course; failures degrade to no progress."""
+        pairs = []
+        for course in courses:
+            clazz_id = str(course.get("clazzId") or "")
+            cpi = str(course.get("cpi") or "")
+            if clazz_id and cpi:
+                pairs.append(f"{clazz_id}_{cpi}")
+        result: dict[str, dict] = {}
+        if not pairs:
+            return result
+        headers = {
+            "User-Agent": self.USER_AGENT,
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        size = max(int(self.JOB_INFO_CHUNK_SIZE or 30), 1)
+        for start in range(0, len(pairs), size):
+            chunk = pairs[start:start + size]
+            try:
+                response = session.get(
+                    self.JOB_INFO_URL,
+                    params={"clazzPersonStr": ",".join(chunk)},
+                    headers=headers,
+                    timeout=20,
+                )
+                if response.status_code != 200:
+                    self.log(
+                        "[学习通课程] 任务点进度请求失败 "
+                        f"(HTTP {response.status_code})，本次不显示进度"
+                    )
+                    return result
+                payload = response.json()
+            except Exception as exc:
+                self.log(f"[学习通课程] 任务点进度获取失败，本次不显示进度: {exc}")
+                return result
+            job_array = payload.get("jobArray") if isinstance(payload, dict) else None
+            for item in _safe_list(job_array):
+                if not isinstance(item, dict):
+                    continue
+                clazz_id = str(item.get("clazzId") or "").strip()
+                if clazz_id:
+                    result[clazz_id] = item
+        return result
+
+    def _fetch_xuexitong_ended_clazz_ids(self, session) -> set | None:
+        """Return the clazzIds the course list renders as 已结束.
+
+        Returns ``None`` when the page cannot be read so callers can fall back
+        to the legacy ``isretire`` flag instead of wrongly marking courses.
+        """
+        headers = {"User-Agent": self.USER_AGENT}
+        try:
+            response = session.post(
+                self.COURSE_LIST_DATA_URL,
+                data={"courseType": "1"},
+                headers=headers,
+                timeout=20,
+            )
+            if response.status_code != 200:
+                self.log(
+                    "[学习通课程] 课程状态请求失败 "
+                    f"(HTTP {response.status_code})，改用 isretire 判定"
+                )
+                return None
+            response.encoding = "utf-8"
+            body = response.text or ""
+        except Exception as exc:
+            self.log(f"[学习通课程] 课程状态获取失败，改用 isretire 判定: {exc}")
+            return None
+        matches = list(XUEXITONG_CARD_PATTERN.finditer(body))
+        if not matches:
+            self.log("[学习通课程] 课程状态页面解析失败，改用 isretire 判定")
+            return None
+        ended: set[str] = set()
+        for index, match in enumerate(matches):
+            card_end = (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(body)
+            )
+            if "not-open-tip" in body[match.start():card_end]:
+                ended.add(match.group(1))
+        return ended
+
     def get_xuexitong_courses(
         self,
         account_index: int,
@@ -370,10 +533,7 @@ class CourseCatalogService:
 
         session = self._session_for(username)
         headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36"
-            ),
+            "User-Agent": self.USER_AGENT,
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         }
         login_data = {
@@ -457,7 +617,15 @@ class CourseCatalogService:
                 "message": "课程列表返回格式异常，可能登录已失效或接口已变化",
             }
         courses = parse_xuexitong_course_data(payload)
+        job_map = self._fetch_xuexitong_job_progress(session, courses)
+        ended_clazz_ids = self._fetch_xuexitong_ended_clazz_ids(session)
+        apply_xuexitong_course_state(courses, job_map, ended_clazz_ids)
+        ended_count = sum(1 for course in courses if course.get("ended"))
+        progress_count = sum(1 for course in courses if course.get("hasJobs"))
         result = {"ok": True, "courses": courses}
         self.put_cached("xxt", index, username, result)
-        self.log(f"[学习通课程] 获取到 {len(courses)} 门课程")
+        self.log(
+            f"[学习通课程] 获取到 {len(courses)} 门课程"
+            f"（已结束 {ended_count} 门，有任务点进度 {progress_count} 门）"
+        )
         return result

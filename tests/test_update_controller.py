@@ -257,6 +257,85 @@ class UpdateControllerTests(unittest.TestCase):
         self.assertFalse(controller.yatori_checking)
         self.assertTrue(any("offline" in item[0] for item in logs))
 
+    def test_install_progress_snapshot_tracks_download_then_completion(self):
+        states = []
+
+        class ProgressManager(_Manager):
+            def _install(self, core, release_info, progress):
+                progress({
+                    "progress": 25,
+                    "downloaded": 5,
+                    "total": 20,
+                    "speed": 1024.0,
+                    "mode": "直接下载",
+                })
+                states.append(controller.install_progress_snapshot())
+                progress({
+                    "progress": 100,
+                    "downloaded": 20,
+                    "total": 20,
+                    "speed": 2048.0,
+                    "mode": "直接下载",
+                })
+                states.append(controller.install_progress_snapshot())
+                return True
+
+        controller, _manager, _logs, _notices, _installed = self.make_controller(
+            ProgressManager()
+        )
+        result = controller.prepare_yatori_update_confirmation()
+
+        self.assertTrue(
+            controller.install_yatori_confirmed_async(
+                result["updateDialog"]["confirmationToken"]
+            )
+        )
+
+        downloading, installing = states
+        self.assertEqual(downloading["phase"], "downloading")
+        self.assertEqual(downloading["percent"], 25.0)
+        self.assertEqual(downloading["downloaded"], 5)
+        self.assertEqual(downloading["total"], 20)
+        self.assertEqual(downloading["mode"], "直接下载")
+        self.assertEqual(downloading["core"], "yatori")
+        self.assertEqual(installing["phase"], "installing")
+        self.assertEqual(installing["percent"], 100.0)
+        self.assertEqual(installing["message"], "正在解压并替换核心文件…")
+
+        finished = controller.install_progress_snapshot()
+        self.assertEqual(finished["phase"], "completed")
+        self.assertEqual(finished["percent"], 100.0)
+        self.assertEqual(finished["message"], "Yatori 更新完成")
+
+    def test_install_progress_snapshot_reports_failure(self):
+        class FailingManager(_Manager):
+            def _install(self, core, release_info, progress):
+                progress({"progress": 40, "downloaded": 4, "total": 10})
+                return False
+
+        controller, _manager, _logs, _notices, _installed = self.make_controller(
+            FailingManager()
+        )
+        result = controller.prepare_yatori_update_confirmation()
+
+        controller.install_yatori_confirmed_async(
+            result["updateDialog"]["confirmationToken"]
+        )
+
+        failed = controller.install_progress_snapshot()
+        self.assertEqual(failed["phase"], "failed")
+        self.assertEqual(failed["core"], "yatori")
+        self.assertTrue(failed["message"])
+
+    def test_install_progress_starts_idle(self):
+        controller, _manager, _logs, _notices, _installed = self.make_controller()
+
+        snapshot = controller.install_progress_snapshot()
+
+        self.assertEqual(snapshot["phase"], "idle")
+        self.assertIsNone(snapshot["core"])
+        self.assertEqual(snapshot["percent"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

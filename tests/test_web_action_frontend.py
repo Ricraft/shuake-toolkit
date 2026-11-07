@@ -72,4 +72,10 @@ def test_yatori_update_confirmation_uses_backend_token_once():
         "'install_yatori_update',",
         1,
     )[1]
-    assert "window.pendingYatoriUpdateDialog = null" in confirm_source
+    # 更新开始后弹窗保持打开以显示下载进度，待安装完成由状态轮询关闭。
+    assert "yatoriUpdateInstalling = true" in confirm_source
+    assert "updateYatoriProgressView(" in confirm_source
+    assert "window.pendingYatoriUpdateDialog = null" not in confirm_source
+
+    runtime_source = function_source("handleCoreUpdateRuntime", "openYatoriUpdateDialog")
+    assert "window.pendingYatoriUpdateDialog = null" in runtime_source

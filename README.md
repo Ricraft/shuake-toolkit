@@ -81,6 +81,19 @@ Yatori 更新会先在独立临时目录中完成下载、摘要校验、解压�
 开发调试时可以显式设置 `LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES=1` 跳过摘要
 要求；这会降低更新安全性，不建议在日常使用环境启用。
 
+## 下载源与镜像
+
+核心包、PyPI 包、Playwright Chromium 与 Autovisor 的 numpy/opencv 都采用「并发测速
+选源 + 失败降级」：先对各镜像并发采样，按实测吞吐排序后使用最快的源，失败自动换
+下一个；下载中途速度过低也会换源。镜像只改变传输通道，核心包仍必须通过 GitHub
+清单声明的大小与 SHA-256 校验。
+
+- `LAUNCHER_ALLOW_GITHUB_PROXIES=0`：关闭核心包的镜像，只走 GitHub 直连。
+- `LAUNCHER_PROBE_GITHUB_SOURCES=0`：关闭核心包的测速，退回按内置顺序逐个尝试。
+- `LAUNCHER_ALLOW_UNVERIFIED_CORE_UPDATES=1`：开发调试用，跳过摘要校验（不建议日常使用）。
+
+pip 镜像与 Playwright 下载源无需开关，始终先测速再安装。
+
 ## 运行入口
 
 ```powershell
@@ -114,7 +127,7 @@ py Autovisor\Autovisor_Multi.py
 
 1. 查找 Python 3.11–3.13；
 2. 在 `.runtime\venv` 创建本地虚拟环境；
-3. 安装 `requirements.txt` 中的 Python 依赖（多镜像回退）；
+3. 安装 `requirements.txt` 中的 Python 依赖（测速选源 + 多镜像回退）；
 4. 安装 Playwright Chromium；
 5. 准备 `Autovisor\runtime_deps` 中的 numpy/opencv；
 6. 尝试准备 Yatori 核心；

@@ -155,3 +155,159 @@ def test_sync_visibility_changes_with_platform_video_and_exam_mode():
     assert result["hqkj"]["exam"] == "none"
     assert result["hqkj"]["chapters"] == "none"
     assert result["hqkj"]["examValue"] == "0"
+
+
+def _toggle_script():
+    xxt = SOURCE[SOURCE.index("        function xxtToggleCourseItem("):SOURCE.index("        function xxtSelectAllCourses(")]
+    zhs = SOURCE[SOURCE.index("        function toggleCourseItem("):SOURCE.index("        function selectAllCourses(")]
+    return xxt + "\n" + zhs
+
+
+def test_course_checkbox_is_clickable_without_double_toggle():
+    script = _toggle_script() + """
+        let summaryUpdates = 0;
+        function xxtUpdateCourseSelectSummary() { summaryUpdates += 1; }
+        function row(options) {
+            const { ended = false, disabled = false, checked = false } = options || {};
+            const cb = { checked, disabled };
+            cb.contains = t => t === cb;
+            return {
+                row: {
+                    classList: { contains: name => ended && name === 'course-select-item-ended' },
+                    querySelector: selector => selector === 'input[type="checkbox"]' ? cb : null,
+                },
+                cb,
+            };
+        }
+        const out = {};
+        { const it = row({}); xxtToggleCourseItem(it.row, { target: it.row }); out.rowClick = it.cb.checked; }
+        { const it = row({}); xxtToggleCourseItem(it.row, { target: it.cb }); out.boxClick = it.cb.checked; }
+        { const it = row({ ended: true }); xxtToggleCourseItem(it.row, { target: it.row }); out.endedRow = it.cb.checked; }
+        { const it = row({ disabled: true }); xxtToggleCourseItem(it.row, { target: it.row }); out.disabledBox = it.cb.checked; }
+        { const it = row({}); toggleCourseItem(it.row, { target: it.cb }); out.zhsBoxClick = it.cb.checked;
+          toggleCourseItem(it.row, { target: it.row }); out.zhsRowClick = it.cb.checked; }
+        out.summaryUpdates = summaryUpdates;
+        console.log(JSON.stringify(out));
+    """
+    process = subprocess.run([NODE, "-e", script], text=True, encoding="utf-8", capture_output=True, timeout=30)
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    assert result["rowClick"] is True
+    assert result["boxClick"] is False, "点方框时不应再翻转一次（浏览器已原生切换）"
+    assert result["endedRow"] is False
+    assert result["disabledBox"] is False
+    assert result["zhsBoxClick"] is False
+    assert result["zhsRowClick"] is True
+    assert result["summaryUpdates"] >= 2
+
+
+def _update_progress_script():
+    return SOURCE[
+        SOURCE.index("        let yatoriUpdateConfirming = false;"):
+        SOURCE.index("        async function confirmAndPerform(")
+    ]
+
+
+def test_update_dialog_shows_progress_and_closes_after_install():
+    script = _update_progress_script() + """
+        const elements = {
+            'yatori-update-modal': {
+                classList: {
+                    values: new Set(['active']),
+                    add(v) { this.values.add(v); },
+                    remove(v) { this.values.delete(v); },
+                    contains(v) { return this.values.has(v); },
+                },
+            },
+            'yatori-update-confirm-btn': { disabled: false, innerHTML: '', onclick: null, setAttribute() {} },
+            'yatori-update-cancel-btn': { disabled: false },
+            'yatori-update-progress': { hidden: true, dataset: {} },
+            'yatori-update-progress-label': { textContent: '' },
+            'yatori-update-progress-percent': { textContent: '' },
+            'yatori-update-progress-bar': { style: {} },
+            'yatori-update-progress-detail': { textContent: '' },
+        };
+        const window = {};
+        const toasts = [];
+        const timers = [];
+        const document = { getElementById: id => elements[id] || null };
+        function escapeHtml(value) { return String(value === undefined || value === null ? '' : value); }
+        function showToast(message, type) { toasts.push([message, type]); }
+        setTimeout = fn => { timers.push(fn); };
+        const out = {};
+
+        yatoriUpdateInstalling = true;
+        yatoriUpdateLastPhase = 'downloading';
+        handleCoreUpdateRuntime({
+            core: 'yatori', phase: 'downloading', percent: 42.5,
+            downloaded: 50 * 1024 * 1024, total: 120 * 1024 * 1024,
+            speed: 2 * 1024 * 1024, eta: 35, mode: 'ghfast.top 加速',
+        });
+        out.bar = elements['yatori-update-progress-bar'].style.width;
+        out.label = elements['yatori-update-progress-label'].textContent;
+        out.percent = elements['yatori-update-progress-percent'].textContent;
+        out.detail = elements['yatori-update-progress-detail'].textContent;
+        out.phaseAttr = elements['yatori-update-progress'].dataset.phase;
+        out.hidden = elements['yatori-update-progress'].hidden;
+
+        handleCoreUpdateRuntime({ core: 'yatori', phase: 'completed', percent: 100 });
+        out.completedLabel = elements['yatori-update-progress-label'].textContent;
+        out.completedPercent = elements['yatori-update-progress-percent'].textContent;
+        out.completedToast = toasts[toasts.length - 1];
+        out.installingAfterCompleted = yatoriUpdateInstalling;
+        out.pendingTimers = timers.length;
+        timers.forEach(fn => fn());
+        out.modalActiveAfterTimer = elements['yatori-update-modal'].classList.contains('active');
+        out.hiddenAfterTimer = elements['yatori-update-progress'].hidden;
+        out.lastPhaseAfterTimer = yatoriUpdateLastPhase;
+
+        yatoriUpdateInstalling = true;
+        yatoriUpdateLastPhase = 'downloading';
+        handleCoreUpdateRuntime({ core: 'yatori', phase: 'failed', percent: 63, message: '网络中断' });
+        out.failedPhaseAttr = elements['yatori-update-progress'].dataset.phase;
+        out.failedLabel = elements['yatori-update-progress-label'].textContent;
+        out.failedDetail = elements['yatori-update-progress-detail'].textContent;
+        out.failedButton = elements['yatori-update-confirm-btn'].innerHTML;
+        out.failedButtonDisabled = elements['yatori-update-confirm-btn'].disabled;
+        out.failedButtonHasHandler = typeof elements['yatori-update-confirm-btn'].onclick === 'function';
+        out.failedToast = toasts[toasts.length - 1];
+        out.failedHidden = elements['yatori-update-progress'].hidden;
+
+        const beforeIgnore = elements['yatori-update-progress-label'].textContent;
+        handleCoreUpdateRuntime({ core: 'autovisor', phase: 'downloading', percent: 5 });
+        out.ignoredOtherCore = elements['yatori-update-progress-label'].textContent === beforeIgnore;
+
+        console.log(JSON.stringify(out));
+    """
+    process = subprocess.run([NODE, "-e", script], text=True, encoding="utf-8", capture_output=True, timeout=30)
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    assert result["bar"] == "42.5%"
+    assert result["label"] == "正在下载"
+    assert result["percent"] == "42.5%"
+    assert result["phaseAttr"] == "downloading"
+    assert result["hidden"] is False
+    assert "50.0 MB / 120.0 MB" in result["detail"]
+    assert "2.0 MB/s" in result["detail"]
+    assert "剩余 35 秒" in result["detail"]
+    assert result["detail"].startswith("ghfast.top 加速"), "进度详情应显示实际下载源"
+
+    assert result["completedLabel"] == "更新完成"
+    assert result["completedPercent"] == "100%"
+    assert result["completedToast"] == ["Yatori 更新完成", "success"]
+    assert result["installingAfterCompleted"] is False
+    assert result["pendingTimers"] >= 1
+    assert result["modalActiveAfterTimer"] is False, "安装完成后应自动关闭更新弹窗"
+    assert result["hiddenAfterTimer"] is True
+    assert result["lastPhaseAfterTimer"] == "idle"
+
+    assert result["failedPhaseAttr"] == "failed"
+    assert result["failedLabel"] == "更新失败"
+    assert "网络中断" in result["failedDetail"]
+    assert "重新检查更新" in result["failedButton"]
+    assert result["failedButtonDisabled"] is False, "失败后按钮要能再次点击"
+    assert result["failedButtonHasHandler"] is True
+    assert result["failedToast"] == ["Yatori 更新失败，请查看系统日志", "error"]
+    assert result["failedHidden"] is False, "失败面板不能被 busy(false) 隐藏"
+
+    assert result["ignoredOtherCore"] is True

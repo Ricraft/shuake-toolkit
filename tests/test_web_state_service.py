@@ -159,3 +159,52 @@ def test_initial_state_delegates_configuration_without_hiding_failures(tmp_path)
     assert state["settings"]["yatori"]["users"][0]["account"] == "u"
     assert state["settings"]["autovisor"]["accounts"][0]["username"] == "a"
     assert state["settings"]["questionbank"]["port"] == 8084
+
+
+def test_core_update_progress_is_idle_without_controller(tmp_path):
+    launcher = _Launcher(tmp_path)
+
+    state = WebStateService(launcher).runtime_state()
+
+    assert state["core_update"]["phase"] == "idle"
+    assert state["core_update"]["core"] is None
+    assert state["state_issues"] == []
+
+
+def test_core_update_progress_is_exposed_from_controller(tmp_path):
+    launcher = _Launcher(tmp_path)
+    snapshot = {
+        "core": "yatori",
+        "phase": "downloading",
+        "percent": 42.5,
+        "downloaded": 20,
+        "total": 47,
+        "speed": 2048.0,
+        "eta": 13,
+        "mode": "直接下载",
+        "message": "",
+        "version": "v2",
+        "updated_at": 1.0,
+    }
+    launcher.update_controller = SimpleNamespace(
+        install_progress_snapshot=lambda: dict(snapshot)
+    )
+
+    state = WebStateService(launcher).runtime_state()
+
+    assert state["core_update"] == snapshot
+    assert state["core_update"] is not snapshot
+    assert state["state_issues"] == []
+
+
+def test_core_update_progress_failure_is_recorded_not_fatal(tmp_path):
+    launcher = _Launcher(tmp_path)
+    launcher.update_controller = SimpleNamespace(
+        install_progress_snapshot=lambda: (_ for _ in ()).throw(OSError("locked"))
+    )
+
+    state = WebStateService(launcher).runtime_state()
+
+    assert state["core_update"]["phase"] == "idle"
+    assert any("核心更新进度" in issue for issue in state["state_issues"])
+    assert state["backend_ready"] is True

@@ -180,6 +180,68 @@ print('COURSE_CATALOG_IMPORT_OK')
         self.assertTrue(courses[0]["isstart"])
         self.assertEqual(courses[1]["courseId"], "3")
 
+    def test_xuexitong_parser_keeps_same_name_courses_from_different_clazz(self):
+        payload = {
+            "channelList": [
+                {
+                    "key": 11,
+                    "cpi": 900,
+                    "content": {
+                        "name": "大学物理A2",
+                        "course": {"data": [{"id": 1, "name": "大学物理A2"}]},
+                    },
+                },
+                {
+                    "key": 12,
+                    "cpi": 901,
+                    "content": {
+                        "name": "大学物理A2",
+                        "course": {"data": [{"id": 2, "name": "大学物理A2"}]},
+                    },
+                },
+            ]
+        }
+
+        courses = parse_xuexitong_course_data(payload)
+
+        self.assertEqual(len(courses), 2)
+        self.assertEqual([course["clazzId"] for course in courses], ["11", "12"])
+        self.assertEqual([course["courseId"] for course in courses], ["1", "2"])
+
+    def test_xuexitong_parser_exposes_deadline_only_when_present(self):
+        payload = {
+            "channelList": [
+                {
+                    "key": 11,
+                    "cpi": 900,
+                    "content": {
+                        "name": "课程A",
+                        "beginDate": "2026-03-22",
+                        "endDate": "2026-09-01",
+                        "course": {"data": [{"id": 1, "name": "课程A"}]},
+                    },
+                },
+                {
+                    "key": 12,
+                    "cpi": 901,
+                    "content": {
+                        "name": "课程B",
+                        "course": {"data": [{"id": 2, "name": "课程B"}]},
+                    },
+                },
+            ]
+        }
+
+        courses = parse_xuexitong_course_data(payload)
+
+        self.assertEqual(courses[0]["beginDate"], "2026-03-22")
+        self.assertEqual(courses[0]["endDate"], "2026-09-01")
+        self.assertEqual(courses[0]["clazzId"], "11")
+        self.assertEqual(courses[0]["cpi"], "900")
+        self.assertEqual(courses[1]["beginDate"], "")
+        self.assertEqual(courses[1]["endDate"], "")
+        self.assertEqual(courses[1]["jobCount"], 0)
+
     def test_zhs_fetch_script_uses_dynamic_account_section_and_atomic_save(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -728,10 +790,12 @@ print('COURSE_CATALOG_IMPORT_OK')
 
 
 class _Response:
-    def __init__(self, status_code, payload=None, headers=None):
+    def __init__(self, status_code, payload=None, headers=None, text=""):
         self.status_code = status_code
         self._payload = payload
         self.headers = headers or {}
+        self.encoding = None
+        self.text = text
 
     def json(self):
         if isinstance(self._payload, Exception):
@@ -740,8 +804,9 @@ class _Response:
 
 
 class _Session:
-    def __init__(self, course_name):
+    def __init__(self, course_name, card_html=""):
         self.course_name = course_name
+        self.card_html = card_html
         self.trust_env = True
         self.cookies = {"session": "ok"}
         self.posts = []
@@ -749,6 +814,8 @@ class _Session:
 
     def post(self, url, **kwargs):
         self.posts.append((url, kwargs))
+        if url.endswith("/visit/courselistdata"):
+            return _Response(200, text=self.card_html)
         return _Response(200, {"status": True})
 
     def get(self, url, **kwargs):
@@ -807,8 +874,19 @@ class CourseCatalogServiceTests(unittest.TestCase):
                 for session in sessions
                 for url, _ in session.gets
             ))
-            self.assertFalse(sessions[0].posts[0][1]["allow_redirects"])
-            self.assertEqual(len(sessions[0].posts), 2)
+            login_posts = [
+                kwargs
+                for url, kwargs in sessions[0].posts
+                if url == CourseCatalogService.LOGIN_URL
+            ]
+            self.assertEqual(len(login_posts), 2)
+            self.assertFalse(login_posts[0]["allow_redirects"])
+            self.assertEqual(
+                [url for url, _ in sessions[0].posts].count(
+                    CourseCatalogService.COURSE_LIST_DATA_URL
+                ),
+                2,
+            )
             self.assertEqual(len(sessions[0].gets), 2)
 
     def test_xuexitong_redirect_probe_failure_is_logged_but_recoverable(self):
@@ -840,6 +918,172 @@ class CourseCatalogServiceTests(unittest.TestCase):
         self.assertEqual(result["courses"][0]["name"], "课程A")
         self.assertTrue(any("登录跳转检查失败" in message for message in logs))
         self.assertTrue(any("redirect unavailable" in message for message in logs))
+
+    def test_xuexitong_fetch_merges_job_progress_and_ended_state(self):
+        card_html = (
+            '<div class="course clearfix  learnCourse stu_11" info="11_900">'
+            "<h3>课程A</h3></div>"
+            '<div class="course clearfix  learnCourse stu_12" info="12_901">'
+            "<h3>课程B</h3></div>"
+            '<div class="course clearfix  learnCourse stu_14" info="14_903">'
+            '<h3>课程C</h3><a class="not-open-tip" href="#">课程已结束</a></div>'
+        )
+
+        class RichSession(_Session):
+            def get(self, url, **kwargs):
+                self.gets.append((url, kwargs))
+                if url.endswith("/mycourse/stu-job-info"):
+                    return _Response(
+                        200,
+                        {
+                            "status": True,
+                            "jobArray": [
+                                {
+                                    "clazzId": 11,
+                                    "jobCount": 10,
+                                    "jobFinishCount": 4,
+                                    "jobRate": 40,
+                                },
+                                {
+                                    "clazzId": 12,
+                                    "jobCount": 5,
+                                    "jobFinishCount": 5,
+                                    "jobRate": 100,
+                                },
+                            ],
+                        },
+                    )
+                return _Response(
+                    200,
+                    {
+                        "channelList": [
+                            {
+                                "key": 11,
+                                "cpi": 900,
+                                "content": {
+                                    "name": "课程A",
+                                    "beginDate": "2026-03-22",
+                                    "endDate": "2026-09-01",
+                                    "isretire": 1,
+                                    "isstart": True,
+                                    "course": {
+                                        "data": [
+                                            {"id": 101, "name": "课程A"}
+                                        ]
+                                    },
+                                },
+                            },
+                            {
+                                "key": 12,
+                                "cpi": 901,
+                                "content": {
+                                    "name": "课程B",
+                                    "isretire": 1,
+                                    "course": {
+                                        "data": [
+                                            {"id": 102, "name": "课程B"}
+                                        ]
+                                    },
+                                },
+                            },
+                            {
+                                "key": 13,
+                                "cpi": 902,
+                                "content": {
+                                    "name": "课程A",
+                                    "course": {
+                                        "data": [
+                                            {"id": 103, "name": "课程A"}
+                                        ]
+                                    },
+                                },
+                            },
+                            {
+                                "key": 14,
+                                "cpi": 903,
+                                "content": {
+                                    "name": "课程C",
+                                    "isretire": 0,
+                                    "course": {
+                                        "data": [
+                                            {"id": 104, "name": "课程C"}
+                                        ]
+                                    },
+                                },
+                            },
+                        ]
+                    },
+                )
+
+        sessions = []
+
+        def session_factory():
+            session = RichSession("", card_html=card_html)
+            sessions.append(session)
+            return session
+
+        logs = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = CourseCatalogService(
+                temp_dir,
+                logger=logs.append,
+                session_factory=session_factory,
+            )
+            result = service.get_xuexitong_courses(0, "alice", "secret")
+
+        self.assertTrue(result["ok"])
+        courses = result["courses"]
+        self.assertEqual(
+            [course["name"] for course in courses],
+            ["课程A", "课程B", "课程A", "课程C"],
+        )
+        by_clazz = {course["clazzId"]: course for course in courses}
+        self.assertEqual(by_clazz["11"]["cpi"], "900")
+        self.assertEqual(by_clazz["11"]["beginDate"], "2026-03-22")
+        self.assertEqual(by_clazz["11"]["endDate"], "2026-09-01")
+        self.assertTrue(by_clazz["11"]["hasJobs"])
+        self.assertEqual(by_clazz["11"]["jobCount"], 10)
+        self.assertEqual(by_clazz["11"]["jobFinishCount"], 4)
+        self.assertEqual(by_clazz["11"]["jobRate"], 40.0)
+        self.assertFalse(by_clazz["11"]["ended"])
+        self.assertTrue(by_clazz["12"]["hasJobs"])
+        self.assertEqual(by_clazz["12"]["jobRate"], 100.0)
+        self.assertFalse(by_clazz["13"]["hasJobs"])
+        self.assertTrue(by_clazz["14"]["ended"])
+        self.assertFalse(by_clazz["14"]["hasJobs"])
+        self.assertTrue(any("已结束 1 门" in message for message in logs))
+
+        job_gets = [
+            kwargs
+            for url, kwargs in sessions[0].gets
+            if url.endswith("/mycourse/stu-job-info")
+        ]
+        self.assertEqual(len(job_gets), 1)
+        self.assertEqual(
+            job_gets[0]["params"]["clazzPersonStr"],
+            "11_900,12_901,13_902,14_903",
+        )
+
+    def test_xuexitong_fetch_falls_back_to_isretire_when_status_page_fails(self):
+        class BrokenStatusSession(_Session):
+            def post(self, url, **kwargs):
+                self.posts.append((url, kwargs))
+                if url.endswith("/visit/courselistdata"):
+                    raise OSError("status page unavailable")
+                return _Response(200, {"status": True})
+
+        logs = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = CourseCatalogService(
+                temp_dir,
+                logger=logs.append,
+                session_factory=lambda: BrokenStatusSession("课程A"),
+            )
+            result = service.get_xuexitong_courses(0, "alice", "secret")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(any("改用 isretire 判定" in message for message in logs))
+        self.assertTrue(result["courses"])
 
     def test_xuexitong_response_contract_distinguishes_empty_from_failure(self):
         self.assertTrue(is_xuexitong_course_payload({"channelList": []}))

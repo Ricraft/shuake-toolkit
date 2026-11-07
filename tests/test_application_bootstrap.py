@@ -35,7 +35,7 @@ def test_main_delegates_window_lifecycle_to_bootstrap(monkeypatch):
     monkeypatch.setattr(
         launcher_module,
         "ensure_core_dependencies",
-        lambda: calls.append(("dependencies",)),
+        lambda **_kwargs: calls.append(("dependencies",)),
     )
     monkeypatch.setattr(
         launcher_module,
@@ -86,7 +86,7 @@ def test_main_stops_before_window_when_dependencies_remain_broken(monkeypatch):
     monkeypatch.setattr(
         launcher_module,
         "ensure_core_dependencies",
-        lambda: ["playwright>=1.52,<2"],
+        lambda **_kwargs: ["playwright>=1.52,<2"],
     )
     monkeypatch.setattr(
         launcher_module,
