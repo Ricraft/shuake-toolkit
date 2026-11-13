@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from modules.login_selectors import LOGIN_URL
+    from modules.login_selectors import LOGIN_URL, QR_LOGIN_URL
 except ModuleNotFoundError:  # Package import: Autovisor.modules.configs
-    from .login_selectors import LOGIN_URL
+    from .login_selectors import LOGIN_URL, QR_LOGIN_URL
 
 
 _NUMBERED_SECTION_RE = re.compile(r"^(?P<base>.+)-(?P<account_id>\d+)$")
@@ -40,6 +40,7 @@ class Config:
         self.driver = "edge"
         self.username = ""
         self.password = ""
+        self.login_mode = "password"
         self.exe_path = ""
         self.enableAutoCaptcha = True
         self.enableHideWindow = False
@@ -60,8 +61,8 @@ class Config:
             self._select_sections()
             self._load_values()
 
-        # 登录
-        self.login_url = LOGIN_URL
+        # 登录：password=账号密码（可自动滑块），qr=浏览器内手动扫码
+        self.login_url = QR_LOGIN_URL if self.login_mode == "qr" else LOGIN_URL
         self.block_js = "return document.getElementsByClassName('yidun_jigsaw')[0].src"
         self.bg_js = "return document.getElementsByClassName('yidun_bg-img')[0].src"
         # 弹窗
@@ -167,6 +168,8 @@ class Config:
         self.driver = self._get(self._browser_section, "driver", "edge").lower() or "edge"
         self.username = self._get(self._account_section, "username")
         self.password = self._get(self._account_section, "password")
+        login_mode = self._get(self._account_section, "loginMode", "password").lower()
+        self.login_mode = login_mode if login_mode in ("password", "qr") else "password"
         self.exe_path = self._get(self._browser_section, "EXE_PATH")
         self.enableAutoCaptcha = self._get_bool(
             self._script_section, "enableAutoCaptcha", True

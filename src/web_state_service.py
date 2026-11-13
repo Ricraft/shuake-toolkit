@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from contextlib import nullcontext
@@ -26,6 +27,20 @@ def _empty_autovisor_activity() -> dict[str, Any]:
         "course_index": None,
         "course_total": None,
         "last_error": None,
+    }
+
+
+def _empty_zhs_state() -> dict[str, Any]:
+    return {
+        "ok": False,
+        "accountIndex": 1,
+        "environment": {"ready": False, "message": "ZHS 环境尚未检测"},
+        "settings": {},
+        "login": {"status": "idle", "message": ""},
+        "session": {"logged_in": False, "cookie_count": 0},
+        "courses": [],
+        "coursesMessage": "",
+        "captcha": None,
     }
 
 
@@ -142,14 +157,14 @@ class WebStateService:
                     except TypeError:
                         lines = [raw_lines]
                 result[str(name)] = [str(line) for line in lines]
-            for name in ("yatori", "autovisor", "system"):
+            for name in ("yatori", "autovisor", "zhs", "system"):
                 result.setdefault(name, [])
             return result
 
         return self._safe(
             "运行日志",
             capture,
-            lambda: {"yatori": [], "autovisor": [], "system": []},
+            lambda: {"yatori": [], "autovisor": [], "zhs": [], "system": []},
             issues,
             validator=lambda value: isinstance(value, dict),
         )
@@ -189,6 +204,14 @@ class WebStateService:
             validator=lambda value: isinstance(value, dict),
         )
 
+        zhs_state = self._safe(
+            "ZHS 状态",
+            lambda: launcher.get_zhs_state_from_web(1),
+            _empty_zhs_state,
+            issues,
+            validator=lambda value: isinstance(value, dict),
+        )
+
         installed = {
             "yatori": bool(
                 self._safe(
@@ -207,6 +230,16 @@ class WebStateService:
                     lambda: launcher._directory_has_any_file(
                         autovisor_path,
                         launcher.AUTOVISOR_ENTRY_FILES,
+                    ),
+                    False,
+                    issues,
+                )
+            ),
+            "zhs": bool(
+                self._safe(
+                    "ZHS 安装状态",
+                    lambda: os.path.isfile(
+                        os.path.join(launcher.get_base_dir(), "zhs", "pyproject.toml")
                     ),
                     False,
                     issues,
@@ -279,6 +312,7 @@ class WebStateService:
             "backend_ready": True,
             "yatori_running": bool(running.get("yatori")),
             "autovisor_running": bool(running.get("autovisor")),
+            "zhs_running": bool(running.get("zhs")),
             "yatori_version": yatori_version,
             "autovisor_version": autovisor_version,
             "about_version": (
@@ -306,6 +340,7 @@ class WebStateService:
             "qb_stats": qb_stats,
             "logs": logs,
             "autovisor_activity": autovisor_activity,
+            "zhs_state": zhs_state,
             "core_update": core_update,
             "shutdown_pending": bool(
                 getattr(launcher, "_shutdown_pending", False)
@@ -317,12 +352,14 @@ class WebStateService:
 
     def initial_state(self) -> dict[str, Any]:
         launcher = self.launcher
+        runtime = self.runtime_state()
         return {
-            "runtime": self.runtime_state(),
+            "runtime": runtime,
             "preferences": launcher.get_web_preferences(),
             "settings": {
                 "yatori": launcher._load_yatori_config_data(),
                 "autovisor": launcher._load_autovisor_config_data(),
                 "questionbank": launcher.get_qb_settings_from_web(),
+                "zhs": (runtime.get("zhs_state") or {}).get("settings") or {},
             },
         }

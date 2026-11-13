@@ -13,6 +13,7 @@ class RuntimeCoordinator:
         "yatori": "Yatori",
         "autovisor": "Autovisor",
         "practice": "刷题模式",
+        "zhs": "ZHS",
     }
 
     def __init__(self, launcher):
@@ -158,8 +159,19 @@ class RuntimeCoordinator:
             return
 
         label = self.CORE_LABELS.get(script_type, script_type)
+        # zhs 在单门课失败/验证码中断时仍以 0 退出（异常被逐门 try/except 吞掉），
+        # 这里用日志标记补一次判定，避免课程没刷完就自动关机。
+        interrupted = (
+            script_type == "zhs"
+            and not return_code
+            and bool(getattr(launcher, "_zhs_run_had_failure", False))
+        )
+        message = None
         if return_code:
             message = f"{label} 已退出，返回码: {return_code}"
+        elif interrupted:
+            message = f"{label} 本轮有课程未完成（验证码中断或处理失败），已跳过自动关机"
+        if message:
             with self._state_lock:
                 sequence = (
                     getattr(launcher, "_runtime_event_sequence", 0) + 1
@@ -167,7 +179,7 @@ class RuntimeCoordinator:
                 launcher._runtime_event_sequence = sequence
                 launcher._last_runtime_event = {
                     "id": sequence,
-                    "kind": "crash",
+                    "kind": "crash" if return_code else "runtime_failure",
                     "core": script_type,
                     "label": label,
                     "return_code": return_code,
@@ -178,7 +190,7 @@ class RuntimeCoordinator:
                 }
             launcher._record_runtime_failure(script_type, message)
             launcher._notify_runtime_event(
-                f"{label} 运行异常",
+                f"{label} 任务未完成" if interrupted else f"{label} 运行异常",
                 message,
                 error=True,
             )

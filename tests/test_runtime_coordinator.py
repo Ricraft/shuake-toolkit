@@ -24,8 +24,18 @@ def make_runtime_launcher():
     sounds = []
     shutdowns = []
     launcher = SimpleNamespace(
-        running={"yatori": False, "autovisor": False, "practice": False},
-        starting={"yatori": False, "autovisor": False, "practice": False},
+        running={
+            "yatori": False,
+            "autovisor": False,
+            "practice": False,
+            "zhs": False,
+        },
+        starting={
+            "yatori": False,
+            "autovisor": False,
+            "practice": False,
+            "zhs": False,
+        },
         _runtime_lock=threading.RLock(),
         _runtime_failure_since_batch=False,
         _runtime_batch_starting=False,
@@ -34,7 +44,12 @@ def make_runtime_launcher():
         _shutdown_pending=False,
         _last_start_error={},
         _last_start_failure_kind={},
-        log_history={"yatori": [], "autovisor": [], "system": []},
+        log_history={
+            "yatori": [],
+            "autovisor": [],
+            "zhs": [],
+            "system": [],
+        },
         log_system=system_logs.append,
         log=lambda core, message: core_logs.append((core, message)),
         _preference_enabled=lambda _key, _default=True: True,
@@ -228,3 +243,29 @@ def test_failure_is_not_cleared_while_batch_is_still_starting_other_cores():
     launcher.coordinator._finalize_if_idle(allow_shutdown=False)
     assert launcher._runtime_failure_since_batch is False
     assert "本轮任务存在异常退出，已跳过自动关机" in launcher.system_logs
+
+def test_zhs_interrupted_run_skips_shutdown_despite_zero_exit_code():
+    launcher = make_runtime_launcher()
+    launcher._zhs_run_had_failure = True
+
+    launcher.coordinator.handle_runtime_exit("zhs", 0, False)
+
+    assert launcher.shutdowns == []
+    assert launcher._last_runtime_event["kind"] == "runtime_failure"
+    assert launcher._last_runtime_event["return_code"] == 0
+    assert "未完成" in launcher._last_runtime_event["message"]
+    assert (
+        "zhs",
+        "[ERROR] ZHS 本轮有课程未完成（验证码中断或处理失败），已跳过自动关机",
+    ) in launcher.core_logs
+    assert "本轮任务存在异常退出，已跳过自动关机" in launcher.system_logs
+
+
+def test_zhs_clean_run_triggers_auto_shutdown():
+    launcher = make_runtime_launcher()
+    launcher._zhs_run_had_failure = False
+
+    launcher.coordinator.handle_runtime_exit("zhs", 0, False)
+
+    assert launcher.shutdowns == [True]
+    assert launcher._last_runtime_event is None

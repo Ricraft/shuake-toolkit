@@ -93,6 +93,58 @@ class AutovisorDependencyManager:
         except Exception as exc:
             return False, str(exc)
 
+    def captcha_runtime_ready(self, python_executable: str):
+        """Check OpenCV/NumPy in Autovisor's bundled runtime_deps directory."""
+        runtime_deps = os.path.join(self.autovisor_path, "runtime_deps")
+        code = (
+            "import sys;"
+            f"sys.path.insert(0, {runtime_deps!r});"
+            "import cv2, numpy;"
+            "print(cv2.__version__)"
+        )
+        try:
+            result = subprocess.run(
+                [python_executable, "-c", code],
+                cwd=self.autovisor_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+            )
+        except Exception as exc:  # noqa: BLE001 - probe must not raise
+            return False, str(exc)
+        if result.returncode == 0:
+            return True, (result.stdout or "").strip()
+        return False, (result.stderr or "").strip()
+
+    def ensure_captcha_runtime(self, python_executable: str):
+        """Make OpenCV/NumPy available for the slider captcha, degrading gracefully."""
+        ready, detail = self.captcha_runtime_ready(python_executable)
+        if ready:
+            return True, ""
+        installer = os.path.join(self.autovisor_path, "download_runtime_deps.py")
+        if not os.path.isfile(installer):
+            return False, f"未找到 {installer}"
+        self.log_system(
+            "检测到 Autovisor 人机验证依赖 (OpenCV/NumPy) 缺失，正在自动安装..."
+        )
+        try:
+            code = self.run_logged_command(
+                [python_executable, installer], self.autovisor_path
+            )
+        except Exception as exc:  # noqa: BLE001 - install failure must not crash
+            return False, str(exc)
+        ready, detail = self.captcha_runtime_ready(python_executable)
+        if ready:
+            self.log_system(
+                f"Autovisor 人机验证依赖安装完成 (OpenCV {detail})"
+            )
+            return True, ""
+        suffix = f"返回码 {code}" if code else "未知原因"
+        return False, f"{suffix}；{detail}" if detail else suffix
+
     def check_dependencies(self, python_executable: str):
         self.log_system(f"依赖检查Python: {python_executable}")
         missing = []

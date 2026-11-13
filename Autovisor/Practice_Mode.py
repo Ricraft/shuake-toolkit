@@ -68,7 +68,7 @@ def run(account_id=None):
         try:
             if sys.stdin and sys.stdin.isatty():
                 input("程序已结束，按 Enter 退出...")
-        except EOFError:
+        except (EOFError, OSError, ValueError):
             pass
     return exit_code
 

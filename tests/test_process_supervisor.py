@@ -190,6 +190,61 @@ class ProcessSupervisorTests(unittest.TestCase):
         )
         self.assertTrue(any("强制终止失败" in message for message in logs))
 
+    def test_rich_style_progress_lines_are_recognized(self):
+        # ZHS（rich 风格进度条）用方括号画条、百分比带小数，靠 \r 原地刷新。
+        self.assertTrue(is_progress_log("playing 78613499 [##########    ] 32.7%"))
+        self.assertTrue(
+            is_progress_log("[19:46:22] playing 78613499 [#####     ] 33.2%")
+        )
+        self.assertTrue(is_progress_log("下载中 \u2501\u2501\u2501 12%"))
+        self.assertFalse(is_progress_log("登录状态有效"))
+        self.assertFalse(is_progress_log("[19:46:22] 已发现 4 门课程"))
+
+    def test_stream_merges_consecutive_carriage_return_progress_frames(self):
+        frames = "".join(
+            "\rplaying 78613499 [####      ] " + percent + "%"
+            for percent in ("32.7", "32.9", "33.2")
+        )
+        emitted = []
+        supervisor = ProcessSupervisor(
+            log_line=lambda source, line, **kwargs: emitted.append(
+                (line, kwargs.get("replace_last"))
+            )
+        )
+        process = SimpleNamespace(
+            stdout=_ChunkedOutput([frames.encode("utf-8") + b"\r\n"])
+        )
+
+        supervisor.stream_process_output(process, "zhs", ["utf-8"])
+
+        # 每一帧都由 \r 结束，是原地刷新；是否替换上一行由日志层按上一条内容判断。
+        self.assertEqual(len(emitted), 3)
+        self.assertTrue(all(replace for _line, replace in emitted))
+        self.assertTrue(emitted[-1][0].endswith("33.2%"))
+
+    def test_subprocess_window_kwargs_do_not_request_detached_process(self):
+        class FakeSubprocess:
+            CREATE_NEW_PROCESS_GROUP = 0x200
+            CREATE_NO_WINDOW = 0x08000000
+            DETACHED_PROCESS = 0x8
+            STARTF_USESHOWWINDOW = 0x1
+
+            class STARTUPINFO:
+                def __init__(self):
+                    self.dwFlags = 0
+                    self.wShowWindow = 1
+
+        flags, startupinfo = ProcessSupervisor(
+            platform="win32",
+            subprocess_module=FakeSubprocess,
+        ).subprocess_window_kwargs()
+
+        # 叠加 DETACHED_PROCESS 会让 Windows 弹出可见控制台窗口。
+        self.assertFalse(flags & FakeSubprocess.DETACHED_PROCESS)
+        self.assertTrue(flags & FakeSubprocess.CREATE_NO_WINDOW)
+        self.assertTrue(flags & FakeSubprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertEqual(startupinfo.wShowWindow, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

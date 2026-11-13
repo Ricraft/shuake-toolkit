@@ -13,6 +13,11 @@ LOGIN_URL = "https://login.zhihuishu.com/?" + urlencode(
         "service": LOGIN_SERVICE_URL,
     }
 )
+# 扫码登录必须使用老版 CAS 登录页：新版 login.zhihuishu.com 是单页应用外壳，
+# 只有账号密码表单、没有二维码面板；passport 页带 .wall-main 与扫码 tab。
+QR_LOGIN_URL = "https://passport.zhihuishu.com/login?" + urlencode(
+    {"service": LOGIN_SERVICE_URL}
+)
 LOGIN_HOSTS = frozenset(
     {
         "login.zhihuishu.com",

@@ -40,6 +40,23 @@ class _Manager:
         return self._install("autovisor", release_info, progress)
 
 
+class _ZhsManager(_Manager):
+    def __init__(self):
+        super().__init__()
+        self.zhs_result = {
+            "installed": True,
+            "has_update": True,
+            "version": "0.1.5",
+            "info": {"version": "v0.1.6"},
+        }
+
+    def check_zhs_update(self):
+        return self.zhs_result
+
+    def install_zhs(self, release_info, progress):
+        return self._install("zhs", release_info, progress)
+
+
 class UpdateControllerTests(unittest.TestCase):
     def make_controller(self, manager=None, *, run_async=None, running=None):
         manager = manager or _Manager()
@@ -326,6 +343,44 @@ class UpdateControllerTests(unittest.TestCase):
         self.assertEqual(failed["phase"], "failed")
         self.assertEqual(failed["core"], "yatori")
         self.assertTrue(failed["message"])
+
+    def test_zhs_update_dialog_disables_install_while_running(self):
+        controller, _manager, _logs, _notices, _installed = self.make_controller(
+            _ZhsManager(), running={"zhs": True}
+        )
+
+        result = controller.show_zhs_update_dialog()
+
+        dialog = result["updateDialog"]
+        self.assertTrue(dialog["hasUpdate"])
+        self.assertTrue(dialog["installDisabled"])
+        self.assertIn("正在运行", dialog["installDisabledReason"])
+
+    def test_zhs_update_dialog_explains_skipped_downgrade(self):
+        manager = _ZhsManager()
+        manager.zhs_result = {
+            "installed": True,
+            "has_update": False,
+            "local_newer": True,
+            "version": "0.1.6",
+            "info": {"version": "v0.1.5"},
+        }
+        controller, _manager, _logs, _notices, _installed = self.make_controller(manager)
+
+        result = controller.show_zhs_update_dialog()
+
+        dialog = result["updateDialog"]
+        self.assertFalse(dialog["hasUpdate"])
+        self.assertTrue(dialog["installDisabled"])
+        self.assertIn("跳过降级", dialog["installDisabledReason"])
+
+    def test_zhs_install_requires_checked_version(self):
+        controller, _manager, _logs, notices, _installed = self.make_controller(
+            _ZhsManager()
+        )
+
+        self.assertFalse(controller.install_zhs_async())
+        self.assertTrue(any("请先检查更新" in item[2] for item in notices))
 
     def test_install_progress_starts_idle(self):
         controller, _manager, _logs, _notices, _installed = self.make_controller()

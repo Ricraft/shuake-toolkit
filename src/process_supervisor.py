@@ -15,6 +15,11 @@ PROGRESS_LINE_RE = re.compile(
     r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*"
     r"(?P<percent>\d+%)\s*(?P<suffix>.*)$"
 )
+TIMESTAMP_PREFIX_RE = re.compile(r"^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s*")
+PROGRESS_PERCENT_RE = re.compile(r"\d{1,3}(?:\.\d+)?%")
+# rich / tqdm 这类进度条用方括号或横线画条，末尾是带小数的百分比（如 32.7%），
+# 与上面 Autovisor 的 |...| 格式不同，需要单独识别才能原地刷新而不是每帧新增一行。
+PROGRESS_BAR_MARKERS = ("[", "]", "|", "\u2501", "\u2500", "\u2588", "\u25ac", "\u25ae")
 
 
 def build_encoding_candidates(*preferred: str | None) -> list[str]:
@@ -70,9 +75,23 @@ def normalize_progress_log(text: str) -> str:
     return f"{description} {percent} | {suffix}" if suffix else f"{description} {percent}"
 
 
+def strip_log_timestamp(text: str) -> str:
+    """去掉日志行首的 [HH:MM:SS] 时间戳，便于统一判断内容类型。"""
+    return TIMESTAMP_PREFIX_RE.sub("", str(text).strip(), count=1)
+
+
 def is_progress_log(text: str) -> bool:
     normalized = normalize_progress_log(text)
-    return normalized != text or ("%" in text and "进度" in text)
+    if normalized != text:
+        return True
+    stripped = strip_log_timestamp(text)
+    if "%" not in stripped:
+        return False
+    if "进度" in stripped:
+        return True
+    if not PROGRESS_PERCENT_RE.search(stripped):
+        return False
+    return any(marker in stripped for marker in PROGRESS_BAR_MARKERS)
 
 
 class ProcessSupervisor:
@@ -130,8 +149,11 @@ class ProcessSupervisor:
                 "CREATE_NEW_PROCESS_GROUP",
                 0,
             )
+            # 只用 CREATE_NO_WINDOW：它让控制台程序在没有窗口的控制台里运行。
+            # 不要再叠加 DETACHED_PROCESS —— 两者一起用时 Windows 会给子进程
+            # 新建一个可见的控制台窗口（ConPTY/终端窗口），ZHS 刷课时会突然
+            # 弹出 cmd 窗口，原因就在这里。
             creationflags |= getattr(self.subprocess, "CREATE_NO_WINDOW", 0)
-            creationflags |= getattr(self.subprocess, "DETACHED_PROCESS", 0)
             startupinfo_factory = getattr(self.subprocess, "STARTUPINFO", None)
             if startupinfo_factory is not None:
                 startupinfo = startupinfo_factory()

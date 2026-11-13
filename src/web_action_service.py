@@ -12,10 +12,19 @@ AUTOVISOR_UPDATE_DISABLED_MESSAGE = (
     "可继续检查版本信息，但不会替换现有核心。"
 )
 
+# ZHS 更新弹窗里的外链：前端只传键，URL 只存在于后端（受桌面层白名单约束）。
+ZHS_UPDATE_LINKS = {
+    # 键名需与 src/update_controller.ZHS_LINKS 保持一致，另保留历史别名。
+    "zhs_github": "https://github.com/pjm314159/zhs",
+    "zhs_project": "https://github.com/pjm314159/zhs",
+    "zhs_releases": "https://github.com/pjm314159/zhs/releases",
+}
+
 # 关于页「感谢名单」外链白名单：前端只传键，URL 只存在于后端。
 CONTRIBUTOR_LINKS = {
     "yatori": "https://yatori-dev.github.io/yatori-docs/",
     "autovisor": "https://github.com/CXRunfree/Autovisor",
+    "zhs": "https://github.com/pjm314159/zhs",
     "zerror": "https://app.zerror.cc/",
 }
 
@@ -125,6 +134,13 @@ class WebActionService:
                     AUTOVISOR_UPDATE_DISABLED_MESSAGE,
                     blockedByPolicy=True,
                 )
+            elif action == "show_zhs_update_dialog":
+                return self._with_state(launcher.show_zhs_update_dialog())
+            elif action == "install_zhs_update":
+                if not launcher.install_zhs_update_async(None):
+                    return self._failure(
+                        "ZHS 更新未能启动，请先点击「检查更新」确认版本后重试"
+                    )
             elif action == "check_launcher_update":
                 return self._with_state(launcher.show_launcher_update_dialog())
             elif action == "install_launcher_update":
@@ -132,6 +148,16 @@ class WebActionService:
                     return self._failure(
                         "更新确认已失效，请重新点击「检查统一启动器更新」并核对版本说明"
                     )
+            elif action == "open_zhs_link":
+                url = ZHS_UPDATE_LINKS.get(str(script_type or ""))
+                if not url:
+                    return self._failure(f"未知的 ZHS 链接: {script_type}")
+                result = launcher.open_external_url(url)
+                if not result.get("ok"):
+                    return self._failure(
+                        result.get("message") or "无法打开外部链接"
+                    )
+                return self._success(url=url, accepted=True)
             elif action == "open_contributor_link":
                 url = CONTRIBUTOR_LINKS.get(str(script_type or ""))
                 if not url:

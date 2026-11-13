@@ -19,6 +19,7 @@ import glob
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 
 try:
     from .atomic_io import atomic_dump_json
@@ -74,6 +75,18 @@ class CoreManager:
     # Autovisor 仓库
     AUTOVISOR_REPO = "CXRunfree/Autovisor"
     AUTOVISOR_API_URL = f"https://api.github.com/repos/{AUTOVISOR_REPO}/releases/latest"
+
+    # ZHS 仓库：上游是纯 Python 源码项目，发布只产出 tag 与源码归档，
+    # 没有附带 SHA-256 摘要的 release 资产（详见 install_zhs 的安全说明）。
+    ZHS_REPO = "pjm314159/zhs"
+    ZHS_TAGS_API_URL = f"https://api.github.com/repos/{ZHS_REPO}/tags?per_page=30"
+    ZHS_RELEASES_API_URL = f"https://api.github.com/repos/{ZHS_REPO}/releases?per_page=30"
+    ZHS_RELEASES_PAGE = f"https://github.com/{ZHS_REPO}/releases/latest"
+    ZHS_ARCHIVE_URL_TEMPLATE = "https://github.com/{repo}/archive/refs/tags/{tag}.zip"
+    ZHS_SOURCE_ARCHIVE_NOTICE = (
+        "ZHS 以上游源码归档分发，GitHub 未提供发布方 SHA-256 摘要；"
+        "启动器会计算并记录归档哈希、安装前备份 zhs/，失败时自动回滚。"
+    )
     
     # GitHub 加速源列表（顺序仅作探测失败时的兜底顺序，实际下载前会并发测速重排）
     GITHUB_MIRRORS = (
@@ -535,7 +548,7 @@ class CoreManager:
     
     def _load_local_versions(self):
         """加载本地版本信息"""
-        defaults = {'yatori': None, 'autovisor': None, 'last_check': None}
+        defaults = {'yatori': None, 'autovisor': None, 'zhs': None, 'last_check': None}
         if os.path.exists(self.version_file):
             try:
                 with open(self.version_file, 'r', encoding='utf-8') as f:
@@ -1520,6 +1533,380 @@ class CoreManager:
                             os.remove(path)
                     except:
                         pass
+
+    # ------------------------------------------------------------------ #
+    # ZHS（智慧树新版核心）：源码归档更新
+    #
+    # 与 Yatori/Autovisor 不同，zhs 上游只发布 tag 与源码归档，GitHub 不为
+    # 源码归档提供发布方 SHA-256 摘要，因此这里无法沿用 _can_download_release
+    # 的“必须有摘要”策略。ZHS 的更新改为：
+    #   1) 只从 GitHub 官方 tag 归档地址下载（必要时可走已配置的加速前缀）；
+    #   2) 下载后计算 SHA-256 并写入 zhs/UPSTREAM.json，便于事后比对；
+    #   3) 安装前完整备份 zhs/，同步或重装失败自动回滚；
+    #   4) 安装后重装 editable 包并跑 zhs 冒烟命令。
+    # 完整说明见 docs/更新指南.md。
+    # ------------------------------------------------------------------ #
+    def _zhs_vendor_module(self):
+        """延迟导入 src/zhs_vendor.py，兼容以顶层模块方式运行的维护脚本。"""
+        try:
+            from . import zhs_vendor
+        except ImportError:  # pragma: no cover - direct maintenance execution
+            import zhs_vendor  # type: ignore
+        return zhs_vendor
+
+    def get_zhs_path(self):
+        return os.path.join(self.base_dir, "zhs")
+
+    def check_zhs_installed(self):
+        """zhs/ 存在 pyproject.toml 与 src/zhs 时视为已安装。"""
+        zhs_path = self.get_zhs_path()
+        return (
+            os.path.isfile(os.path.join(zhs_path, "pyproject.toml"))
+            and os.path.isdir(os.path.join(zhs_path, "src", "zhs"))
+        )
+
+    def get_zhs_local_version_info(self):
+        """返回本地 zhs 版本（优先 UPSTREAM.json，其次 pyproject.toml）。"""
+        vendor = self._zhs_vendor_module()
+        zhs_path = self.get_zhs_path()
+        version = ""
+        try:
+            version = vendor.read_local_version(Path(zhs_path))
+        except Exception as exc:
+            self._log(f"读取本地 ZHS 版本失败: {exc}")
+        return {
+            "version": version,
+            "display": version or "未记录",
+            "path": zhs_path,
+        }
+
+    @staticmethod
+    def _normalize_zhs_version(value):
+        return str(value or "").strip().lstrip("vV") or ""
+
+    def _collect_zhs_release_candidates(self):
+        """合并 tags 与 releases，返回 {归一化版本: 候选信息}。"""
+        candidates = {}
+        errors = []
+
+        def absorb(items, kind):
+            if isinstance(items, dict):
+                items = [items]
+            for item in items or []:
+                if not isinstance(item, dict):
+                    continue
+                tag = str(item.get("tag_name") or item.get("name") or "").strip()
+                version = self._normalize_zhs_version(tag)
+                if not version or self._parse_yatori_version(version) is None:
+                    continue
+                entry = candidates.setdefault(
+                    version,
+                    {
+                        "tag": tag,
+                        "version": version,
+                        "body": "",
+                        "published_at": None,
+                        "commit": "",
+                    },
+                )
+                entry["tag"] = tag or entry["tag"]
+                if kind == "release":
+                    body = str(item.get("body") or "").strip()
+                    if body:
+                        entry["body"] = body
+                    published = item.get("published_at") or item.get("created_at")
+                    if published:
+                        entry["published_at"] = published
+                else:
+                    commit = (item.get("commit") or {}).get("sha")
+                    if commit:
+                        entry["commit"] = commit
+
+        try:
+            absorb(self._fetch_github_api_json(self.ZHS_TAGS_API_URL), "tag")
+        except Exception as exc:
+            errors.append(exc)
+        try:
+            absorb(self._fetch_github_api_json(self.ZHS_RELEASES_API_URL), "release")
+        except Exception as exc:
+            errors.append(exc)
+
+        if not candidates and errors:
+            raise errors[-1]
+        return candidates
+
+    def get_zhs_latest_release(self):
+        """获取 zhs 最新版本信息（tag 归档，无发布方摘要）。"""
+        try:
+            self._log("正在检查 ZHS 最新版本...")
+            try:
+                candidates = self._collect_zhs_release_candidates()
+            except Exception as exc:
+                self._log(f"[提示] ZHS API 查询失败（{exc}），尝试通过 GitHub 页面回退...")
+                return self._get_zhs_latest_fallback()
+
+            if not candidates:
+                self._log("[提示] 未从 GitHub 获取到 ZHS 版本标签，尝试页面回退...")
+                return self._get_zhs_latest_fallback()
+
+            best_version = None
+            for version in candidates:
+                if best_version is None:
+                    best_version = version
+                    continue
+                comparison = self._compare_yatori_versions(version, best_version)
+                if comparison is not None and comparison > 0:
+                    best_version = version
+            info = candidates[best_version]
+            tag = info["tag"]
+            self._log(f"ZHS 最新版本: {tag}")
+            return {
+                "version": tag,
+                "compare_version": best_version,
+                "tag": tag,
+                "download_url": self.ZHS_ARCHIVE_URL_TEMPLATE.format(
+                    repo=self.ZHS_REPO, tag=tag
+                ),
+                "digest": None,
+                "asset_size": None,
+                "verification_source": "tag-archive",
+                "published_at": info.get("published_at"),
+                "body": info.get("body") or "",
+                "commit": info.get("commit") or "",
+                "source": "github-api",
+            }
+        except Exception as exc:
+            self._log(f"[错误] 获取 ZHS 版本信息失败: {type(exc).__name__}: {exc}")
+            return None
+
+    def _get_zhs_latest_fallback(self):
+        """通过 releases/latest 页面探测 tag，再拼出源码归档地址。"""
+        last_error = None
+        for source_name, try_url in self._prefer_known_proxies(
+            self._build_github_candidate_urls(self.ZHS_RELEASES_PAGE)
+        ):
+            try:
+                self._log(f"探测 ZHS 版本 ({source_name})")
+                request = urllib.request.Request(
+                    try_url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    },
+                    method="HEAD",
+                )
+                with urllib.request.urlopen(
+                    request, timeout=self.GITHUB_PAGE_TIMEOUT, context=self.ssl_context
+                ) as response:
+                    final_url = response.geturl()
+                if "/tag/" not in final_url:
+                    continue
+                tag = final_url.split("/tag/")[-1].split("?")[0].strip("/")
+                if not tag:
+                    continue
+                self._log(f"获取到 ZHS 最新版本: {tag}（通过页面探测）")
+                return {
+                    "version": tag,
+                    "compare_version": self._normalize_zhs_version(tag),
+                    "tag": tag,
+                    "download_url": self.ZHS_ARCHIVE_URL_TEMPLATE.format(
+                        repo=self.ZHS_REPO, tag=tag
+                    ),
+                    "digest": None,
+                    "asset_size": None,
+                    "verification_source": "tag-archive",
+                    "published_at": None,
+                    "body": "",
+                    "commit": "",
+                    "source": "tag-page",
+                }
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if last_error:
+            self._log(f"ZHS 版本探测失败: {last_error}")
+        return None
+
+    def check_zhs_update(self):
+        """检查 ZHS 更新（源码归档按 tag 版本比较）。"""
+        release_info = self.get_zhs_latest_release()
+        if not release_info:
+            return None
+
+        latest_version = release_info.get("compare_version") or self._normalize_zhs_version(
+            release_info.get("version")
+        )
+        installed = self.check_zhs_installed()
+        local_info = self.get_zhs_local_version_info()
+        local_version = self._normalize_zhs_version(local_info.get("version"))
+
+        if not installed:
+            return {"has_update": True, "installed": False, "info": release_info}
+
+        if not local_version:
+            self._log("已检测到本地 zhs 副本但未记录版本，按“可更新”处理。")
+            return {
+                "has_update": True,
+                "installed": True,
+                "version": local_info.get("display", "未记录"),
+                "info": release_info,
+            }
+
+        comparison = self._compare_yatori_versions(latest_version, local_version)
+        if comparison is None:
+            has_update = latest_version != local_version
+        else:
+            has_update = comparison > 0
+
+        if has_update:
+            return {
+                "has_update": True,
+                "installed": True,
+                "version": local_info.get("display", local_version),
+                "info": release_info,
+            }
+
+        local_newer = comparison is not None and comparison < 0
+        if local_newer:
+            self._log(
+                f"本地 ZHS 版本 {local_version} 高于远端 {latest_version}，跳过降级"
+            )
+        return {
+            "has_update": False,
+            "installed": True,
+            "version": local_info.get("display", local_version),
+            "info": release_info,
+            "local_newer": local_newer,
+        }
+
+    @staticmethod
+    def _sha256_of_file(path):
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _find_zhs_source_dir(self, extract_dir):
+        """在解压目录中定位含 pyproject.toml 与 src/zhs 的源码根目录。"""
+        for current_root, _dirs, files in os.walk(extract_dir):
+            if "pyproject.toml" in files and os.path.isdir(
+                os.path.join(current_root, "src", "zhs")
+            ):
+                return current_root
+        return None
+
+    def install_zhs(self, release_info, progress_callback=None):
+        """安装/升级内置 zhs 源码副本，失败自动回滚。"""
+        version = str(release_info.get("version") or "")
+        tag = str(release_info.get("tag") or version or "latest")
+        download_url = release_info.get("download_url")
+        if not download_url:
+            self._log("[错误] ZHS 更新缺少下载地址")
+            return False
+
+        vendor = self._zhs_vendor_module()
+        zhs_path = self.get_zhs_path()
+        safe_tag = self._safe_name(tag)
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        work_dir = tempfile.mkdtemp(prefix="zhs-update-", dir=self.base_dir)
+        temp_zip = os.path.join(work_dir, f"zhs-{safe_tag}.zip")
+        extract_dir = os.path.join(work_dir, "extract")
+        backup_dir = os.path.join(self.base_dir, f"zhs-backup-{timestamp}")
+        backed_up = False
+
+        try:
+            self._log(f"正在安装 ZHS {tag}...")
+            self._log(f"[提示] {self.ZHS_SOURCE_ARCHIVE_NOTICE}")
+            if not self.download_file(
+                download_url,
+                temp_zip,
+                progress_callback,
+                expected_size=release_info.get("asset_size"),
+            ):
+                return False
+
+            archive_digest = self._sha256_of_file(temp_zip)
+            self._log(f"ZHS 源码归档 SHA-256: {archive_digest}")
+
+            self._log("正在解压 ZHS 源码归档...")
+            with zipfile.ZipFile(temp_zip, "r") as zip_ref:
+                self._safe_extract_zip(zip_ref, extract_dir)
+            source_dir = self._find_zhs_source_dir(extract_dir)
+            if not source_dir:
+                raise RuntimeError("未在压缩包中找到 zhs 源码目录（缺少 src/zhs）")
+
+            if not self.check_zhs_installed():
+                raise RuntimeError("内置 zhs 副本不完整，无法执行就地升级")
+
+            self._log("正在备份现有 zhs 核心...")
+            if os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir)
+            shutil.copytree(zhs_path, backup_dir)
+            backed_up = True
+
+            git_rev = f"tag:{tag}"
+            if release_info.get("commit"):
+                git_rev = f"{git_rev}@{str(release_info['commit'])[:7]}"
+            vendor.sync_from_source(
+                Path(source_dir),
+                Path(zhs_path),
+                force=True,
+                git_rev=git_rev,
+                source_url=download_url,
+                archive_sha256=archive_digest,
+                record_source_path=False,
+                log=self._log,
+            )
+
+            venv_python = vendor.find_venv_python(Path(self.base_dir))
+            if venv_python is None:
+                self._log(
+                    "[提示] 未找到 .runtime/venv-zhs，跳过重装与冒烟检查；"
+                    "下次启动 bootstrap 时会自动准备 ZHS 环境。"
+                )
+            else:
+                self._log("正在重装 zhs 包...")
+                ok, message = vendor.reinstall_editable(
+                    Path(self.base_dir), venv_python=venv_python, log=self._log
+                )
+                if not ok:
+                    raise RuntimeError(message)
+                self._log("正在同步 ZHS 运行依赖（requirements-zhs.txt）...")
+                ok, message = vendor.ensure_requirements(
+                    Path(self.base_dir), venv_python=venv_python, log=self._log
+                )
+                if not ok:
+                    raise RuntimeError(message)
+                self._log("正在检查新版 zhs 是否可以启动...")
+                ok, message = vendor.smoke_check(
+                    Path(self.base_dir), venv_python=venv_python, log=self._log
+                )
+                if not ok:
+                    raise RuntimeError(message)
+
+            self.local_versions["zhs"] = tag
+            self.local_versions["last_check"] = datetime.now().isoformat()
+            self._save_local_versions()
+
+            if os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            self._log(f"ZHS {tag} 更新完成！")
+            return True
+
+        except Exception as exc:
+            self._log(f"ZHS 更新失败: {exc}")
+            if backed_up and os.path.exists(backup_dir):
+                try:
+                    if os.path.exists(zhs_path):
+                        shutil.rmtree(zhs_path)
+                    os.replace(backup_dir, zhs_path)
+                    self._log("已回滚到旧版 zhs")
+                except Exception as rollback_error:
+                    self._log(f"回滚 zhs 失败: {rollback_error}")
+            return False
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     def check_yatori_update(self):
         """检查 Yatori 更新"""

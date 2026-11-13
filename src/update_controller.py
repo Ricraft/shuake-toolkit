@@ -69,6 +69,33 @@ AUTOVISOR_INSTALL_DISABLED_REASON = (
     "不提供直接覆盖安装。"
 )
 
+# --------------------------------------------------------------------------- #
+# ZHS 更新策略
+#
+# zhs 上游是纯 Python 源码项目，发布只产出 tag 与源码归档，没有附带
+# SHA-256 摘要的 release 资产。启动器因此无法像 Yatori 那样先校验发布方
+# 摘要再解压，改为“官方 tag 归档 + 本地哈希记录 + 安装前备份 + 失败回滚”，
+# 并在弹窗里明确告知用户。详见 docs/更新指南.md。
+# --------------------------------------------------------------------------- #
+
+ZHS_UPDATE_NOTICE = (
+    "说明：ZHS 以上游 GitHub 源码归档分发，官方未提供发布方 SHA-256 摘要。"
+    "安装时启动器会计算并记录归档哈希、自动备份 zhs/，重装或冒烟检查失败会回滚。"
+)
+
+ZHS_LINKS = (
+    {
+        "key": "zhs_github",
+        "label": "GitHub 项目主页（推荐，给原作者一个 star）",
+        "url": "https://github.com/pjm314159/zhs",
+    },
+    {
+        "key": "zhs_releases",
+        "label": "上游版本发布记录",
+        "url": "https://github.com/pjm314159/zhs/releases",
+    },
+)
+
 
 class UpdateController:
     """Coordinate Yatori and Autovisor checks without any UI dependency."""
@@ -100,10 +127,12 @@ class UpdateController:
 
         self.yatori_update_info = None
         self.autovisor_update_info = None
+        self.zhs_update_info = None
         self.installing = False
         self.installing_core = None
         self.yatori_checking = False
         self.autovisor_checking = False
+        self.zhs_checking = False
         self._yatori_confirmation = None
         self._lock = threading.RLock()
         self._install_progress = _empty_install_progress()
@@ -492,8 +521,153 @@ class UpdateController:
     def install_autovisor_async(self, release_info=None) -> bool:
         return self._install_async("autovisor", release_info)
 
+    # ------------------------------------------------------------------ #
+    # ZHS
+    # ------------------------------------------------------------------ #
+    def check_zhs_async(self) -> bool:
+        """后台检查 ZHS 版本（结果写入日志，不弹原生对话框）。"""
+        if not self.core_manager:
+            self.show_error("提示", "核心管理器初始化失败，无法检查版本。")
+            return False
+        with self._lock:
+            if self.installing or self.zhs_checking:
+                self.log("ZHS 版本检查或安装正在进行中，请稍候。")
+                return False
+            self.zhs_checking = True
+
+        self.log("正在检查 ZHS 最新版本...")
+
+        def worker():
+            result = None
+            error = None
+            try:
+                result = self.core_manager.check_zhs_update()
+            except Exception as exc:
+                error = exc
+
+            def finish():
+                with self._lock:
+                    self.zhs_checking = False
+                if error:
+                    self.log(f"ZHS 版本检查失败: {error}")
+                    self.show_error("ZHS 版本", f"检查版本失败：\n{error}")
+                elif not result:
+                    self.log("ZHS 版本检查失败: 未获取到版本信息")
+                    self.show_error("ZHS 版本", "未能获取最新版本信息，请稍后重试。")
+                else:
+                    self.zhs_update_info = result
+                    latest = (result.get("info") or {}).get("version", "未知")
+                    if result.get("has_update"):
+                        self.log(
+                            f"检测到 ZHS 新版本: {latest}"
+                            f"（当前版本: {result.get('version', '未知')}）"
+                        )
+                    else:
+                        self.log(f"ZHS 已是最新版本: {result.get('version', latest)}")
+
+            self.schedule(0, finish)
+
+        self.run_async(worker)
+        return True
+
+    def _build_zhs_update_dialog(self, result):
+        """ZHS 更新弹窗：版本信息、上游链接与可安装标记。"""
+        release_info = result.get("info") or {}
+        installed = result.get("installed", True)
+        notes = self._format_yatori_release_notes(release_info)
+        current = result.get("version") or ("未安装" if not installed else "未记录")
+        latest = release_info.get("version", "未知")
+        has_update = bool(result.get("has_update"))
+        running = bool(self.is_core_running("zhs"))
+        disabled_reason = ""
+        if not has_update:
+            disabled_reason = (
+                "本地版本高于上游最新版本，已跳过降级更新。"
+                if result.get("local_newer")
+                else "当前已是最新版本，无需安装。"
+            )
+        elif running:
+            disabled_reason = "ZHS 正在运行，请先停止后再安装更新。"
+
+        return {
+            "core": "zhs",
+            "installed": installed,
+            "currentVersion": current,
+            "latestVersion": latest,
+            "assetName": f"{latest} 源码归档（tag）",
+            "publishedAt": release_info.get("published_at") or "",
+            "releaseNotes": notes or "该版本暂未提供更新说明。",
+            "releaseNotesAvailable": bool(notes),
+            "notice": ZHS_UPDATE_NOTICE,
+            "downloadLinks": [dict(item) for item in ZHS_LINKS],
+            "installDisabled": (not has_update) or running,
+            "installDisabledReason": disabled_reason,
+            "hasUpdate": has_update,
+            "installLabel": "安装更新" if installed else "安装 ZHS",
+            "summary": (
+                f"上游最新版本 {latest}（本地 {current}）。"
+                "更新会整体替换内置 zhs/ 源码并重装独立环境，账号登录态与课程数据保存在 data/zhs，不受影响。"
+            ),
+        }
+
+    def show_zhs_update_dialog(self):
+        """同步检查 ZHS 版本并返回弹窗数据（供中控台按钮调用）。"""
+        if not self.core_manager:
+            message = "核心管理器初始化失败，无法检查 ZHS 版本。"
+            self.show_error("ZHS 版本", message)
+            return {"ok": False, "message": message}
+
+        with self._lock:
+            if self.zhs_checking or self.installing:
+                message = "ZHS 版本检查或安装正在进行中，请稍后重试。"
+                self.log(message)
+                return {"ok": False, "message": message}
+            self.zhs_checking = True
+
+        self.log("手动检查 ZHS 版本...")
+        try:
+            result = self.core_manager.check_zhs_update()
+        except Exception as exc:
+            message = f"检查 ZHS 版本失败: {exc}"
+            self.log(message)
+            self.show_error("ZHS 版本", message)
+            return {"ok": False, "message": message}
+        finally:
+            with self._lock:
+                self.zhs_checking = False
+
+        if not result:
+            message = "未能获取 ZHS 最新版本信息，请检查网络后重试。"
+            self.log(message)
+            self.show_error("ZHS 版本", message)
+            return {"ok": False, "message": message}
+
+        self.zhs_update_info = result
+        dialog = self._build_zhs_update_dialog(result)
+        if dialog["hasUpdate"]:
+            self.log(
+                f"ZHS 最新版本: {dialog['latestVersion']}"
+                f"（本地 {dialog['currentVersion']}）。"
+            )
+            toast = f"发现 ZHS 新版本 {dialog['latestVersion']}"
+            toast_type = "info"
+        else:
+            self.log(f"ZHS 已是最新版本: {dialog['currentVersion']}。")
+            toast = f"ZHS 已是最新版本（{dialog['currentVersion']}）"
+            toast_type = "success"
+        return {
+            "ok": True,
+            "updateDialog": dialog,
+            "toast": toast,
+            "toastType": toast_type,
+        }
+
+    def install_zhs_async(self, release_info=None) -> bool:
+        return self._install_async("zhs", release_info)
+
     def _install_async(self, core: str, release_info=None) -> bool:
-        label = "Yatori" if core == "yatori" else "Autovisor"
+        labels = {"yatori": "Yatori", "autovisor": "Autovisor", "zhs": "ZHS"}
+        label = labels.get(core, core)
         if not self.core_manager:
             self.show_error("系统错误", "核心管理器初始化失败")
             return False
@@ -501,18 +675,23 @@ class UpdateController:
             self.show_warning(f"{label} 更新", f"请先停止 {label}，再执行核心更新。")
             return False
 
-        cached = (
-            self.yatori_update_info
-            if core == "yatori"
-            else self.autovisor_update_info
-        )
+        cached = {
+            "yatori": self.yatori_update_info,
+            "autovisor": self.autovisor_update_info,
+            "zhs": self.zhs_update_info,
+        }.get(core)
         release_info = release_info or (cached or {}).get("info")
         if not release_info:
             self.show_warning(f"{label} 更新", f"暂无可安装的 {label} 版本信息，请先检查更新。")
             return False
 
         with self._lock:
-            if self.installing or self.yatori_checking or self.autovisor_checking:
+            if (
+                self.installing
+                or self.yatori_checking
+                or self.autovisor_checking
+                or self.zhs_checking
+            ):
                 self.show_info("管理中心", "版本检查或安装正在进行中，请勿重复操作")
                 return False
             self.installing = True
@@ -582,8 +761,10 @@ class UpdateController:
                 if success:
                     if core == "yatori":
                         self.yatori_update_info = None
-                    else:
+                    elif core == "autovisor":
                         self.autovisor_update_info = None
+                    else:
+                        self.zhs_update_info = None
                     self.on_installed(core)
                     self._update_install_progress(
                         phase="completed",

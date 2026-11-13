@@ -104,7 +104,7 @@ def main():
         try:
             if sys.stdin and sys.stdin.isatty():
                 input("\n按 Enter 键退出...")
-        except EOFError:
+        except (EOFError, OSError, ValueError):
             pass
 
 

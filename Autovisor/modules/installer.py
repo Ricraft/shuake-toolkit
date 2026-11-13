@@ -325,8 +325,12 @@ def start():
             if ranked_mirrors is None:
                 ranked_mirrors = rank_mirrors()
                 if not ranked_mirrors:
-                    logger.error("没有可用的镜像源, 程序终止")
-                    sys.exit(-1)
+                    message = (
+                        "没有可用的镜像源，无法自动安装 OpenCV/NumPy；"
+                        "如遇滑块验证请在浏览器窗口中手动完成"
+                    )
+                    logger.error(message)
+                    raise RuntimeError(message)
             module = None
             for candidate_name, candidate_url in ranked_mirrors:
                 module = install_package(
@@ -340,7 +344,10 @@ def start():
                 )
             if not module:
                 logger.save()
-                sys.exit(-1)
+                raise RuntimeError(
+                    f"{package} 安装失败，无法启用人机验证自动识别；"
+                    "如遇滑块验证请在浏览器窗口中手动完成"
+                )
         modules.append(module)
 
     return modules

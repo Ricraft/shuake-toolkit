@@ -22,17 +22,20 @@ class _Launcher:
         self.running = {
             "yatori": True,
             "autovisor": False,
+            "zhs": False,
             "practice": False,
         }
         self.starting = {
             "yatori": False,
             "autovisor": True,
+            "zhs": False,
             "practice": False,
         }
         self._runtime_lock = threading.RLock()
         self.log_history = {
             "yatori": ["started"],
             "autovisor": "正在启动任务\n当前课程:<<英语>>",
+            "zhs": [],
             "system": [],
         }
         self.practice_account_id = 2
@@ -65,6 +68,21 @@ class _Launcher:
     def _get_autovisor_multi_mode(self):
         return True
 
+    def get_base_dir(self):
+        return str(self.root)
+
+    def get_zhs_state_from_web(self, account_index=1):
+        return {
+            "ok": True,
+            "accountIndex": account_index,
+            "environment": {"ready": True},
+            "settings": {},
+            "login": {"status": "idle"},
+            "session": {"logged_in": False, "cookie_count": 0},
+            "courses": [],
+            "coursesMessage": "",
+        }
+
 
 def test_runtime_snapshot_is_complete_consistent_and_json_friendly(tmp_path):
     launcher = _Launcher(tmp_path)
@@ -74,7 +92,11 @@ def test_runtime_snapshot_is_complete_consistent_and_json_friendly(tmp_path):
     assert state["backend_ready"] is True
     assert state["running"]["yatori"] is True
     assert state["starting"]["autovisor"] is True
-    assert state["installed"] == {"yatori": True, "autovisor": False}
+    assert state["installed"] == {
+        "yatori": True,
+        "autovisor": False,
+        "zhs": False,
+    }
     assert state["dependency_installing"]["autovisor"] is True
     assert state["qb_stats"]["total"] == 3
     assert state["practice_account_id"] == 2
@@ -108,7 +130,11 @@ def test_optional_probe_failures_do_not_disconnect_runtime_state(tmp_path):
 
     assert first["backend_ready"] is True
     assert first["yatori_version"] == launcher.YATORI_DISPLAY_VERSION
-    assert first["installed"] == {"yatori": False, "autovisor": False}
+    assert first["installed"] == {
+        "yatori": False,
+        "autovisor": False,
+        "zhs": False,
+    }
     assert first["qb_stats"] == EMPTY_QB_STATS
     assert any("题库统计" in issue for issue in first["state_issues"])
     assert len(launcher.logs) == 4
@@ -159,6 +185,7 @@ def test_initial_state_delegates_configuration_without_hiding_failures(tmp_path)
     assert state["settings"]["yatori"]["users"][0]["account"] == "u"
     assert state["settings"]["autovisor"]["accounts"][0]["username"] == "a"
     assert state["settings"]["questionbank"]["port"] == 8084
+    assert state["settings"]["zhs"] == {}
 
 
 def test_core_update_progress_is_idle_without_controller(tmp_path):

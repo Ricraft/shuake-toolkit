@@ -10,7 +10,9 @@ import threading
 import os
 import sys
 import re
+import webbrowser
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from src.ai_service import AIConnectivityService
 from src.application_bootstrap import (
@@ -56,6 +58,8 @@ from src.web_settings_service import WebSettingsService
 from src.web_state_service import WebStateService
 from src.web_window_controller import WebWindowController
 from src.yatori_runtime_limit import YatoriRuntimeLimit
+from src.zhs_log_format import ZhsLogFormatter
+from src.zhs_service import ZhsService, parse_captcha_line
 
 try:
     import webview
@@ -65,6 +69,14 @@ except ImportError:  # pragma: no cover
 # FileDialog 兼容常量（main() 中会重新赋值）
 FD_OPEN = 10   # OPEN_DIALOG
 FD_SAVE = 30   # SAVE_DIALOG
+
+# zhs 把这些错误打印到 stdout 后继续执行并以 0 退出，用它们判定本轮是否真的刷完
+ZHS_FAILURE_MARKERS = (
+    "处理失败",
+    "解析失败",
+    "列表失败",
+    "缺少 courseId 或 classId",
+)
 
 try:
     import winsound
@@ -91,7 +103,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.6.4"
+    LAUNCHER_VERSION = "v1.7.0"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -247,6 +259,13 @@ class UnifiedLauncher:
             self._launcher_startup_service = service
         return service
 
+    def _get_zhs_service(self):
+        service = getattr(self, '_zhs_service', None)
+        if service is None:
+            service = ZhsService(self)
+            self._zhs_service = service
+        return service
+
     def _get_core_launch_service(self):
         service = getattr(self, '_core_launch_service', None)
         if service is None:
@@ -393,6 +412,9 @@ class UnifiedLauncher:
     def _check_autovisor_dependencies(self, python_exe):
         return self._get_autovisor_dependency_manager().check_dependencies(python_exe)
 
+    def _ensure_autovisor_captcha_runtime(self, python_exe):
+        return self._get_autovisor_dependency_manager().ensure_captcha_runtime(python_exe)
+
     def _get_autovisor_runtime_install_args(self, missing_package_names=None):
         return self._get_autovisor_dependency_manager().runtime_install_args(missing_package_names)
 
@@ -533,6 +555,8 @@ class UnifiedLauncher:
             self.yatori_path = self.find_yatori_path(base_dir)
         elif core == 'autovisor':
             self.autovisor_path = self.find_autovisor_path(base_dir)
+        elif core == 'zhs':
+            self.log_system("ZHS 核心已更新，请重新启动 ZHS 后生效。")
 
     def auto_check_cores(self):
         """自动检查核心安装情况和更新"""
@@ -558,21 +582,25 @@ class UnifiedLauncher:
             'yatori': None,
             'autovisor': None,
             'practice': None,
+            'zhs': None,
         }
         self.log_history = {
             'yatori': [],
             'autovisor': [],
+            'zhs': [],
             'system': [],
         }
         self.running = {
             'yatori': False,
             'autovisor': False,
             'practice': False,
+            'zhs': False,
         }
         self.starting = {
             'yatori': False,
             'autovisor': False,
             'practice': False,
+            'zhs': False,
         }
         self._runtime_lock = threading.RLock()
         self._scheduled_task_service = ScheduledTaskService(log=self.log_system)
@@ -582,9 +610,15 @@ class UnifiedLauncher:
             'yatori': False,
             'autovisor': False,
             'practice': False,
+            'zhs': False,
         }
         self._last_start_error = {}
         self._last_start_failure_kind = {}
+        # 最近一次「课程因验证码中断」的课程信息，用于 UI 引导用户去浏览器过验证
+        self._zhs_captcha_hint = None
+        # 本轮 zhs 是否出现过课程失败/验证码中断（供退出时是否自动关机判定）
+        self._zhs_run_had_failure = False
+        self._zhs_log_formatter = ZhsLogFormatter()
         self._runtime_event_sequence = 0
         self._last_runtime_event = None
         self.practice_account_id = None
@@ -1108,10 +1142,37 @@ class UnifiedLauncher:
 
     def log(self, source, message, tag='', replace_last=False):
         """添加日志到指定源"""
+        if source == 'zhs':
+            message = self._format_zhs_log(message)
         message = self._normalize_progress_log(str(message))
         timestamp = datetime.now().strftime('%H:%M:%S')
         log_line = f"[{timestamp}] {message}\n"
         self._append_log_history(source, log_line, replace_last=replace_last)
+        if source == 'zhs':
+            self._observe_zhs_log(message)
+
+    def _format_zhs_log(self, message):
+        """给 zhs 的进度行补上课程名（playing 课程名（视频 ID） [...]）。"""
+        formatter = getattr(self, '_zhs_log_formatter', None)
+        if formatter is None:
+            formatter = ZhsLogFormatter()
+            self._zhs_log_formatter = formatter
+        return formatter.format(message)
+
+    def _observe_zhs_log(self, message):
+        """识别「验证码中断」与课程失败，供完成判定和 UI 引导使用。"""
+        text = str(message)
+        if any(marker in text for marker in ZHS_FAILURE_MARKERS):
+            self._zhs_run_had_failure = True
+        hint = parse_captcha_line(text)
+        if not hint:
+            return
+        self._zhs_run_had_failure = True
+        self._zhs_captcha_hint = hint
+        # 提示文案刻意不含 captcha required 关键字，避免再次触发本函数
+        self.log('zhs', "【提示】《{}》遇到智慧树验证码，这门课已停止。请点「打开课程页验证」在浏览器里完成验证，再点「只重跑这门课」。".format(hint.get('course') or ''))
+        self.log_system("ZHS 需要验证码：《{}》（videoId={}）已停止，请在浏览器完成验证后只重跑这门课".format(
+            hint.get('course') or '', hint.get('videoId') or ''))
 
     def log_system(self, message, replace_last=False):
         """记录系统日志"""
@@ -1132,6 +1193,8 @@ class UnifiedLauncher:
             return bool(self.start_yatori())
         elif script_type == 'autovisor':
             return bool(self.start_autovisor())
+        elif script_type == 'zhs':
+            return bool(self.start_zhs())
         message = f"未知核心类型: {script_type}"
         self._last_start_error[script_type] = message
         self.log_system(message)
@@ -1208,12 +1271,15 @@ class UnifiedLauncher:
         elif script_type == 'autovisor':
             self.stop_autovisor()
             return True
+        elif script_type == 'zhs':
+            self.stop_zhs()
+            return True
         self.log_system(f"未知核心类型: {script_type}")
         return False
 
     def toggle_script(self, script_type):
         """Use a single button to start or stop a runtime."""
-        if script_type not in ('yatori', 'autovisor'):
+        if script_type not in ('yatori', 'autovisor', 'zhs'):
             self.log_system(f"未知核心类型: {script_type}")
             return False
         if self.starting.get(script_type):
@@ -1250,6 +1316,135 @@ class UnifiedLauncher:
             self._terminate_process_tree(self.processes['autovisor'], "Autovisor")
             self._mark_runtime_stopped('autovisor')
             self.log_system("Autovisor 已关闭刷课。")
+
+    def start_zhs(self, action='play', courses=None, submit_exam=False, url=None):
+        return self._get_core_launch_service().start_zhs(
+            action=action,
+            courses=courses,
+            submit_exam=submit_exam,
+            url=url,
+        )
+
+    def stop_zhs(self):
+        """停止 ZHS 任务"""
+        if self.starting.get('zhs') and not self.processes.get('zhs'):
+            self.stop_requested['zhs'] = True
+            self.log_system("正在取消 ZHS 启动...")
+            return
+        if self.processes.get('zhs') and self.running.get('zhs'):
+            self.log_system("正在停止 ZHS...")
+            self.stop_requested['zhs'] = True
+            self._terminate_process_tree(self.processes['zhs'], "ZHS")
+            self._mark_runtime_stopped('zhs')
+            self.log_system("ZHS 已停止。")
+
+    # ---------- ZHS Web 接口 ----------
+    def get_zhs_state_from_web(self, account_index=0):
+        service = self._get_zhs_service()
+        account = service.normalize_account_id(account_index)
+        login = service.login_snapshot(account)
+        session = service.session_state(account)
+        if session.get('status') == 'unverified':
+            service.schedule_session_check(account)
+        courses = service.cached_courses(account)
+        return {
+            'ok': True,
+            'accountIndex': account,
+            'environment': service.environment_state(),
+            'settings': service.load_settings(account),
+            'login': login,
+            'session': session,
+            'courses': courses.get('courses') or [],
+            'coursesMessage': courses.get('message') or '',
+            'captcha': self._zhs_captcha_hint,
+        }
+
+    def save_zhs_settings_from_web(self, payload):
+        service = self._get_zhs_service()
+        payload = payload if isinstance(payload, dict) else {}
+        account = service.normalize_account_id(payload.get('accountIndex'))
+        raw = payload.get('settings')
+        data = raw if isinstance(raw, dict) else payload
+        try:
+            saved = service.save_settings(data, account)
+        except Exception as exc:
+            self.log_system(f"保存 ZHS 配置失败: {exc}")
+            return {'ok': False, 'message': f'保存 ZHS 配置失败: {exc}'}
+        self.log_system("ZHS 配置已保存")
+        return {'ok': True, 'message': 'ZHS 配置已保存', 'settings': saved}
+
+    def start_zhs_login_from_web(self, account_index=0):
+        return self._get_zhs_service().start_login(account_index)
+
+    def cancel_zhs_login_from_web(self, account_index=0):
+        return self._get_zhs_service().cancel_login(account_index)
+
+    def refresh_zhs_session_from_web(self, account_index=0):
+        service = self._get_zhs_service()
+        account = service.normalize_account_id(account_index)
+        session = service.session_state(account, verify=True, force=True)
+        return {
+            'ok': True,
+            'session': session,
+            'login': service.login_snapshot(account),
+            'message': session.get('message') or '',
+        }
+
+    def clear_zhs_login_from_web(self, account_index=0):
+        service = self._get_zhs_service()
+        account = service.normalize_account_id(account_index)
+        result = service.clear_credentials(account)
+        result['login'] = service.login_snapshot(account)
+        result['state'] = self.get_web_initial_state()
+        return result
+
+    def get_zhs_login_state_from_web(self, account_index=0):
+        service = self._get_zhs_service()
+        account = service.normalize_account_id(account_index)
+        return {
+            'ok': True,
+            'login': service.login_snapshot(account),
+            'session': service.session_state(account),
+            'environment': service.environment_state(),
+        }
+
+    def fetch_zhs_courses_from_web(self, account_index=0):
+        return self._get_zhs_service().fetch_courses(account_index)
+
+    def start_zhs_from_web(self, payload):
+        payload = payload if isinstance(payload, dict) else {}
+        action = str(payload.get('action') or 'play')
+        courses = payload.get('courses') or []
+        submit_exam = bool(payload.get('submitExam'))
+        url = str(payload.get('url') or '').strip()
+        ok = self.start_zhs(action=action, courses=courses, submit_exam=submit_exam, url=url or None)
+        if not ok:
+            message = (self._last_start_error or {}).get('zhs') or 'ZHS 启动失败'
+            return {'ok': False, 'message': message, 'state': self.get_web_initial_state()}
+        return {'ok': True, 'message': 'ZHS 任务已启动', 'state': self.get_web_initial_state()}
+
+    def open_zhs_course_page_from_web(self, url=''):
+        """在默认浏览器里打开课程学习页，让用户手动完成智慧树验证码。"""
+        target = str(url or '').strip()
+        if not target and isinstance(self._zhs_captcha_hint, dict):
+            target = str(self._zhs_captcha_hint.get('url') or '').strip()
+        if not target:
+            return {'ok': False, 'message': '暂无可打开的课程页，请先运行一次任务或从课程列表进入'}
+        parts = urlsplit(target)
+        if parts.scheme not in ('http', 'https') or 'zhihuishu.com' not in (parts.hostname or ''):
+            return {'ok': False, 'message': '课程页地址不受支持，已取消打开'}
+        try:
+            opened = bool(webbrowser.open(target))
+        except Exception as exc:
+            return {'ok': False, 'message': f'打开浏览器失败：{exc}'}
+        if not opened:
+            return {'ok': False, 'message': '未能唤起默认浏览器，请手动复制课程页地址打开'}
+        self.log_system('已在默认浏览器打开课程学习页，完成验证后可回到启动器点「只重跑这门课」')
+        return {'ok': True, 'url': target, 'message': '已打开课程页，请在浏览器里完成验证'}
+
+    def stop_zhs_from_web(self):
+        self.stop_zhs()
+        return {'ok': True, 'message': 'ZHS 已停止', 'state': self.get_web_initial_state()}
 
     def stop_practice_mode(self):
         return self._get_practice_mode_service().stop()
@@ -1493,6 +1688,16 @@ class UnifiedLauncher:
             AUTOVISOR_UPDATE_DISABLED_MESSAGE,
         )
         return False
+
+    def check_zhs_update_async(self):
+        return self.update_controller.check_zhs_async()
+
+    def show_zhs_update_dialog(self):
+        """中控台「检查更新」：检查 ZHS 版本并返回弹窗数据。"""
+        return self.update_controller.show_zhs_update_dialog()
+
+    def install_zhs_update_async(self, release_info=None):
+        return self.update_controller.install_zhs_async(release_info)
 
     def show_update_dialog(self):
         """Check Yatori updates and return Web confirmation dialog data."""

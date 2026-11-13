@@ -67,6 +67,28 @@ YATORI_CORE_NAME = "yatori-go-console.exe"
 AUTOVISOR_DIR_NAME = "Autovisor"
 AUTOVISOR_RUNTIME_SCRIPT = "download_runtime_deps.py"
 
+# ZHS 第三核心：源码随仓库分发在 zhs/，运行在独立解释器环境 .runtime/venv-zhs 中
+# （zhs 上游要求 Python >=3.13，和启动器主 venv 的 3.11-3.13 不总重叠，故单独建环境）。
+ZHS_DIR_NAME = "zhs"
+ZHS_VENV_DIR_NAME = "venv-zhs"
+ZHS_REQUIREMENTS_NAME = "requirements-zhs.txt"
+ZHS_MIN_PYTHON = (3, 13)
+ZHS_MAX_PYTHON = (3, 14)
+ZHS_IMPORT_MODULES = (
+    "httpx",
+    "pydantic",
+    "typer",
+    "loguru",
+    "Crypto",
+    "openai",
+    "tiktoken",
+    "PIL",
+    "qrcode",
+    "tomli_w",
+    "pptx",
+    "bs4",
+)
+
 PYPI_MIRRORS = (
     ("清华", "https://pypi.tuna.tsinghua.edu.cn/simple"),
     ("阿里", "https://mirrors.aliyun.com/pypi/simple"),
@@ -602,6 +624,202 @@ def ensure_autovisor_runtime(
         raise RuntimeError("Autovisor 运行时依赖准备失败")
 
 
+def _zhs_python_candidates(which: Callable[[str], str | None]) -> list[list[str]]:
+    """Candidate interpreters for the ZHS core (>=3.13,<3.15)."""
+    candidates: list[list[str]] = []
+    py_launcher = which("py")
+    if py_launcher:
+        for version in ("3.13", "3.14"):
+            candidates.append([py_launcher, f"-{version}"])
+    for name in ("python3.13", "python3.14", "python", "python3"):
+        path = which(name)
+        if path:
+            candidates.append([path])
+    if sys.executable:
+        candidates.append([sys.executable])
+    return candidates
+
+
+def zhs_python_supported(version: tuple[int, ...] | None) -> bool:
+    if not version or len(version) < 2:
+        return False
+    current = (version[0], version[1])
+    return ZHS_MIN_PYTHON <= current <= ZHS_MAX_PYTHON
+
+
+def find_zhs_python(
+    *,
+    preferred: str | None = None,
+    run: Callable[..., Any] = subprocess.run,
+    which: Callable[[str], str | None] = shutil.which,
+    logger: Any = None,
+) -> str | None:
+    """Find a Python 3.13/3.14 interpreter for the ZHS core."""
+    if preferred:
+        probe = _probe_python([preferred], run=run)
+        if probe is not None and zhs_python_supported(probe.version):
+            _emit(
+                logger,
+                f"ZHS Python: {probe.executable} ({probe.version[0]}.{probe.version[1]})",
+            )
+            return probe.executable
+    for command in _zhs_python_candidates(which):
+        probe = _probe_python(command, run=run)
+        if probe is None or not zhs_python_supported(probe.version):
+            continue
+        _emit(
+            logger,
+            f"ZHS Python: {probe.executable} ({probe.version[0]}.{probe.version[1]})",
+        )
+        return probe.executable
+    return None
+
+
+def zhs_dependencies_ok(
+    python_exe: str | os.PathLike[str],
+    modules: Iterable[str] | None = None,
+    *,
+    cwd: str | os.PathLike[str] | None = None,
+    run: Callable[..., Any] = subprocess.run,
+) -> bool:
+    """True when the ZHS third-party dependencies import successfully.
+
+    Accepts (and ignores) an extra modules argument so the function can be
+    reused as ensure_requirements(import_check=...): the ZHS requirement list
+    lives in ZHS_IMPORT_MODULES, not in the core dependency list.
+    """
+    return module_imports_ok(
+        python_exe,
+        ZHS_IMPORT_MODULES,
+        cwd=cwd or PROJECT_ROOT,
+        run=run,
+    )
+
+
+def zhs_environment_ok(
+    python_exe: str | os.PathLike[str],
+    *,
+    run: Callable[..., Any] = subprocess.run,
+) -> bool:
+    """True when dependencies and the vendored zhs package both import."""
+    return module_imports_ok(
+        python_exe,
+        (*ZHS_IMPORT_MODULES, "zhs"),
+        cwd=PROJECT_ROOT,
+        run=run,
+    )
+
+
+def zhs_venv_ready(
+    *,
+    run: Callable[..., Any] = subprocess.run,
+) -> bool:
+    """Read-only probe: is the ZHS venv created and fully importable?"""
+    target = venv_python_path(PROJECT_ROOT / RUNTIME_DIR_NAME / ZHS_VENV_DIR_NAME)
+    if not target.is_file():
+        return False
+    return zhs_environment_ok(target, run=run)
+
+
+def ensure_zhs_editable_install(
+    venv_python: str | os.PathLike[str],
+    *,
+    mirrors: tuple[tuple[str, str], ...] = PYPI_MIRRORS,
+    run: Callable[..., Any] = subprocess.run,
+    logger: Any = None,
+) -> None:
+    """Register the vendored zhs/ tree in the ZHS venv.
+
+    Preferred: pip install -e zhs --no-deps (accurate importlib.metadata
+    version + the zhs console script).  Fallback: a .pth file that puts
+    zhs/src on sys.path, so a blocked build backend never disables the core.
+    """
+    zhs_dir = PROJECT_ROOT / ZHS_DIR_NAME
+    if not (zhs_dir / "pyproject.toml").is_file():
+        raise RuntimeError(f"未找到 {zhs_dir / 'pyproject.toml'}，ZHS 核心源码不完整")
+
+    last_error = ""
+    for mirror_name, mirror_url in mirrors:
+        _emit(logger, f"正在注册 ZHS 源码（可编辑安装，{mirror_name}）...")
+        result = run_process(
+            [
+                venv_python,
+                "-m",
+                "pip",
+                "install",
+                "-e",
+                str(zhs_dir),
+                "--no-deps",
+                "--disable-pip-version-check",
+                "--no-color",
+                "-i",
+                mirror_url,
+            ],
+            cwd=PROJECT_ROOT,
+            capture=True,
+            run=run,
+        )
+        if getattr(result, "returncode", 1) == 0:
+            _emit(logger, f"ZHS 源码已注册（{mirror_name}）")
+            return
+        last_error = f"{mirror_name} 可编辑安装失败，返回码 {getattr(result, 'returncode', '?')}"
+        _emit(logger, last_error, "warning")
+
+    _emit(logger, "可编辑安装失败，回退为 .pth 方式加载 zhs/src ...", "warning")
+    probe = run_process(
+        [venv_python, "-c", "import sysconfig;print(sysconfig.get_paths()['purelib'])"],
+        capture=True,
+        run=run,
+    )
+    purelib = str(getattr(probe, "stdout", "") or "").strip()
+    if getattr(probe, "returncode", 1) != 0 or not purelib:
+        raise RuntimeError(f"无法定位 venv 的 site-packages：{last_error}")
+    path_file = Path(purelib) / "zhs-src.pth"
+    path_file.write_text(str((zhs_dir / "src").resolve()) + "\n", encoding="utf-8")
+    _emit(logger, f"已写入 {path_file}")
+
+
+def ensure_zhs_runtime(
+    python_exe: str,
+    *,
+    venv_dir: str | os.PathLike[str] | None = None,
+    mirrors: tuple[tuple[str, str], ...] = PYPI_MIRRORS,
+    run: Callable[..., Any] = subprocess.run,
+    logger: Any = None,
+) -> Path:
+    """Prepare the isolated .runtime/venv-zhs environment for the ZHS core."""
+    requirements_file = PROJECT_ROOT / ZHS_REQUIREMENTS_NAME
+    if not requirements_file.is_file():
+        raise RuntimeError(f"未找到 {requirements_file}，ZHS 核心依赖清单缺失")
+    if venv_dir is None:
+        venv_dir = PROJECT_ROOT / RUNTIME_DIR_NAME / ZHS_VENV_DIR_NAME
+
+    venv_python = ensure_venv(python_exe, venv_dir=venv_dir, run=run, logger=logger)
+    if zhs_environment_ok(venv_python, run=run):
+        _emit(logger, "ZHS 核心环境已就绪")
+        return venv_python
+
+    if not zhs_dependencies_ok(venv_python, run=run):
+        ensure_requirements(
+            venv_python,
+            requirements_file=requirements_file,
+            mirrors=mirrors,
+            run=run,
+            logger=logger,
+            import_check=zhs_dependencies_ok,
+        )
+    ensure_zhs_editable_install(
+        venv_python,
+        mirrors=mirrors,
+        run=run,
+        logger=logger,
+    )
+    if not zhs_environment_ok(venv_python, run=run):
+        raise RuntimeError("ZHS 核心环境校验失败：依赖或 zhs 源码无法导入")
+    _emit(logger, "ZHS 核心环境准备完成")
+    return venv_python
+
+
 def read_full_manifest(root: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     path = Path(root or PROJECT_ROOT) / FULL_MANIFEST_NAME
     if not path.is_file():
@@ -801,6 +1019,9 @@ def run_checks(*, logger: Any = None) -> int:
         ("requirements.txt", (PROJECT_ROOT / REQUIREMENTS_NAME).is_file()),
         ("bootstrap.py", (PROJECT_ROOT / "bootstrap.py").is_file()),
         ("Autovisor/download_runtime_deps.py", (PROJECT_ROOT / AUTOVISOR_DIR_NAME / AUTOVISOR_RUNTIME_SCRIPT).is_file()),
+        ("zhs/pyproject.toml", (PROJECT_ROOT / ZHS_DIR_NAME / "pyproject.toml").is_file()),
+        ("requirements-zhs.txt", (PROJECT_ROOT / ZHS_REQUIREMENTS_NAME).is_file()),
+        ("ZHS 运行环境 (.runtime/venv-zhs)", zhs_venv_ready()),
         ("Yatori 核心", yatori_core_installed()),
         ("系统 Chrome/Edge", has_system_browser()),
         ("WebView2 Runtime", webview2_installed()),
@@ -825,6 +1046,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-webview2-check", action="store_true", help="跳过 WebView2 检测")
     parser.add_argument("--debug", action="store_true", help="以 --dev 模式启动启动器")
     parser.add_argument("--venv-dir", default=str(PROJECT_ROOT / RUNTIME_DIR_NAME / VENV_DIR_NAME), help="虚拟环境目录")
+    parser.add_argument("--skip-zhs", action="store_true", help="跳过 ZHS 核心环境准备（.runtime/venv-zhs）")
+    parser.add_argument(
+        "--zhs-venv-dir",
+        default=str(PROJECT_ROOT / RUNTIME_DIR_NAME / ZHS_VENV_DIR_NAME),
+        help="ZHS 核心虚拟环境目录",
+    )
     parser.add_argument("--log-dir", default=str(PROJECT_ROOT / LOG_DIR_NAME), help="日志目录")
     parser.add_argument("--quiet", action="store_true", help="不向控制台打印日志")
     parser.add_argument("--yatori-url", help="覆盖 Yatori 核心下载 URL")
@@ -834,7 +1061,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_console_encoding() -> None:
+    """Never let one unencodable path character abort the bootstrap.
+
+    Windows consoles/pipes default to GBK; the project path itself may contain
+    characters outside GBK (e.g. •, ↗), so the log line with the log file path
+    could raise UnicodeEncodeError before anything is installed.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_console_encoding()
     args = build_parser().parse_args(argv)
     try:
         # --check is documented as read-only: use a console-only logger and do
@@ -886,6 +1130,25 @@ def main(argv: list[str] | None = None) -> int:
 
         if not args.skip_autovisor_runtime:
             ensure_autovisor_runtime(venv_python, logger=logger)
+
+        if not args.skip_zhs:
+            zhs_python = find_zhs_python(preferred=python_exe, logger=logger)
+            if not zhs_python:
+                logger.warning(
+                    "未找到 Python 3.13/3.14，已跳过 ZHS 核心环境准备；"
+                    "ZHS 核心需要在 Python 3.13+ 上运行。"
+                )
+            else:
+                try:
+                    ensure_zhs_runtime(
+                        zhs_python,
+                        venv_dir=args.zhs_venv_dir,
+                        mirrors=ranked_pypi_mirrors(logger=logger),
+                        logger=logger,
+                    )
+                except Exception as exc:
+                    # 非致命：其余核心仍可用，ZHS 入口会自行提示环境缺失
+                    logger.warning(f"ZHS 核心环境准备失败：{exc}")
 
         if not args.skip_yatori:
             manifest = read_full_manifest(PROJECT_ROOT)

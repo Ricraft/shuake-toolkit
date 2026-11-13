@@ -100,7 +100,7 @@
                 <div class="section-header">
                     <div>
                         <h1 class="section-title">中控台</h1>
-                        <p class="section-subtitle">统一管理 Yatori 与 Autovisor 核心，实时监控运行状态</p>
+                        <p class="section-subtitle">统一管理 Yatori、Autovisor 与 ZHS 核心，实时监控运行状态</p>
                     </div>
                     <button id="btn-start-all" class="btn btn-primary btn-pill" onclick="saveAndPerform('start_all')">
                         <i class="fas fa-play"></i>
@@ -190,10 +190,43 @@
                                 <i class="fas fa-folder-open"></i> 配置
                             </button>
                             <button class="btn btn-outline" onclick="openAutovisorUpdateDialog()">
-                                <i class="fas fa-magnifying-glass"></i> 检查版本
+                                <i class="fas fa-cloud-arrow-down"></i> 检查版本
                             </button>
                             <button class="btn btn-outline" disabled title="当前为本地适配版，不使用上游包覆盖安装">
                                 <i class="fas fa-shield-halved"></i> 本地适配版
+                            </button>
+                        </div>
+                    </div>
+                    <!-- ZHS 核心卡 -->
+                    <div class="glass-card core-card">
+                        <div class="core-card-header">
+                            <div class="flex items-center gap-3">
+                                <div class="core-icon logo-core-icon zhs"><img class="core-logo-img" src="assets/zhs_logo.svg" alt="ZHS Logo"></div>
+                                <div class="core-info">
+                                    <h3>智慧树 ZHS（推荐）</h3>
+                                    <span id="zhs-version">ZHS Core</span>
+                                </div>
+                            </div>
+                            <span id="zhs-ready" class="status-badge idle">检测中</span>
+                        </div>
+
+                        <div class="flex items-center justify-between">
+                            <div class="core-status-row">
+                                <div id="zhs-dot" class="status-dot"></div>
+                                <span id="zhs-status" class="text-sm font-medium" style="color: var(--text-muted);">未启动</span>
+                            </div>
+                            <span id="zhs-session-badge" class="status-badge idle">未登录</span>
+                        </div>
+
+                        <div class="core-actions">
+                            <button id="zhs-action-btn" class="btn btn-primary flex-1" onclick="handleCoreAction('zhs')">
+                                <i class="fas fa-power-off"></i> 启动核心
+                            </button>
+                            <button class="btn btn-outline" onclick="openSettingsTab('zhs')">
+                                <i class="fas fa-qrcode"></i> 扫码登录 / 配置
+                            </button>
+                            <button class="btn btn-outline" onclick="checkZhsUpdate()">
+                                <i class="fas fa-cloud-arrow-down"></i> 检查更新
                             </button>
                         </div>
                     </div>
@@ -246,6 +279,7 @@
                                 <div class="pill-tab active" data-log-tab="system" onclick="switchConsoleTab(this)">系统</div>
                                 <div class="pill-tab" data-log-tab="yatori" onclick="switchConsoleTab(this)">Yatori</div>
                                 <div class="pill-tab" data-log-tab="autovisor" onclick="switchConsoleTab(this)">Autovisor</div>
+                                <div class="pill-tab" data-log-tab="zhs" onclick="switchConsoleTab(this)">ZHS</div>
                             </div>
                             <button class="btn btn-ghost btn-sm" onclick="exportLogs()" title="导出日志">
                                 <i class="fas fa-download"></i>
@@ -461,9 +495,10 @@
                     </div>
                 </div>
 
-                <div class="pill-tabs mb-5">
+                <div class="pill-tabs pill-tabs-sliding mb-5" id="config-tab-group">
                     <div class="pill-tab active" id="tab-btn-yatori" onclick="switchConfigTab('yatori')"><img class="tab-logo-img" src="assets/yatori_logo.png" alt="">Yatori 通用配置</div>
                     <div class="pill-tab" id="tab-btn-autovisor" onclick="switchConfigTab('autovisor')"><img class="tab-logo-img" src="assets/autovisor_logo.png" alt="">Autovisor 智慧树配置</div>
+                    <div class="pill-tab" id="tab-btn-zhs" onclick="switchConfigTab('zhs')"><img class="tab-logo-img" src="assets/zhs_logo.svg" alt="">ZHS 新版核心</div>
                 </div>
 
                 <!-- Yatori 配置 -->
@@ -666,6 +701,157 @@
                         </div>
                         <div id="autovisor-accounts" class="flex flex-col gap-4"></div>
                     </div>
+                </div>
+
+                <!-- ZHS 配置 -->
+                <div id="config-zhs" class="flex flex-col gap-5" style="display:none;">
+                    <div class="glass-card flex flex-col gap-4">
+                        <div class="card-title-row">
+                            <div class="card-icon teal"><i class="fas fa-qrcode"></i></div>
+                            <h3 class="font-bold text-sm">智慧树账号（扫码登录）</h3>
+                        </div>
+                        <p class="text-xs" style="color: var(--text-muted);">ZHS 新版核心只支持扫码登录：点击「获取二维码」后用智慧树 App 扫描，登录成功后 Cookie 会保存到 data/zhs/account-1。</p>
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <button class="btn btn-primary btn-sm" onclick="startZhsLogin()"><i class="fas fa-qrcode"></i> 获取二维码</button>
+                            <button class="btn btn-outline btn-sm" onclick="cancelZhsLogin()" title="取消扫码登录并删除本地登录凭证"><i class="fas fa-xmark"></i> 取消登录</button>
+                            <button class="btn btn-outline btn-sm" onclick="refreshZhsSession()" title="向智慧树服务端确认凭证是否仍然有效"><i class="fas fa-rotate"></i> 刷新登录态</button>
+                            <button class="btn btn-outline btn-sm" onclick="clearZhsLogin()" title="删除 data/zhs/account-1/.zhs/cookies.json"><i class="fas fa-trash-can"></i> 清除凭证</button>
+                            <span id="zhs-login-status" class="text-sm" style="color: var(--text-muted);">尚未登录</span>
+                        </div>
+                        <p class="text-xs" style="color: var(--text-muted);">「取消登录」和「清除凭证」都会删除本地 cookies.json；「刷新登录态」会把凭证发给智慧树服务端校验，过期时会提示重新扫码。</p>
+                        <div id="zhs-qr-wrap" class="flex items-start gap-4" hidden>
+                            <img id="zhs-qr-image" alt="智慧树登录二维码" style="width:180px;height:180px;border-radius:12px;background:#fff;padding:6px;">
+                            <div class="text-xs" style="color: var(--text-muted);">
+                                <div>打开智慧树 App → 我的 → 扫一扫</div>
+                                <div id="zhs-qr-path" class="font-mono" style="word-break:break-all;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card flex flex-col gap-4">
+                        <div class="flex justify-between items-center">
+                            <div class="card-title-row">
+                                <div class="card-icon"><i class="fas fa-list-check"></i></div>
+                                <h3 class="font-bold text-sm">课程选择</h3>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button class="btn btn-outline btn-sm" onclick="setZhsCoursesAll(true)">全选</button>
+                                <button class="btn btn-outline btn-sm" onclick="setZhsCoursesAll(false)">取消全选</button>
+                                <button class="btn btn-outline btn-sm" onclick="fetchZhsCourses()"><i class="fas fa-cloud-arrow-down"></i> 拉取课程</button>
+                            </div>
+                        </div>
+                        <div id="zhs-course-list" class="flex flex-col gap-2"><div class="empty-tip">先扫码登录，再点击「拉取课程」。</div></div>
+                        <p id="zhs-courses-msg" class="text-xs" style="color: var(--text-muted);"></p>
+                        <div id="zhs-captcha-tip" class="flex flex-col gap-2" style="display:none;border:1px solid rgba(242,109,109,.45);background:rgba(242,109,109,.08);border-radius:12px;padding:12px 14px;">
+                            <div class="flex items-center gap-2">
+                                <i class="fas fa-triangle-exclamation" style="color:#e05252;"></i>
+                                <span id="zhs-captcha-text" class="text-sm" style="color:#e05252;"></span>
+                            </div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <button class="btn btn-primary btn-sm" onclick="openZhsCoursePage()"><i class="fas fa-up-right-from-square"></i> 打开课程页验证</button>
+                                <button class="btn btn-outline btn-sm" onclick="retryZhsCourse()"><i class="fas fa-rotate-right"></i> 只重跑这门课</button>
+                                <button class="btn btn-outline btn-sm" onclick="hideZhsCaptchaTip()">知道了</button>
+                            </div>
+                            <p class="text-xs" style="color: var(--text-muted);">验证码是网易易盾组件，只能在浏览器里手动完成。验证完成后建议先点「刷新登录态」，再点「只重跑这门课」。</p>
+                        </div>
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <button class="btn btn-primary btn-sm" onclick="startZhsTask('play')"><i class="fas fa-play"></i> 开始刷课</button>
+                            <button class="btn btn-outline btn-sm" onclick="startZhsTask('homework')"><i class="fas fa-pen"></i> 写作业</button>
+                            <button class="btn btn-outline btn-sm" onclick="startZhsTask('exam')"><i class="fas fa-file-lines"></i> 考试（不提交）</button>
+                            <button class="btn btn-outline btn-sm" onclick="stopZhsTask()"><i class="fas fa-stop"></i> 停止</button>
+                        </div>
+                        <p class="text-xs" style="color: var(--text-muted);">勾选多门课程时按勾选顺序逐门串行处理（同一个 zhs 进程，不会并行）；不勾选时按 zhs 的 auto 模式处理全部已拉取课程。</p>
+                    </div>
+
+                    <div class="glass-card flex flex-col gap-4">
+                        <div class="card-title-row">
+                            <div class="card-icon"><i class="fas fa-sliders"></i></div>
+                            <h3 class="font-bold text-sm">运行参数</h3>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="input-group"><span class="input-label">知到视频倍速</span><input id="z-speed-zhidao" type="number" step="0.05" min="1" max="2" class="input-field" value="1.5"></div>
+                            <div class="input-group"><span class="input-label">AI 课程倍速</span><input id="z-speed-ai" type="number" step="0.05" min="1" max="2" class="input-field" value="1.5"></div>
+                            <div class="input-group"><span class="input-label">单课观看上限（分钟，0 不限）</span><input id="z-limit" type="number" min="0" class="input-field" value="0"></div>
+                            <div class="input-group"><span class="input-label">进度阈值（0-1）</span><input id="z-threshold" type="number" step="0.01" min="0" max="1" class="input-field" value="0.91"></div>
+                        </div>
+                    </div>
+
+                    <details class="glass-card">
+                        <summary class="font-bold text-sm" style="cursor:pointer;color: var(--text-primary);"><i class="fas fa-robot"></i> 自动答题（AI / 题库）</summary>
+                        <div class="flex flex-col gap-4" style="margin-top:16px;">
+                            <div class="flex items-center gap-3">
+                                <label class="switch"><input id="z-ai-enabled" type="checkbox" checked><span class="slider"></span></label>
+                                <span class="text-sm" style="color: var(--text-secondary);">启用 AI 答题（AI 课程 / 作业 / 考试）</span>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="input-group">
+                                    <span class="input-label">AI 提供商</span>
+                                    <div class="select-wrapper">
+                                        <select id="z-ai-provider" class="input-field" onchange="syncZhsAiProvider()">
+                                            <option value="OPENAI">OpenAI</option>
+                                            <option value="SILICON">硅基流动</option>
+                                            <option value="DEEPSEEK">DeepSeek</option>
+                                            <option value="CHATGLM">ChatGLM(智谱)</option>
+                                            <option value="TONGYI">TONGYI（通义千问）</option>
+                                            <option value="XINGHUO">XINGHUO（星火大模型）</option>
+                                            <option value="DOUBAO">DOUBAO（豆包）</option>
+                                            <option value="METAAI">METAAI</option>
+                                            <option value="OTHER">其他模型（自定义 Base URL）</option>
+                                        </select>
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                </div>
+                                <div class="input-group">
+                                    <span class="input-label">API Key</span>
+                                    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                                        <input id="z-ai-key" type="password" class="input-field" style="flex:1;min-width:140px;" placeholder="sk-...">
+                                        <button class="btn btn-outline btn-sm" onclick="toggleZhsApiKeyVisibility()" title="显示/隐藏">
+                                            <i class="fas fa-eye" id="z-ai-key-icon"></i>
+                                        </button>
+                                        <button class="btn btn-primary btn-sm" id="z-ai-test-btn" onclick="testZhsAIConnectivity()">
+                                            <i class="fas fa-plug"></i>
+                                            <i class="fas fa-spinner fa-spin" id="z-ai-test-loading" style="display:none;"></i>
+                                            测试
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="input-group">
+                                    <span class="input-label">Base URL</span>
+                                    <input id="z-ai-base-url" type="text" class="input-field" placeholder="https://api.openai.com/v1" oninput="onZhsBaseUrlInput()">
+                                    <p id="z-ai-url-preview" class="text-xs font-mono mt-1" style="color: var(--text-muted);">预览: -</p>
+                                </div>
+                                <div class="input-group">
+                                    <span class="input-label">模型</span>
+                                    <div style="display:flex;gap:0.5rem;">
+                                        <input id="z-ai-model" type="text" class="input-field" placeholder="gpt-4o-mini" list="z-model-list" autocomplete="off">
+                                        <button class="btn btn-outline btn-sm" id="z-fetch-models-btn" onclick="fetchZhsModelList()" style="margin-left:auto;">
+                                            <i class="fas fa-sync-alt" id="z-fetch-models-icon"></i>
+                                            <i class="fas fa-spinner fa-spin" id="z-fetch-models-loading" style="display:none;"></i>
+                                            获取模型
+                                        </button>
+                                    </div>
+                                    <datalist id="z-model-list"></datalist>
+                                </div>
+                                <div class="input-group"><span class="input-label">最大 Token</span><input id="z-ai-max-token" type="number" min="1024" class="input-field" value="27900"></div>
+                            </div>
+                            <div id="z-ai-test-result" class="text-xs" style="display:none;padding:0.75rem 1rem;border-radius:var(--radius-sm);">
+                                <i class="fas" id="z-ai-test-result-icon"></i>
+                                <span id="z-ai-test-result-message"></span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <label class="switch"><input id="z-qb-enabled" type="checkbox"><span class="slider"></span></label>
+                                <span class="text-sm" style="color: var(--text-secondary);">启用第三方题库（tk.enncy.cn）</span>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="input-group"><span class="input-label">题库 Token</span><input id="z-qb-token" type="text" class="input-field" placeholder="题库 token"></div>
+                                <div class="input-group"><span class="input-label">题库查询地址</span><input id="z-qb-url" type="text" class="input-field" value="https://tk.enncy.cn/query"></div>
+                            </div>
+                            <div class="flex items-center gap-3 flex-wrap">
+                                <button class="btn btn-primary btn-sm" onclick="saveZhsSettings()"><i class="fas fa-floppy-disk"></i> 保存 ZHS 配置</button>
+                                <span id="zhs-save-status" class="text-xs" style="color: var(--text-muted);"></span>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
             <!-- ===== 题库设置 ===== -->
@@ -1319,6 +1505,13 @@
                             <div class="changelog-item">
                                 <span class="changelog-badge feature">新增</span>
                                 <div>
+                                    <div class="text-sm font-semibold">v1.7.0 - 智慧树 ZHS 第三核心</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">中控台新增「智慧树 ZHS」核心卡：内嵌 passport 扫码登录与真实会话校验，拉取知到 / hike / AI 课程后按勾选顺序逐门串行刷课，支持写作业与考试（默认不自动提交），因验证码中断可在配置页一键只重跑本课；支持检查上游更新、备份回滚与依赖重装，并新增自动答题（AI / 题库）配置。Autovisor 新增扫码登录方式，每账号独立 cookies，人机验证依赖缺失时自动补装、失败降级为手动验证；同时修复后台进度刷屏、误弹 cmd 窗口与失败课程仍触发自动关机等问题。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
                                     <div class="text-sm font-semibold">v1.6.4 - 课程进度、下载测源与更新体验</div>
                                     <div class="text-xs mt-1" style="color: var(--text-muted);">学习通课程列表显示任务点进度与课程截止日期，是否结束改按教务页面状态判定并置底不可选；勾选结果直接就是包含课程列表。核心与依赖下载改为并发测速选源，更新弹窗内嵌下载进度并在完成后自动关闭；「检查更新」遇 GitHub 匿名接口限流时自动改走镜像通道。</div>
                                 </div>
@@ -1574,6 +1767,15 @@
                                 <div><div class="text-sm font-semibold">Autovisor</div><div class="text-xs" style="color:var(--text-muted);">智慧树核心</div><div class="contributor-detail">智慧树自动学习引擎</div></div>
                                 <i class="fas fa-arrow-up-right-from-square contributor-link-icon" aria-hidden="true"></i>
                             </a>
+                            <a class="contributor-card is-external-link" data-tilt data-contributor="zhs"
+                                href="https://github.com/pjm314159/zhs"
+                                target="_blank" rel="noopener noreferrer"
+                                title="打开 ZHS 仓库"
+                                onclick="return openContributorLink(event, this)">
+                                <div class="contributor-avatar logo-avatar"><img src="assets/zhs_logo.svg" alt="ZHS"></div>
+                                <div><div class="text-sm font-semibold">ZHS 新版核心</div><div class="text-xs" style="color:var(--text-muted);">智慧树核心</div><div class="contributor-detail">智慧树新版刷课核心作者</div></div>
+                                <i class="fas fa-arrow-up-right-from-square contributor-link-icon" aria-hidden="true"></i>
+                            </a>
                             <a class="contributor-card is-external-link" data-tilt data-contributor="zerror"
                                 href="https://app.zerror.cc/"
                                 target="_blank" rel="noopener noreferrer"
@@ -1656,6 +1858,19 @@
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="hideExitModal()">取消</button>
                 <button class="btn btn-danger" onclick="confirmExit()"><i class="fas fa-power-off"></i> 确认退出</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ZHS 考试确认弹窗 -->
+    <div id="zhs-exam-modal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-icon"><i class="fas fa-file-lines"></i></div>
+            <div class="modal-title">开始考试模式</div>
+            <div class="modal-desc">考试模式默认不会自动提交答案，确定要开始吗？<br>答题过程中请勿关闭启动器。</div>
+            <div class="modal-actions">
+                <button class="btn btn-outline" onclick="hideZhsExamModal()">取消</button>
+                <button class="btn btn-danger" onclick="confirmZhsExam()"><i class="fas fa-play"></i> 确认开始</button>
             </div>
         </div>
     </div>
@@ -1773,6 +1988,53 @@
                     <i class="fas fa-shield-halved"></i> 本地适配版：不提供直接覆盖安装
                 </span>
                 <button class="btn btn-outline" onclick="closeAutovisorUpdateModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ZHS 版本与更新弹窗 -->
+    <div id="zhs-update-modal" class="modal-overlay">
+        <div class="modal-box update-modal-box">
+            <div class="modal-icon accent"><i class="fas fa-cloud-arrow-down"></i></div>
+            <div class="modal-title">智慧树 ZHS 版本更新</div>
+            <div class="modal-desc" id="zhs-update-summary">正在读取版本信息...</div>
+            <div class="update-version-grid">
+                <div>
+                    <span>当前版本</span>
+                    <strong id="zhs-update-current">未知</strong>
+                </div>
+                <div>
+                    <span>上游最新</span>
+                    <strong id="zhs-update-latest">未知</strong>
+                </div>
+                <div>
+                    <span>更新来源</span>
+                    <strong id="zhs-update-asset">未知资源</strong>
+                </div>
+                <div>
+                    <span>发布时间</span>
+                    <strong id="zhs-update-published">未提供</strong>
+                </div>
+            </div>
+            <div class="update-notice" id="zhs-update-notice"></div>
+            <div class="update-links" id="zhs-update-links"></div>
+            <div class="update-notes-title">上游版本更新日志</div>
+            <pre class="update-release-notes" id="zhs-update-notes">该版本暂未提供更新说明。</pre>
+            <div class="update-progress" id="zhs-update-progress" data-phase="downloading" hidden>
+                <div class="update-progress-head">
+                    <span id="zhs-update-progress-label">正在下载</span>
+                    <strong id="zhs-update-progress-percent">0%</strong>
+                </div>
+                <div class="update-progress-track">
+                    <div class="update-progress-bar" id="zhs-update-progress-bar"></div>
+                </div>
+                <div class="update-progress-detail" id="zhs-update-progress-detail"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-outline" id="zhs-update-cancel-btn" onclick="closeZhsUpdateModal()">稍后再说</button>
+                <button class="btn btn-primary" id="zhs-update-confirm-btn" onclick="confirmZhsUpdate()">
+                    <i class="fas fa-download"></i> 安装更新
+                </button>
             </div>
         </div>
     </div>

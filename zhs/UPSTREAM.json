@@ -1,0 +1,27 @@
+{
+  "project": "zhs",
+  "description": "智慧树自动刷课工具（第三方开源项目，原样内置）",
+  "version": "0.1.5",
+  "license": "GPL-3.0-only",
+  "homepage": "https://github.com/pjm314159/zhs",
+  "upstream_source_path": "D:\\Python\\zhs2123\\zhs",
+  "upstream_git": "main@50bd236",
+  "vendored_at": "2026-11-11T15:23:20.665Z",
+  "vendored_layout": {
+    "src/zhs": "上游 src/zhs 原样副本，禁止本地修改"
+  },
+  "excluded": [
+    ".git",
+    ".venv",
+    ".github",
+    "tests",
+    "docs",
+    "scripts",
+    "*.egg-info",
+    "__pycache__"
+  ],
+  "local_patches": [],
+  "update_how": "启动器「中控台 → 智慧树 ZHS → 检查更新」可直接升级；维护者也可运行 python scripts/update_zhs.py --source <新版目录>，或 --check 校验零补丁状态。",
+  "notes": "运行环境为独立解释器 .runtime/venv-zhs（见 requirements-zhs.txt）；所有启动器侧集成代码位于 src/zhs_service.py、src/zhs_bridge/ 与 src/zhs_vendor.py，不修改本目录。UPSTREAM.sha256 使用 CRLF/LF 归一化后的哈希，避免换行符差异被误判为本地改动。",
+  "hash_mode": "sha256 over LF-normalized bytes"
+}

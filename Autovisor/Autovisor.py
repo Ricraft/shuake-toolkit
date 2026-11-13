@@ -746,14 +746,24 @@ async def main():
     if config.enableAutoCaptcha:
         print("===== Install log =====")
         logger.info("正在检查依赖库...")
-        modules = installer.start()
-        logger.info("所有依赖库安装完成!")
+        try:
+            modules = installer.start()
+            logger.info("所有依赖库安装完成!")
+        except Exception as exc:
+            logger.error(f"人机验证依赖 (OpenCV/NumPy) 准备失败: {exc}")
+            logger.warn(
+                "已降级为手动验证模式：遇到滑块验证时，"
+                "请在浏览器窗口中手动拖动完成。"
+            )
+            modules = []
     print("===== Runtime Log =====")
     async with async_playwright() as p:
         page, context = await init_page(p)
         async with background_task_scope(tasks):
             # 进行登录
-            if not config.username or not config.password:
+            if getattr(config, "login_mode", "password") == "qr":
+                logger.info("扫码登录模式：请使用智慧树 App 扫描浏览器窗口中的二维码...")
+            elif not config.username or not config.password:
                 logger.info("请手动填写账号密码...")
             logger.info("正在等待登录完成...")
             verify_task = asyncio.create_task(

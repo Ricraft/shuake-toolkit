@@ -27,7 +27,7 @@ const marker = "const DEVELOPER_LINK_ACHIEVEMENT_KEYS";
 const start = src.indexOf(marker);
 if (start < 0) { console.error('marker not found'); process.exit(2); }
 const code = src.slice(start);
-const keys = ['yatori', 'autovisor', 'zerror', 'autovisor_github', 'autovisor_lanzou', '', 'evil', null, undefined];
+const keys = ['yatori', 'autovisor', 'zhs', 'zerror', 'autovisor_github', 'autovisor_lanzou', '', 'evil', null, undefined];
 const out = {};
 for (const key of keys) {
   const calls = [];
@@ -54,7 +54,7 @@ class AchievementContractTests(unittest.TestCase):
 
     def test_trigger_key_set_matches_the_developer_links(self):
         block = FRONTEND.split(MARKER, 1)[1].split("];", 1)[0]
-        for key in ("'yatori'", "'autovisor'", "'zerror'", "'autovisor_github'"):
+        for key in ("'yatori'", "'autovisor'", "'zhs'", "'zerror'", "'autovisor_github'"):
             self.assertIn(key, block)
         # 蓝奏云是国内网盘，不属于开发者 GitHub 主页
         self.assertNotIn("autovisor_lanzou", block)
@@ -107,7 +107,7 @@ class AchievementBehaviourTests(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def test_developer_links_unlock_the_achievement(self):
-        for key in ("yatori", "autovisor", "zerror", "autovisor_github"):
+        for key in ("yatori", "autovisor", "zhs", "zerror", "autovisor_github"):
             with self.subTest(key=key):
                 entry = self.result[key]
                 self.assertTrue(entry["returned"], entry)

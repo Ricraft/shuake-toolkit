@@ -620,7 +620,7 @@ class InfrastructureTests(unittest.TestCase):
             self.assertTrue(any("下载成功" in item for item in logs))
 
     def test_non_object_core_versions_fall_back_for_downstream_consumers(self):
-        defaults = {"yatori": None, "autovisor": None, "last_check": None}
+        defaults = {"yatori": None, "autovisor": None, "zhs": None, "last_check": None}
         for payload in ("[]", "null"):
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)

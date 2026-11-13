@@ -1,0 +1,17 @@
+# ZHS core (third core) runtime dependencies.
+# Keep in sync with zhs/pyproject.toml [project].dependencies; installed by
+# bootstrap.py into .runtime/venv-zhs. Requires Python >=3.13,<3.15.
+# NOTE: pip decodes requirement files with the system locale encoding on
+# Windows, so this file must stay pure ASCII (no CJK comments).
+httpx>=0.28
+pydantic>=2.10
+typer>=0.15
+loguru>=0.7
+pycryptodome>=3.21
+openai>=2.41.1
+tiktoken>=0.9
+Pillow>=11.0
+qrcode>=8.2
+tomli-w>=1.2.0
+python-pptx>=1.0
+beautifulsoup4>=4.12

@@ -130,7 +130,14 @@ class ConfigService:
         for index, account in enumerate(accounts or [], start=1):
             if not isinstance(account, dict):
                 return f"Autovisor 账号 {index} 的配置格式无效"
-            if account.get("enable_hide_window") and (
+            login_mode = str(account.get("login_mode", "password") or "password").strip().lower()
+            if login_mode == "qr":
+                if bool(account.get("enable_hide_window")):
+                    return (
+                        f"Autovisor 账号 {index} 使用扫码登录时必须显示浏览器窗口，"
+                        "请先关闭隐藏窗口"
+                    )
+            elif account.get("enable_hide_window") and (
                 not str(account.get("username", "") or "").strip()
                 or not str(account.get("password", "") or "")
             ):
@@ -282,6 +289,7 @@ class ConfigService:
             "name": f"账号 {index}",
             "username": "",
             "password": "",
+            "login_mode": "password",
             "driver": "Chrome",
             "exe_path": detected,
             "enable_auto_captcha": True,
@@ -428,6 +436,8 @@ class ConfigService:
                 account["name"] = parser.get(user_section, "name", fallback=account["name"]).strip() or account["name"]
                 account["username"] = parser.get(user_section, "username", fallback="").strip()
                 account["password"] = parser.get(user_section, "password", fallback="")
+                login_mode = parser.get(user_section, "loginMode", fallback="password").strip().lower()
+                account["login_mode"] = login_mode if login_mode in ("password", "qr") else "password"
             if parser.has_section(browser_section):
                 account["driver"] = parser.get(browser_section, "driver", fallback=account["driver"]).strip() or account["driver"]
                 account["exe_path"] = parser.get(browser_section, "EXE_PATH", fallback=account["exe_path"]).strip()
@@ -520,6 +530,23 @@ class ConfigService:
             parser.set(user_section, "name", str(account.get("name", f"账号 {account_id}")).strip() or f"账号 {account_id}")
             parser.set(user_section, "username", str(account.get("username", "")).strip())
             parser.set(user_section, "password", str(account.get("password", "")))
+            login_mode = str(account.get("login_mode", "password") or "password").strip().lower()
+            parser.set(user_section, "loginMode", login_mode if login_mode in ("password", "qr") else "password")
+            # 每个账号独立 Cookie 文件：多账号并行时互不覆盖登录凭证。
+            # 已显式配置且不是共享默认值的路径保持原样，避免覆盖用户自定义。
+            existing_cookies = parser.get(
+                user_section, "cookiesFile", fallback=""
+            ).strip()
+            normalized_cookies = existing_cookies.replace("\\", "/").lower()
+            if not normalized_cookies or normalized_cookies in (
+                "res/cookies.json",
+                "./res/cookies.json",
+            ):
+                parser.set(
+                    user_section,
+                    "cookiesFile",
+                    f"res/cookies_{account_id}.json",
+                )
             parser.set(browser_section, "driver", str(account.get("driver") or shared_driver))
             parser.set(browser_section, "EXE_PATH", str(account.get("exe_path") or shared_path).strip())
             parser.set(script_section, "enableAutoCaptcha", "True" if account.get("enable_auto_captcha", True) else "False")

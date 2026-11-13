@@ -270,8 +270,8 @@ body.has-custom-bg::before {
 .fa-times, .fa-xmark { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E"); }
 .fa-plus { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 5v14M5 12h14'/%3E%3C/svg%3E"); }
 .fa-rotate-left { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.6 12a8.4 8.4 0 1 0 2.4-5.9'/%3E%3Cpath d='M3.6 3.4V8h4.6'/%3E%3C/svg%3E"); }
-.fa-redo { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.4 12a8.4 8.4 0 1 1-2.4-5.9'/%3E%3Cpath d='M20.4 3.4V8h-4.6'/%3E%3C/svg%3E"); }
-.fa-sync-alt { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.2 11A8.4 8.4 0 0 0 6.1 6.4L4.4 8.2'/%3E%3Cpath d='M4.2 4v4.4h4.4'/%3E%3Cpath d='M3.8 13a8.4 8.4 0 0 0 14.1 4.6l1.7-1.8'/%3E%3Cpath d='M19.8 20v-4.4h-4.4'/%3E%3C/svg%3E"); }
+.fa-redo, .fa-rotate-right { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.4 12a8.4 8.4 0 1 1-2.4-5.9'/%3E%3Cpath d='M20.4 3.4V8h-4.6'/%3E%3C/svg%3E"); }
+.fa-sync-alt, .fa-rotate { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.2 11A8.4 8.4 0 0 0 6.1 6.4L4.4 8.2'/%3E%3Cpath d='M4.2 4v4.4h4.4'/%3E%3Cpath d='M3.8 13a8.4 8.4 0 0 0 14.1 4.6l1.7-1.8'/%3E%3Cpath d='M19.8 20v-4.4h-4.4'/%3E%3C/svg%3E"); }
 .fa-spinner, .fa-circle-notch { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E"); }
 .fa-ban { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.6'/%3E%3Cpath d='M5.9 5.9l12.2 12.2'/%3E%3C/svg%3E"); }
 .fa-chevron-down { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9.4l6 6 6-6'/%3E%3C/svg%3E"); }
@@ -296,11 +296,11 @@ body.has-custom-bg::before {
 /* —— 题库 / 数据 —— */
 .fa-chart-pie { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M11.5 4.6a8.4 8.4 0 1 0 8.4 8.4h-8.4z'/%3E%3Cpath d='M14.5 3.1a8.4 8.4 0 0 1 6.4 6.4h-6.4z'/%3E%3C/svg%3E"); }
 .fa-archive { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4' width='17' height='4.6' rx='1.2'/%3E%3Cpath d='M5.2 8.6V19a1.6 1.6 0 0 0 1.6 1.6h10.4a1.6 1.6 0 0 0 1.6-1.6V8.6'/%3E%3Cpath d='M9.8 12.6h4.4'/%3E%3C/svg%3E"); }
-.fa-search { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='6.8'/%3E%3Cpath d='M20 20l-3.6-3.6'/%3E%3C/svg%3E"); }
+.fa-search, .fa-magnifying-glass { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='6.8'/%3E%3Cpath d='M20 20l-3.6-3.6'/%3E%3C/svg%3E"); }
 .fa-clock { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.6'/%3E%3Cpath d='M12 7.2v5.2l3.4 2'/%3E%3C/svg%3E"); }
 .fa-thermometer-half { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.2 14.2V4.9a2.3 2.3 0 0 1 4.6 0v9.3a4.4 4.4 0 1 1-4.6 0z'/%3E%3Ccircle cx='12.5' cy='17.4' r='1.5'/%3E%3C/svg%3E"); }
 .fa-play-circle { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.6'/%3E%3Cpath d='M10 8.6l5.4 3.4-5.4 3.4z'/%3E%3C/svg%3E"); }
-.fa-file-alt { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.5 3.6H7a1.6 1.6 0 0 0-1.6 1.6V19A1.6 1.6 0 0 0 7 20.6h10a1.6 1.6 0 0 0 1.6-1.6V8.6z'/%3E%3Cpath d='M13.5 3.6v5h5'/%3E%3Cpath d='M9 13h6M9 16.4h6'/%3E%3C/svg%3E"); }
+.fa-file-alt, .fa-file-lines { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.5 3.6H7a1.6 1.6 0 0 0-1.6 1.6V19A1.6 1.6 0 0 0 7 20.6h10a1.6 1.6 0 0 0 1.6-1.6V8.6z'/%3E%3Cpath d='M13.5 3.6v5h5'/%3E%3Cpath d='M9 13h6M9 16.4h6'/%3E%3C/svg%3E"); }
 .fa-bolt { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2.6L4.8 13.4h6.2l-1 8 8.2-10.8h-6.2z'/%3E%3C/svg%3E"); }
 .fa-filter { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5h16l-6.2 7.1v6l-3.6 1.9v-7.9z'/%3E%3C/svg%3E"); }
 .fa-file-export { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.5 3.6H7a1.6 1.6 0 0 0-1.6 1.6V19A1.6 1.6 0 0 0 7 20.6h10a1.6 1.6 0 0 0 1.6-1.6V8.6z'/%3E%3Cpath d='M13.5 3.6v5h5'/%3E%3Cpath d='M9.5 14h6M13 11.5l2.5 2.5-2.5 2.5'/%3E%3C/svg%3E"); }
@@ -314,7 +314,7 @@ body.has-custom-bg::before {
 .fa-window-restore { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='8.5' y='8.5' width='12' height='12' rx='2.2'/%3E%3Cpath d='M5.5 15.5h-1a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'/%3E%3C/svg%3E"); }
 .fa-bell { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 9.8a6 6 0 1 0-12 0c0 5.4-1.9 6.4-1.9 6.4h15.8S18 15.2 18 9.8'/%3E%3Cpath d='M10.1 19.4a2.1 2.1 0 0 0 3.8 0'/%3E%3C/svg%3E"); }
 .fa-code-branch { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6.4' cy='5.8' r='2.4'/%3E%3Ccircle cx='6.4' cy='18.2' r='2.4'/%3E%3Ccircle cx='17.6' cy='7.6' r='2.4'/%3E%3Cpath d='M6.4 8.2v7.6'/%3E%3Cpath d='M17.6 10c0 3.8-3.2 4.4-6.4 5'/%3E%3C/svg%3E"); }
-.fa-heart { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 20.2S4.6 15.7 2.9 11A5.1 5.1 0 0 1 12 6.7 5.1 5.1 0 0 1 21.1 11c-1.7 4.7-9.1 9.2-9.1 9.2z'/%3E%3C/svg%3E"); }
+.fa-heart, .fa-hand-holding-heart { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 20.2S4.6 15.7 2.9 11A5.1 5.1 0 0 1 12 6.7 5.1 5.1 0 0 1 21.1 11c-1.7 4.7-9.1 9.2-9.1 9.2z'/%3E%3C/svg%3E"); }
 .fa-heart-crack { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.2 5.8A5.1 5.1 0 0 0 2.9 11c1.7 4.7 9.1 9.2 9.1 9.2s7.4-4.5 9.1-9.2a5.1 5.1 0 0 0-7.3-5.2'/%3E%3Cpath d='M12.8 3.8L9.9 9l3.2 1.8-2.2 4.1'/%3E%3C/svg%3E"); }
 .fa-trophy { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 4h8v4.8a4 4 0 0 1-8 0z'/%3E%3Cpath d='M8 6H4.5v1.8A3.7 3.7 0 0 0 8.2 11M16 6h3.5v1.8a3.7 3.7 0 0 1-3.7 3.2'/%3E%3Cpath d='M12 12.8v4.1M8.5 20h7M9.5 16.9h5'/%3E%3C/svg%3E"); }
 .fa-circle-question, .fa-question-circle { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.6'/%3E%3Cpath d='M9.6 9a2.7 2.7 0 1 1 4.7 1.8c-1.1 1.1-2.3 1.4-2.3 3'/%3E%3Cpath d='M12 17.2v.3'/%3E%3C/svg%3E"); }
@@ -329,6 +329,14 @@ body.has-custom-bg::before {
 .fa-comment-dots { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5c-5 0-9 3.2-9 7.2 0 2.2 1.2 4.2 3 5.5-.2 1.3-.8 2.6-1.8 3.6 1.9-.1 3.6-.8 4.9-1.7.9.2 1.9.3 2.9.3 5 0 9-3.2 9-7.2s-4-7.7-9-7.7z'/%3E%3Cpath d='M8.2 10.7h.01M12 10.7h.01M15.8 10.7h.01'/%3E%3C/svg%3E"); }
 .fa-lightbulb { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 18h5'/%3E%3Cpath d='M10.5 21h3'/%3E%3Cpath d='M12 3a6 6 0 0 0-3.3 11c.6.5 1 1.3 1.1 2l.1 1h4.2l.1-1c.1-.7.5-1.5 1.1-2A6 6 0 0 0 12 3z'/%3E%3C/svg%3E"); }
 .fa-broom { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 3.5l6 6'/%3E%3Cpath d='M15.6 8.4L8.9 15.1'/%3E%3Cpath d='M8.9 15.1c-2.2-.6-4.4.4-5.4 2.4-.3.7-.1 1.5.6 1.9l3.5 1.7c.7.3 1.5.1 1.9-.6 1-2 .6-4.2-.6-5.4z'/%3E%3C/svg%3E"); }
+
+/* —— 补充（ZHS / 通用动作） —— */
+.fa-graduation-cap { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.8L22.2 8.4 12 13 1.8 8.4z'/%3E%3Cpath d='M6.3 10.9v4.3c0 1.9 2.6 3.4 5.7 3.4s5.7-1.5 5.7-3.4v-4.3'/%3E%3Cpath d='M22.2 8.4v5.6'/%3E%3C/svg%3E"); }
+.fa-qrcode { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.4' y='3.4' width='6.2' height='6.2' rx='1.4'/%3E%3Crect x='14.4' y='3.4' width='6.2' height='6.2' rx='1.4'/%3E%3Crect x='3.4' y='14.4' width='6.2' height='6.2' rx='1.4'/%3E%3Cpath d='M14.4 20.6v-6.2h6.2'/%3E%3Cpath d='M17.4 20.6h3.2'/%3E%3C/svg%3E"); }
+.fa-list-check { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.4 6.6h9.6M10.4 12h9.6M10.4 17.4h6.4'/%3E%3Cpath d='M3.2 6.4l1.5 1.5 2.6-2.8'/%3E%3Cpath d='M3.2 11.8l1.5 1.5 2.6-2.8'/%3E%3C/svg%3E"); }
+.fa-triangle-exclamation { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.7l9.4 16.1H2.6z'/%3E%3Cpath d='M12 9.6v4.4'/%3E%3Cpath d='M12 17.1v.3'/%3E%3C/svg%3E"); }
+.fa-up-right-from-square, .fa-arrow-up-right-from-square { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.4 4.4h6.2v6.2'/%3E%3Cpath d='M19.6 4.4L10.8 13.2'/%3E%3Cpath d='M18 14.2v4.2a1.8 1.8 0 0 1-1.8 1.8H5.6a1.8 1.8 0 0 1-1.8-1.8V7.8A1.8 1.8 0 0 1 5.6 6h4.2'/%3E%3C/svg%3E"); }
+.fa-music { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.2 17.8V6.2l9.6-2v11.5'/%3E%3Ccircle cx='6.6' cy='17.9' r='2.6'/%3E%3Ccircle cx='16.2' cy='15.9' r='2.6'/%3E%3C/svg%3E"); }
 
 /* --------------------------------------------------------------------------
    4. 布局工具类（app.js 动态内容依赖的 Tailwind 子集，本地化实现）
@@ -1282,6 +1290,7 @@ select.input-field option {
     object-fit: cover;
     background: rgba(255, 255, 255, 0.84);
     border: 1px solid rgba(102, 204, 255, 0.3);
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .pill-tab.active .tab-logo-img {
@@ -1296,6 +1305,82 @@ select.input-field option {
     color: #fff;
     font-weight: 600;
     box-shadow: 0 4px 12px -4px var(--accent-glow);
+}
+
+/* —— 配置页签滑动药丸：复刻「界面主题」分段控件的动效 —— */
+.pill-tabs.pill-tabs-sliding {
+    position: relative;
+    border-radius: 999px;
+}
+
+/* 药丸本体：几何由 app.js syncConfigTabPill 写入 --config-pill-x / --config-pill-w */
+.pill-tabs.pill-tabs-sliding::before {
+    content: '';
+    position: absolute;
+    top: 0.25rem;
+    bottom: 0.25rem;
+    left: 0;
+    width: var(--config-pill-w, 0px);
+    transform: translateX(var(--config-pill-x, 0px));
+    border-radius: 999px;
+    background: var(--accent-gradient);
+    box-shadow: 0 6px 18px -8px var(--accent-glow);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 0;
+    transition:
+        transform var(--transition-normal),
+        width var(--transition-normal),
+        opacity var(--transition-fast);
+}
+
+.pill-tabs.pill-tabs-sliding.has-config-pill::before { opacity: 1; }
+
+/* 首次可见 / 切页落位时瞬时定位，不播放滑动动画 */
+.pill-tabs.pill-tabs-sliding.config-pill-instant::before { transition: none; }
+
+.pill-tabs.pill-tabs-sliding .pill-tab {
+    position: relative;
+    z-index: 1;
+    border-radius: 999px;
+}
+
+/* 激活态不再改字重：否则切换瞬间文字与按钮宽度会先“跳”一下，滑动药丸看着就生硬 */
+.pill-tabs.pill-tabs-sliding .pill-tab,
+.pill-tabs.pill-tabs-sliding .pill-tab.active {
+    font-weight: 600;
+}
+
+/* 药丸就位后高亮全交给药丸本体，避免 active 按钮自己的渐变块瞬间跳变 */
+.pill-tabs.pill-tabs-sliding.has-config-pill .pill-tab.active {
+    background: transparent;
+    box-shadow: none;
+}
+
+/* 标签高亮跟着药丸走：目标标签压住变白直到药丸滑到跟前才亮起，离开的标签立刻褪回灰，
+   否则“字先变白、药丸后到”那半拍的错位就是生硬感的来源（三个页签间距远时尤其明显） */
+.pill-tabs.pill-tabs-sliding .pill-tab {
+    transition:
+        color 0.14s cubic-bezier(0.4, 0, 0.2, 1) 0s,
+        background-color var(--transition-fast);
+}
+
+.pill-tabs.pill-tabs-sliding .pill-tab.active {
+    transition:
+        color 0.16s cubic-bezier(0.4, 0, 0.2, 1) 0.1s,
+        background-color var(--transition-fast);
+}
+
+.pill-tabs.pill-tabs-sliding .pill-tab .tab-logo-img {
+    transition:
+        border-color 0.16s cubic-bezier(0.4, 0, 0.2, 1) 0s,
+        box-shadow 0.16s cubic-bezier(0.4, 0, 0.2, 1) 0s;
+}
+
+.pill-tabs.pill-tabs-sliding .pill-tab.active .tab-logo-img {
+    transition:
+        border-color 0.16s cubic-bezier(0.4, 0, 0.2, 1) 0.1s,
+        box-shadow 0.16s cubic-bezier(0.4, 0, 0.2, 1) 0.1s;
 }
 
 /* --------------------------------------------------------------------------
@@ -1344,6 +1429,12 @@ select.input-field option {
     border: 1px solid rgba(94, 162, 255, 0.25);
 }
 
+.status-badge.expired {
+    background: rgba(255, 107, 107, 0.14);
+    color: var(--danger);
+    border: 1px solid rgba(255, 107, 107, 0.28);
+}
+
 /* --------------------------------------------------------------------------
    12. 中控台
    -------------------------------------------------------------------------- */
@@ -1385,6 +1476,7 @@ select.input-field option {
 .core-icon.yatori { background: linear-gradient(135deg, #66ccff, #4ea8ff); box-shadow: 0 8px 20px -8px rgba(102, 204, 255, 0.55); }
 .core-icon.autovisor { background: linear-gradient(135deg, #38bfc8, #4e8dff); box-shadow: 0 8px 20px -8px rgba(56, 191, 200, 0.55); }
 .core-icon.qb { background: linear-gradient(135deg, #3ac98b, #1fa8a0); box-shadow: 0 8px 20px -8px rgba(58, 201, 139, 0.5); }
+.core-icon.zhs { background: linear-gradient(135deg, #8a7cff, #4e8dff); box-shadow: 0 8px 20px -8px rgba(124, 108, 255, 0.55); }
 
 .core-icon.logo-core-icon {
     padding: 0;

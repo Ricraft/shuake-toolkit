@@ -17,13 +17,15 @@ from src.atomic_io import atomic_write_text
 class DesktopPlatformService:
     """Keep platform-specific side effects out of the launcher coordinator."""
 
-    LOG_TABS = frozenset(("system", "yatori", "autovisor"))
+    LOG_TABS = frozenset(("system", "yatori", "autovisor", "zhs"))
 
     # 关于页致谢外链白名单：(hostname, 允许的 path 前缀)。
     EXTERNAL_URL_ALLOWLIST = (
         ("yatori-dev.github.io", "/yatori-docs"),
         ("github.com", "/cxrunfree/autovisor"),
         ("www.github.com", "/cxrunfree/autovisor"),
+        ("github.com", "/pjm314159/zhs"),
+        ("www.github.com", "/pjm314159/zhs"),
         ("app.zerror.cc", "/"),
         ("wwk.lanzouj.com", "/b05evsxif"),
     )

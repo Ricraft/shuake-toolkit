@@ -10,6 +10,7 @@ def make_python_runtime_launcher(*, install_accepted=True):
     launcher = SimpleNamespace(
         autovisor_installing=False,
         get_python_executable=lambda: "python.exe",
+        _ensure_autovisor_captcha_runtime=lambda _python: (True, ""),
         _check_autovisor_dependencies=lambda _python: [],
         log_system=logs.append,
         _reject_runtime_start=lambda core, message, **_kwargs: (

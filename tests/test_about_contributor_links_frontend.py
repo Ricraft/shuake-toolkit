@@ -20,8 +20,13 @@ FRONTEND = APP_JS_PATH.read_text(encoding="utf-8")
 STYLES = (PROJECT_ROOT / "web" / "styles.css").read_text(encoding="utf-8")
 YATORI_DOCS_URL = "https://yatori-dev.github.io/yatori-docs/"
 AUTOVISOR_URL = "https://github.com/CXRunfree/Autovisor"
+ZHS_URL = "https://github.com/pjm314159/zhs"
 ZERROR_URL = "https://app.zerror.cc/"
-CONTRIBUTOR_KEYS = {"yatori": YATORI_DOCS_URL, "autovisor": AUTOVISOR_URL}
+CONTRIBUTOR_KEYS = {
+    "yatori": YATORI_DOCS_URL,
+    "autovisor": AUTOVISOR_URL,
+    "zhs": ZHS_URL,
+}
 
 
 def _about_page() -> str:
@@ -116,7 +121,8 @@ def test_desktop_service_only_opens_allowlisted_https_urls(sandbox_dir):
 
     assert service.open_external_url(YATORI_DOCS_URL)["ok"] is True
     assert service.open_external_url(AUTOVISOR_URL)["ok"] is True
-    assert opened == [YATORI_DOCS_URL, AUTOVISOR_URL]
+    assert service.open_external_url(ZHS_URL)["ok"] is True
+    assert opened == [YATORI_DOCS_URL, AUTOVISOR_URL, ZHS_URL]
 
     blocked = (
         "",
@@ -130,7 +136,7 @@ def test_desktop_service_only_opens_allowlisted_https_urls(sandbox_dir):
     for candidate in blocked:
         assert service.open_external_url(candidate)["ok"] is False
 
-    assert opened == [YATORI_DOCS_URL, AUTOVISOR_URL]
+    assert opened == [YATORI_DOCS_URL, AUTOVISOR_URL, ZHS_URL]
 
 
 def test_failed_opener_is_reported_without_raising(sandbox_dir):
@@ -149,19 +155,20 @@ def test_failed_opener_is_reported_without_raising(sandbox_dir):
 
 
 def test_linked_contributor_cards_match_the_backend_allowlist():
-    assert HTML.count('<a class="contributor-card') == 3
+    assert HTML.count('<a class="contributor-card') == 4
     assert HTML.count('<div class="contributor-card" data-tilt>') == 4
-    assert HTML.count('data-contributor="') == 3
-    assert HTML.count("</a>") == 3
+    assert HTML.count('data-contributor="') == 4
+    assert HTML.count("</a>") == 4
     for key, url in (
         ("yatori", YATORI_DOCS_URL),
         ("autovisor", AUTOVISOR_URL),
+        ("zhs", ZHS_URL),
         ("zerror", ZERROR_URL),
     ):
         assert 'data-contributor="%s"' % key in HTML
         assert 'href="%s"' % url in HTML
-    assert HTML.count('target="_blank" rel="noopener noreferrer"') == 3
-    assert HTML.count('onclick="return openContributorLink(event, this)"') == 3
+    assert HTML.count('target="_blank" rel="noopener noreferrer"') == 4
+    assert HTML.count('onclick="return openContributorLink(event, this)"') == 4
 
 
 def test_remaining_contributor_cards_stay_plain_and_unclickable():
@@ -174,7 +181,7 @@ def test_frontend_passes_only_whitelist_keys_to_the_backend():
     assert "performAction('open_contributor_link', key)" in FRONTEND
     assert "anchor.dataset.contributor" in FRONTEND
     assert "evt.preventDefault()" in FRONTEND
-    for url in (YATORI_DOCS_URL, AUTOVISOR_URL):
+    for url in (YATORI_DOCS_URL, AUTOVISOR_URL, ZHS_URL):
         assert "open_contributor_link', '%s'" % url not in FRONTEND
         assert 'open_contributor_link", "%s"' % url not in FRONTEND
 

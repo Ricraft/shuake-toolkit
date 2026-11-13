@@ -148,7 +148,7 @@
             return `<div class="input-group" data-role="xxt-study-time" ${hide}><span class="input-label">学习时长（分钟）</span><input data-field="studyTime" class="input-field" placeholder="如 10-30，传入 Yatori；具体执行以核心为准" value="${escapeHtml(String(c.studyTime ?? ''))}"></div><div class="input-group" data-role="xxt-cx-node"><span class="input-label">同时任务点数量</span><input data-field="cxNode" type="number" min="-1" max="9999" class="input-field" value="${escapeHtml(String(c.cxNode ?? 3))}"><p class="text-xs mt-1" style="color:var(--text-muted);">仅学习通视频模式3使用：同时处理的任务点数量（并发数），不是章节数；范围 -1 到 9999。</p></div><div class="flex flex-wrap gap-4 items-center" data-role="exam-chapter-switches"><span class="input-label">章节任务</span><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="cxChapterTestSw" type="checkbox" ${Number(c.cxChapterTestSw ?? 1)?'checked':''}> 章节测试</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="cxWorkSw" type="checkbox" ${Number(c.cxWorkSw ?? 1)?'checked':''}> 作业</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="cxExamSw" type="checkbox" ${Number(c.cxExamSw ?? 1)?'checked':''}> 考试</label></div>`;
         }
         function normalizeYatoriUser(u = {}, idx = 1) { const c = u.coursesCustom || {}; return { accountType: u.accountType||'XUEXITONG', url: u.url||'', remarkName: u.remarkName||`账号 ${idx}`, account: u.account||'', password: u.password||'', isProxy: Number(u.isProxy||0), informEmails: Array.isArray(u.informEmails)?u.informEmails:[], coursesCustom:{ studyTime:String(c.studyTime??''), cxNode:Number(c.cxNode??3), cxChapterTestSw:Number(c.cxChapterTestSw??1), cxWorkSw:Number(c.cxWorkSw??1), cxExamSw:Number(c.cxExamSw??1), shuffleSw:Number(c.shuffleSw||0), videoModel:Number(c.videoModel??1), autoExam:Number(c.autoExam||0), examAutoSubmit:Number(c.examAutoSubmit||0), includeCourses:Array.isArray(c.includeCourses)?c.includeCourses:[], excludeCourses:Array.isArray(c.excludeCourses)?c.excludeCourses:[], coursesSettings:Array.isArray(c.coursesSettings)?c.coursesSettings:[] }}; }
-        function normalizeAutovisorAccount(a = {}, idx = 1) { return { account_id:Number(a.account_id||idx), name:a.name||`账号 ${idx}`, username:a.username||'', password:a.password||'', driver:a.driver||'Chrome', exe_path:a.exe_path||'', enable_auto_captcha:a.enable_auto_captcha!==false, enable_hide_window:!!a.enable_hide_window, limit_max_time:String(a.limit_max_time??'30'), limit_speed:String(a.limit_speed??'1.0'), sound_off:a.sound_off!==false, course_urls:Array.isArray(a.course_urls)?a.course_urls:[] }; }
+        function normalizeAutovisorAccount(a = {}, idx = 1) { return { account_id:Number(a.account_id||idx), name:a.name||`账号 ${idx}`, username:a.username||'', password:a.password||'', driver:a.driver||'Chrome', exe_path:a.exe_path||'', enable_auto_captcha:a.enable_auto_captcha!==false, login_mode:a.login_mode==='qr'?'qr':'password',enable_hide_window:!!a.enable_hide_window, limit_max_time:String(a.limit_max_time??'30'), limit_speed:String(a.limit_speed??'1.0'), sound_off:a.sound_off!==false, course_urls:Array.isArray(a.course_urls)?a.course_urls:[] }; }
         function normalizeSettings(raw) { const y = raw?.yatori||{}, a = raw?.autovisor||{}; return { yatori:{ setting:{ basicSetting:{ completionTone:Number(y?.setting?.basicSetting?.completionTone??1), colorLog:Number(y?.setting?.basicSetting?.colorLog??1), logOutFileSw:Number(y?.setting?.basicSetting?.logOutFileSw??1), logLevel:y?.setting?.basicSetting?.logLevel||'INFO', logModel:Number(y?.setting?.basicSetting?.logModel??0), WebModel:Number(y?.setting?.basicSetting?.WebModel??0) }, emailInform:{ sw:Number(y?.setting?.emailInform?.sw??0), SMTPHost:y?.setting?.emailInform?.SMTPHost||'', SMTPPort:Number(y?.setting?.emailInform?.SMTPPort??0), userName:y?.setting?.emailInform?.userName||'', password:y?.setting?.emailInform?.password||'' }, aiSetting:{ aiType:y?.setting?.aiSetting?.aiType||'TONGYI', aiUrl:y?.setting?.aiSetting?.aiUrl||'', model:y?.setting?.aiSetting?.model||'', API_KEY:y?.setting?.aiSetting?.API_KEY||'' }, apiQueSetting:{ url:y?.setting?.apiQueSetting?.url||'http://localhost:8083' } }, users:(Array.isArray(y.users)?y.users:[]).map((u,i)=>normalizeYatoriUser(u,i+1)) }, autovisor:{ multi_mode:!!a.multi_mode, browser_driver:a.browser_driver||'Chrome', browser_path:a.browser_path||'', accounts:(Array.isArray(a.accounts)?a.accounts:[]).map((ac,i)=>normalizeAutovisorAccount(ac,i+1)) } }; }
 
         function showToast(message, type = 'info') { const wrap = document.getElementById('toast-wrap'); const t = document.createElement('div'); t.className = `toast ${type}`; t.textContent = message; wrap.appendChild(t); setTimeout(() => t.remove(), 2800); }
@@ -182,7 +182,7 @@
             if (t) t.classList.add('active');
             const ti = document.getElementById('page-title');
             if (ti) ti.textContent = pageTitles[viewId]||viewId;
-            if (viewId==='settings') requestAnimationFrame(() => renderSettingsTabContent(currentConfigTab));
+            if (viewId==='settings') requestAnimationFrame(() => { syncConfigTabPill({ animate: false }); renderSettingsTabContent(currentConfigTab); });
             if (viewId==='preferences') {
                 loadPreferences();
                 // 设置页首次可见（display:none 解除）后瞬时定位主题滑块，并初始化滑杆圆点靠近放大
@@ -197,13 +197,13 @@
                 requestAnimationFrame(() => initTianyiPage());
             }
         }
-        function switchConfigTab(tab) { captureCurrentConfigTab(); currentConfigTab = tab; document.getElementById('tab-btn-yatori').classList.toggle('active', tab==='yatori'); document.getElementById('tab-btn-autovisor').classList.toggle('active', tab==='autovisor'); document.getElementById('config-yatori').style.display = tab==='yatori'?'flex':'none'; document.getElementById('config-autovisor').style.display = tab==='autovisor'?'flex':'none'; requestAnimationFrame(() => renderSettingsTabContent(tab)); }
+        function switchConfigTab(tab) { captureCurrentConfigTab(); currentConfigTab = tab; document.getElementById('tab-btn-yatori').classList.toggle('active', tab==='yatori'); document.getElementById('tab-btn-autovisor').classList.toggle('active', tab==='autovisor'); const zt = document.getElementById('tab-btn-zhs'); if (zt) zt.classList.toggle('active', tab==='zhs'); document.getElementById('config-yatori').style.display = tab==='yatori'?'flex':'none'; document.getElementById('config-autovisor').style.display = tab==='autovisor'?'flex':'none'; const zp = document.getElementById('config-zhs'); if (zp) zp.style.display = tab==='zhs'?'flex':'none'; requestAnimationFrame(() => { syncConfigTabPill(); renderSettingsTabContent(tab); }); }
         function openSettingsTab(tab) { switchView('settings'); switchConfigTab(tab); }
-        function captureCurrentConfigTab() { const y = document.getElementById('config-yatori'); currentConfigTab = (y && y.style.display !== 'none') ? 'yatori' : 'autovisor'; }
+        function captureCurrentConfigTab() { const y = document.getElementById('config-yatori'); const a = document.getElementById('config-autovisor'); const z = document.getElementById('config-zhs'); if (z && z.style.display !== 'none') currentConfigTab = 'zhs'; else if (y && y.style.display !== 'none') currentConfigTab = 'yatori'; else currentConfigTab = 'autovisor'; }
         function switchConsoleTab(el) { document.querySelectorAll('.pill-tab[data-log-tab]').forEach(e => e.classList.remove('active')); el.classList.add('active'); state.currentLogTab = el.dataset.logTab; renderConsole(); }
         function unwrapState(r) { return r?.state?.runtime || r?.state || r?.runtime || null; }
         function renderConsole() { const b = document.getElementById('console-output'); if (!b) return; if (!state.runtime||!state.runtime.logs) { b.textContent = '等待日志输出...'; return; } const tab = state.currentLogTab||'system'; const raw = state.runtime.logs[tab]; const logs = Array.isArray(raw)?raw:String(raw||'').split(/\r?\n/).filter(Boolean); b.textContent = logs.length?logs.join('\n'):`暂无 ${tab} 日志`; b.scrollTop = b.scrollHeight; }
-        function exportLogs() { const logs = state.runtime?.logs; if (!logs) { showToast('没有可导出的日志', 'warning'); return; } const tab = state.currentLogTab||'system'; const LABELS = { system: '系统', yatori: 'Yatori', autovisor: 'Autovisor' }; let parts = [`=== ${LABELS[tab]||tab} 日志 ===`, '']; const raw = logs[tab]; const lines = Array.isArray(raw)?raw:String(raw||'').split(/\r?\n/).filter(Boolean); parts = parts.concat(lines); const text = parts.join('\n'); apiCall('export_logs', tab, text).then(r => { if (r?.ok) showToast(r.message||'日志已导出', 'success'); else showToast(r?.message||'导出失败', 'error'); }).catch(error => { if (!error?.silent) showToast(error?.message||'导出失败', 'error'); }); }
+        function exportLogs() { const logs = state.runtime?.logs; if (!logs) { showToast('没有可导出的日志', 'warning'); return; } const tab = state.currentLogTab||'system'; const LABELS = { system: '系统', yatori: 'Yatori', autovisor: 'Autovisor', zhs: 'ZHS' }; let parts = [`=== ${LABELS[tab]||tab} 日志 ===`, '']; const raw = logs[tab]; const lines = Array.isArray(raw)?raw:String(raw||'').split(/\r?\n/).filter(Boolean); parts = parts.concat(lines); const text = parts.join('\n'); apiCall('export_logs', tab, text).then(r => { if (r?.ok) showToast(r.message||'日志已导出', 'success'); else showToast(r?.message||'导出失败', 'error'); }).catch(error => { if (!error?.silent) showToast(error?.message||'导出失败', 'error'); }); }
 
         function renderAutovisorActivity(activity) { const panel = document.getElementById('autovisor-activity'); if (!panel) return; if (!activity || activity.phase === 'idle') { panel.hidden = true; return; } panel.hidden = false; panel.dataset.phase = activity.phase||'idle'; const label = document.getElementById('autovisor-activity-label'); const detail = document.getElementById('autovisor-activity-detail'); const percent = document.getElementById('autovisor-activity-percent'); const track = document.getElementById('autovisor-progress-track'); const bar = document.getElementById('autovisor-progress-bar'); if (label) label.textContent = activity.label||'运行中'; const parts = []; if (activity.course_index && activity.course_total) parts.push(`第 ${activity.course_index}/${activity.course_total} 门`); if (activity.course) parts.push(activity.course); if (activity.phase === 'failed' && activity.last_error) parts.push(activity.last_error); if (detail) { detail.textContent = parts.join(' · ')||'等待更多运行信息'; detail.title = detail.textContent; } const raw = Number(activity.progress_percent); const hasProgress = activity.progress_percent !== null && activity.progress_percent !== '' && Number.isFinite(raw); const value = hasProgress?Math.max(0, Math.min(100, raw)):0; if (percent) percent.textContent = hasProgress?`${value}%`:''; if (track) track.hidden = !hasProgress; if (bar) bar.style.width = `${value}%`; }
 
@@ -213,6 +213,8 @@
                 ...runtime,
                 yatori_running: runtime.yatori_running??!!runtime.running?.yatori,
                 autovisor_running: runtime.autovisor_running??!!runtime.running?.autovisor,
+                zhs_running: runtime.zhs_running??!!runtime.running?.zhs,
+                zhs_state: runtime.zhs_state||null,
                 yatori_version: runtime.yatori_version||runtime.versions?.yatori||'Yatori Core',
                 autovisor_version: runtime.autovisor_version||runtime.versions?.autovisor||'Autovisor Core',
                 about_version: runtime.about_version||'',
@@ -240,6 +242,16 @@
                 !!n.starting.autovisor,
                 !!n.dependency_installing.autovisor
             );
+            if (document.getElementById('zhs-action-btn')) {
+                setCoreStatus(
+                    'zhs',
+                    !!n.zhs_running,
+                    n.zhs_state?.environment?.version ? 'ZHS ' + n.zhs_state.environment.version : 'ZHS Core',
+                    !!n.starting.zhs,
+                    false
+                );
+            }
+            renderZhsCard(n.zhs_state);
             renderAutovisorActivity(n.autovisor_activity);
             handleCoreUpdateRuntime(n.core_update);
             if (n.about_version) {
@@ -341,7 +353,7 @@
             if (e('qb-stat-ai')) e('qb-stat-ai').textContent = aiN;
         }
 
-        function renderSettingsTabContent(tab = currentConfigTab) { if (!state.settings) return; if (tab==='yatori') renderYatoriAccounts(state.settings.yatori.users||[]); else renderAutovisorAccounts(state.settings.autovisor.accounts||[]); syncPracticeButtons(); }
+        function renderSettingsTabContent(tab = currentConfigTab) { if (tab==='zhs') { loadZhsPanel(false); syncPracticeButtons(); return; } if (!state.settings) return; if (tab==='yatori') renderYatoriAccounts(state.settings.yatori.users||[]); else renderAutovisorAccounts(state.settings.autovisor.accounts||[]); syncPracticeButtons(); }
 
         function renderSettings(settings) { state.settings = normalizeSettings(settings); const y=state.settings.yatori, a=state.settings.autovisor; document.getElementById('y-log-level').value=y.setting.basicSetting.logLevel; document.getElementById('y-log-model').value=String(y.setting.basicSetting.logModel); document.getElementById('y-web-model').value=String(y.setting.basicSetting.WebModel); document.getElementById('y-completion-tone').checked=!!y.setting.basicSetting.completionTone; document.getElementById('y-color-log').checked=!!y.setting.basicSetting.colorLog; document.getElementById('y-log-out-file').checked=!!y.setting.basicSetting.logOutFileSw; document.getElementById('y-email-sw').checked=!!y.setting.emailInform.sw; document.getElementById('y-smtp-host').value=y.setting.emailInform.SMTPHost; document.getElementById('y-smtp-port').value=y.setting.emailInform.SMTPPort||''; document.getElementById('y-email-user').value=y.setting.emailInform.userName; document.getElementById('y-email-password').value=y.setting.emailInform.password; document.getElementById('y-ai-type').value=y.setting.aiSetting.aiType; document.getElementById('y-ai-url').value=y.setting.aiSetting.aiUrl; document.getElementById('y-ai-model').value=y.setting.aiSetting.model; document.getElementById('y-ai-api-key').value=y.setting.aiSetting.API_KEY; document.getElementById('y-api-url').value=y.setting.apiQueSetting.url; syncYatoriAiField(); if(document.getElementById('a-browser-driver'))document.getElementById('a-browser-driver').value=a.browser_driver; if(document.getElementById('a-browser-path'))document.getElementById('a-browser-path').value=a.browser_path; if(document.getElementById('a-multi-mode'))document.getElementById('a-multi-mode').checked=!!a.multi_mode; syncAutovisorMulti(!!a.multi_mode); renderSettingsTabContent(currentConfigTab); if (settings.questionbank) loadQbSettings(settings.questionbank); }
 
@@ -349,7 +361,7 @@
 
         let courseFetchRunning = false;
         let practiceActionPending = false;
-        function renderAutovisorAccounts(accounts) { const c = document.getElementById('autovisor-accounts'); if (!accounts.length) { c.innerHTML = '<div class="empty-tip">还没有账号，点击右上角添加一个。</div>'; return; } c.innerHTML = accounts.map((a, i) => `<div class="glass-card flex flex-col gap-4 autovisor-account-card" data-index="${i}"><div class="flex justify-between items-center"><h4 class="font-bold text-sm">${escapeHtml(a.name||`账号 ${i+1}`)}</h4><button class="btn btn-outline btn-sm" onclick="removeAutovisorAccount(${i})"><i class="fas fa-trash-alt"></i></button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="input-group"><span class="input-label">卡片名称</span><input data-field="name" class="input-field" value="${escapeHtml(a.name)}"></div><div class="input-group"><span class="input-label">账号/学号</span><input data-field="username" class="input-field" value="${escapeHtml(a.username)}"></div><div class="input-group"><span class="input-label">密码</span><input data-field="password" type="password" class="input-field" value="${escapeHtml(a.password)}"></div><div class="input-group"><span class="input-label">播放倍速</span><div class="select-wrapper"><select data-field="limit_speed" class="input-field">${AUTOVISOR_SPEED_OPTIONS.map(o=>`<option value="${o}" ${String(a.limit_speed)===o?'selected':''}>x${o}</option>`).join('')}</select><i class="fas fa-chevron-down"></i></div></div><div class="input-group"><span class="input-label">最大时长(分钟)</span><input data-field="limit_max_time" type="number" min="1" class="input-field" value="${escapeHtml(a.limit_max_time)}"></div></div><div class="flex flex-col gap-2"><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="enable_auto_captcha" type="checkbox" ${a.enable_auto_captcha?'checked':''}> 自动验证码</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="enable_hide_window" type="checkbox" ${a.enable_hide_window?'checked':''}> 隐藏窗口</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="sound_off" type="checkbox" ${a.sound_off?'checked':''}> 静音播放</label></div><div class="input-group"><div class="flex justify-between items-center mb-1"><span class="input-label">课程链接（每行一个）</span><div class="flex items-center gap-2"><button id="practice-btn-${i}" class="btn btn-outline btn-sm" onclick="startPracticeMode(${i})"><i class="fas fa-pencil-alt"></i> 刷题模式</button><button class="btn btn-ghost btn-sm" onclick="clearCourseUrls(${i})" title="清空所有课程链接"><i class="fas fa-eraser"></i></button><button id="course-btn-${i}" class="btn btn-primary btn-sm" onclick="getAutovisorCourses(${i})"><i class="fas fa-download"></i> 获取课程</button></div></div><textarea data-field="course_urls" class="input-field" id="course-urls-${i}">${escapeHtml((a.course_urls||[]).join('\n'))}</textarea></div></div>`).join(''); }
+        function renderAutovisorAccounts(accounts) { const c = document.getElementById('autovisor-accounts'); if (!accounts.length) { c.innerHTML = '<div class="empty-tip">还没有账号，点击右上角添加一个。</div>'; return; } c.innerHTML = accounts.map((a, i) => `<div class="glass-card flex flex-col gap-4 autovisor-account-card" data-index="${i}"><div class="flex justify-between items-center"><h4 class="font-bold text-sm">${escapeHtml(a.name||`账号 ${i+1}`)}</h4><button class="btn btn-outline btn-sm" onclick="removeAutovisorAccount(${i})"><i class="fas fa-trash-alt"></i></button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="input-group"><span class="input-label">卡片名称</span><input data-field="name" class="input-field" value="${escapeHtml(a.name)}"></div><div class="input-group"><span class="input-label">账号/学号</span><input data-field="username" class="input-field" value="${escapeHtml(a.username)}"></div><div class="input-group"><span class="input-label">密码</span><input data-field="password" type="password" class="input-field" value="${escapeHtml(a.password)}"></div><div class="input-group"><span class="input-label">登录方式</span><div class="select-wrapper"><select data-field="login_mode" class="input-field"><option value="password" ${a.login_mode!=='qr'?'selected':''}>账号密码（自动滑块）</option><option value="qr" ${a.login_mode==='qr'?'selected':''}>扫码登录</option></select><i class="fas fa-chevron-down"></i></div><p class="text-xs mt-1" style="color:var(--text-muted);">扫码登录必须显示浏览器窗口，登录完成后再开始刷课。</p></div><div class="input-group"><span class="input-label">播放倍速</span><div class="select-wrapper"><select data-field="limit_speed" class="input-field">${AUTOVISOR_SPEED_OPTIONS.map(o=>`<option value="${o}" ${String(a.limit_speed)===o?'selected':''}>x${o}</option>`).join('')}</select><i class="fas fa-chevron-down"></i></div></div><div class="input-group"><span class="input-label">最大时长(分钟)</span><input data-field="limit_max_time" type="number" min="1" class="input-field" value="${escapeHtml(a.limit_max_time)}"></div></div><div class="flex flex-col gap-2"><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="enable_auto_captcha" type="checkbox" ${a.enable_auto_captcha?'checked':''}> 自动验证码</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="enable_hide_window" type="checkbox" ${a.enable_hide_window?'checked':''}> 隐藏窗口</label><label class="flex items-center gap-2 text-xs cursor-pointer" style="color:var(--text-muted);"><input data-field="sound_off" type="checkbox" ${a.sound_off?'checked':''}> 静音播放</label></div><div class="input-group"><div class="flex justify-between items-center mb-1"><span class="input-label">课程链接（每行一个）</span><div class="flex items-center gap-2"><button id="practice-btn-${i}" class="btn btn-outline btn-sm" onclick="startPracticeMode(${i})"><i class="fas fa-pencil-alt"></i> 刷题模式</button><button class="btn btn-ghost btn-sm" onclick="clearCourseUrls(${i})" title="清空所有课程链接"><i class="fas fa-eraser"></i></button><button id="course-btn-${i}" class="btn btn-primary btn-sm" onclick="getAutovisorCourses(${i})"><i class="fas fa-download"></i> 获取课程</button></div></div><textarea data-field="course_urls" class="input-field" id="course-urls-${i}">${escapeHtml((a.course_urls||[]).join('\n'))}</textarea></div></div>`).join(''); }
         async function getAutovisorCourses(accountIndex) {
             if (courseFetchRunning) { showToast('正在获取课程中，请稍候...', 'warning'); return; }
             let btn = document.getElementById(`course-btn-${accountIndex}`);
@@ -870,7 +882,7 @@
         function handleYatoriPlatformChange(select) { syncYatoriPlatformCard(select.closest('.yatori-account-card')); }
 
         function gatherYatoriSettings() { const cards = [...document.querySelectorAll('.yatori-account-card')]; const users = cards.length?cards.map((card,idx)=>{const pc=card.querySelector('[data-field="accountType"]').value.trim()||'XUEXITONG',rule=getYatoriPlatformModeRule(pc);const vv=card.querySelector('[data-field="videoModel"]').value||rule.videoModes[0];const ev=card.querySelector('[data-field="autoExam"]').value||rule.examModes[0];const ssv=card.querySelector('[data-field="examAutoSubmit"]').value||'0';const cn=card.querySelector('[data-field="cxNode"]'),st=card.querySelector('[data-field="studyTime"]'),cct=card.querySelector('[data-field="cxChapterTestSw"]'),cw=card.querySelector('[data-field="cxWorkSw"]'),ce=card.querySelector('[data-field="cxExamSw"]');const existingUser=state.settings?.yatori?.users?.[idx];const existingCoursesSettings=existingUser?.coursesCustom?.coursesSettings;return{accountType:pc,url:card.querySelector('[data-field="url"]').value.trim(),remarkName:card.querySelector('[data-field="remarkName"]').value.trim(),account:card.querySelector('[data-field="account"]').value.trim(),password:card.querySelector('[data-field="password"]').value,isProxy:card.querySelector('[data-field="isProxy"]').checked?1:0,informEmails:splitComma(card.querySelector('[data-field="informEmails"]').value),coursesCustom:{shuffleSw:card.querySelector('[data-field="shuffleSw"]').checked?1:0,videoModel:Number(rule.videoModes.includes(String(vv))?vv:rule.videoModes[0]),autoExam:Number(rule.examModes.includes(String(ev))?ev:rule.examModes[0]),examAutoSubmit:Number(['0','1'].includes(String(ssv))?ssv:'0'),includeCourses:splitLines(card.querySelector('[data-field="includeCourses"]').value),excludeCourses:splitLines(card.querySelector('[data-field="excludeCourses"]').value),studyTime:st?st.value.trim():(existingUser?.coursesCustom?.studyTime??''),cxNode:cn?(cn.value.trim()===''?3:Math.min(9999,Math.max(-1,Number(cn.value)))):Number(existingUser?.coursesCustom?.cxNode??3),cxChapterTestSw:cct?(cct.checked?1:0):Number(existingUser?.coursesCustom?.cxChapterTestSw??1),cxWorkSw:cw?(cw.checked?1:0):Number(existingUser?.coursesCustom?.cxWorkSw??1),cxExamSw:ce?(ce.checked?1:0):Number(existingUser?.coursesCustom?.cxExamSw??1),coursesSettings:Array.isArray(existingCoursesSettings)?existingCoursesSettings:[]}};}):(state.settings?.yatori?.users||[normalizeYatoriUser({},1)]);return{setting:{basicSetting:{completionTone:document.getElementById('y-completion-tone').checked?1:0,colorLog:document.getElementById('y-color-log').checked?1:0,logOutFileSw:document.getElementById('y-log-out-file').checked?1:0,logLevel:document.getElementById('y-log-level').value,logModel:Number(document.getElementById('y-log-model').value||0),WebModel:Number(document.getElementById('y-web-model').value||0)},emailInform:{sw:document.getElementById('y-email-sw').checked?1:0,SMTPHost:document.getElementById('y-smtp-host').value.trim(),SMTPPort:Number(document.getElementById('y-smtp-port').value||0),userName:document.getElementById('y-email-user').value.trim(),password:document.getElementById('y-email-password').value},aiSetting:{aiType:document.getElementById('y-ai-type').value||'TONGYI',aiUrl:document.getElementById('y-ai-url').value.trim(),model:document.getElementById('y-ai-model').value.trim(),API_KEY:document.getElementById('y-ai-api-key').value},apiQueSetting:{url:document.getElementById('y-api-url').value.trim()||'http://localhost:8083'}},users:users.length?users:[normalizeYatoriUser({},1)]}; }
-        function gatherAutovisorSettings() { const cs=[...document.querySelectorAll('.autovisor-account-card')];const acs=cs.length?cs.map(c=>({account_id:Number(state.settings?.autovisor?.accounts?.[Number(c.dataset.index)]?.account_id||Number(c.dataset.index)+1),name:c.querySelector('[data-field="name"]').value.trim(),username:c.querySelector('[data-field="username"]').value.trim(),password:c.querySelector('[data-field="password"]').value,driver:document.getElementById('a-browser-driver')?.value||'Chrome',exe_path:document.getElementById('a-browser-path')?.value||'',enable_auto_captcha:c.querySelector('[data-field="enable_auto_captcha"]').checked,enable_hide_window:c.querySelector('[data-field="enable_hide_window"]').checked,limit_max_time:String(c.querySelector('[data-field="limit_max_time"]').value||'30'),limit_speed:String(c.querySelector('[data-field="limit_speed"]').value||'1.0'),sound_off:c.querySelector('[data-field="sound_off"]').checked,course_urls:splitLines(c.querySelector('[data-field="course_urls"]').value)})):(state.settings?.autovisor?.accounts||[]);return{multi_mode:document.getElementById('a-multi-mode')?.checked??false,browser_driver:document.getElementById('a-browser-driver')?.value||'Chrome',browser_path:document.getElementById('a-browser-path')?.value||'',accounts:acs.length?acs:[{account_id:1,name:'账号 1',username:'',password:'',driver:'Chrome',exe_path:'',enable_auto_captcha:true,enable_hide_window:false,limit_max_time:'30',limit_speed:'1.0',sound_off:true,course_urls:[]}]}; }
+        function gatherAutovisorSettings() { const cs=[...document.querySelectorAll('.autovisor-account-card')];const acs=cs.length?cs.map(c=>({account_id:Number(state.settings?.autovisor?.accounts?.[Number(c.dataset.index)]?.account_id||Number(c.dataset.index)+1),name:c.querySelector('[data-field="name"]').value.trim(),username:c.querySelector('[data-field="username"]').value.trim(),password:c.querySelector('[data-field="password"]').value,driver:document.getElementById('a-browser-driver')?.value||'Chrome',exe_path:document.getElementById('a-browser-path')?.value||'',login_mode:c.querySelector('[data-field="login_mode"]')?.value||'password',enable_auto_captcha:c.querySelector('[data-field="enable_auto_captcha"]').checked,enable_hide_window:c.querySelector('[data-field="enable_hide_window"]').checked,limit_max_time:String(c.querySelector('[data-field="limit_max_time"]').value||'30'),limit_speed:String(c.querySelector('[data-field="limit_speed"]').value||'1.0'),sound_off:c.querySelector('[data-field="sound_off"]').checked,course_urls:splitLines(c.querySelector('[data-field="course_urls"]').value)})):(state.settings?.autovisor?.accounts||[]);return{multi_mode:document.getElementById('a-multi-mode')?.checked??false,browser_driver:document.getElementById('a-browser-driver')?.value||'Chrome',browser_path:document.getElementById('a-browser-path')?.value||'',accounts:acs.length?acs:[{account_id:1,name:'账号 1',username:'',password:'',driver:'Chrome',exe_path:'',login_mode:'password',enable_auto_captcha:true,enable_hide_window:false,limit_max_time:'30',limit_speed:'1.0',sound_off:true,course_urls:[]}]}; }
 
         function validateWebSettingsBeforeSave() {
             const a = gatherAutovisorSettings();
@@ -1052,14 +1064,19 @@
         }
 
         async function handleCoreAction(core) {
-            const running = core === 'yatori' ? !!state.runtime?.yatori_running : !!state.runtime?.autovisor_running;
+            const running = core === 'yatori' ? !!state.runtime?.yatori_running : core === 'zhs' ? !!state.runtime?.zhs_running : !!state.runtime?.autovisor_running;
             const starting = !!state.runtime?.starting?.[core];
             const action = (running || starting) ? 'stop' : 'start';
             return runWebActionLocked(action, [core], async () => {
                 try {
                     if (action === 'start') {
-                        const sr = await saveSettings(false);
-                        if (!sr?.ok) return sr || { ok: false, message: '保存配置失败' };
+                        if (core === 'zhs') {
+                            const zr = await saveZhsSettings();
+                            if (zr && zr.ok === false) return zr;
+                        } else {
+                            const sr = await saveSettings(false);
+                            if (!sr?.ok) return sr || { ok: false, message: '保存配置失败' };
+                        }
                     }
                     const result = await apiCall('perform_action', action, core);
                     handleWebActionResult(result, '核心操作失败');
@@ -1205,6 +1222,49 @@
             if (!info || typeof info !== 'object') return;
             const core = String(info.core || '');
             const phase = String(info.phase || 'idle');
+            if (core === 'zhs') {
+                const zhsActive = zhsUpdateLastPhase === 'downloading' || zhsUpdateLastPhase === 'installing';
+                if (phase === 'downloading' || phase === 'installing') {
+                    zhsUpdateLastPhase = phase;
+                    if (zhsUpdateInstalling) updateZhsProgressView(info);
+                    return;
+                }
+                if (zhsActive) {
+                    if (phase === 'completed' && zhsUpdateInstalling) {
+                        updateZhsProgressView({ ...info, phase: 'completed', percent: 100 });
+                        zhsUpdateInstalling = false;
+                        zhsUpdateConfirming = false;
+                        zhsUpdateLastPhase = 'completed';
+                        showToast('ZHS 更新完成，重启启动器后生效', 'success');
+                        setTimeout(() => {
+                            document.getElementById('zhs-update-modal')?.classList.remove('active');
+                            window.pendingZhsUpdateDialog = null;
+                            setZhsUpdateBusy(false);
+                            zhsUpdateLastPhase = 'idle';
+                        }, 1200);
+                        return;
+                    }
+                    if (phase === 'failed' && zhsUpdateInstalling) {
+                        zhsUpdateInstalling = false;
+                        zhsUpdateLastPhase = 'failed';
+                        setZhsUpdateBusy(false);
+                        updateZhsProgressView({ ...info, phase: 'failed' });
+                        const btn = document.getElementById('zhs-update-confirm-btn');
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="fas fa-rotate"></i> 重新检查更新';
+                            btn.onclick = () => {
+                                closeZhsUpdateModal();
+                                checkZhsUpdate();
+                            };
+                        }
+                        showToast('ZHS 更新失败，请查看系统日志', 'error');
+                        return;
+                    }
+                }
+                zhsUpdateLastPhase = phase;
+                return;
+            }
             if (core !== 'yatori') return;
             const wasActive = yatoriUpdateLastPhase === 'downloading' || yatoriUpdateLastPhase === 'installing';
             if (phase === 'downloading' || phase === 'installing') {
@@ -4001,6 +4061,7 @@
            ============================================================ */
 
         let themePillObserver = null;
+        let configPillObserver = null;
         let glassBlurFrame = 0;
         let pendingGlassBlurValue = null;
         const sliderProximityZones = new WeakSet();
@@ -4028,6 +4089,32 @@
                 // 洛天依解锁后按钮出现、容器变宽时重新测量（不播动画）
                 themePillObserver = new ResizeObserver(() => syncThemeChoicePill({ animate: false }));
                 themePillObserver.observe(group);
+            }
+            return true;
+        }
+
+        // 配置页签滑动药丸：与主题分段控件同一套机制，几何写进 --config-pill-x / --config-pill-w 交给 CSS 过渡
+        function syncConfigTabPill(options) {
+            let animate = !options || options.animate !== false;
+            const group = document.getElementById('config-tab-group');
+            if (!group) return false;
+            const active = group.querySelector('.pill-tab.active');
+            // 核心设置页初始 display:none（.view-page）时 offsetWidth 为 0，等可见后再同步
+            if (!active || !active.offsetWidth) return false;
+            // 药丸还没就位过：首帧直接落位，不播滑动动画
+            if (!group.classList.contains('has-config-pill')) animate = false;
+            if (!animate) group.classList.add('config-pill-instant');
+            group.style.setProperty('--config-pill-w', active.offsetWidth + 'px');
+            group.style.setProperty('--config-pill-x', active.offsetLeft + 'px');
+            if (!animate) {
+                void group.offsetWidth;
+                requestAnimationFrame(() => group.classList.remove('config-pill-instant'));
+            }
+            group.classList.add('has-config-pill');
+            if (!configPillObserver && typeof ResizeObserver !== 'undefined') {
+                // 窗口缩放 / 字体加载导致按钮宽度变化时重新测量（不播动画）
+                configPillObserver = new ResizeObserver(() => syncConfigTabPill({ animate: false }));
+                configPillObserver.observe(group);
             }
             return true;
         }
@@ -4289,6 +4376,189 @@
             }
         }
 
+        let zhsUpdateConfirming = false;
+        let zhsUpdateInstalling = false;
+        let zhsUpdateLastPhase = 'idle';
+
+        function setZhsUpdateBusy(busy, label = '正在更新...') {
+            const btn = document.getElementById('zhs-update-confirm-btn');
+            const cancel = document.getElementById('zhs-update-cancel-btn');
+            const box = document.getElementById('zhs-update-progress');
+            if (btn) {
+                btn.disabled = !!busy;
+                btn.innerHTML = busy
+                    ? '<i class="fas fa-spinner fa-spin"></i> ' + escapeHtml(label)
+                    : '<i class="fas fa-download"></i> 安装更新';
+            }
+            if (cancel) cancel.disabled = !!busy;
+            if (box) box.hidden = !busy;
+        }
+
+        function updateZhsProgressView(info) {
+            const box = document.getElementById('zhs-update-progress');
+            if (!box) return;
+            box.hidden = false;
+            const phase = ['downloading', 'installing', 'completed', 'failed'].includes(info && info.phase)
+                ? info.phase
+                : 'downloading';
+            const rawPercent = Number(info && info.percent);
+            const percent = phase === 'completed'
+                ? 100
+                : Math.max(0, Math.min(100, Number.isFinite(rawPercent) ? rawPercent : 0));
+            box.dataset.phase = phase;
+            setText('zhs-update-progress-label',
+                phase === 'completed' ? '更新完成'
+                    : phase === 'failed' ? '更新失败'
+                    : phase === 'installing' ? '正在安装（同步源码 + 重装环境）'
+                    : '正在下载');
+            setText('zhs-update-progress-percent', percent.toFixed(percent >= 100 ? 0 : 1) + '%');
+            const bar = document.getElementById('zhs-update-progress-bar');
+            if (bar) bar.style.width = percent + '%';
+            const parts = [];
+            const mode = String((info && info.mode) || '').trim();
+            if (mode) parts.push(mode === '直接下载' ? 'GitHub 直连' : mode);
+            if (Number(info && info.total) > 0) {
+                parts.push(formatUpdateBytes(info.downloaded) + ' / ' + formatUpdateBytes(info.total));
+            } else if (Number(info && info.downloaded) > 0) {
+                parts.push('已下载 ' + formatUpdateBytes(info.downloaded));
+            }
+            if (Number(info && info.speed) > 0) parts.push(formatUpdateBytes(info.speed) + '/s');
+            const eta = formatUpdateDuration(info && info.eta);
+            if (eta) parts.push('剩余 ' + eta);
+            const message = String((info && info.message) || '').trim();
+            if (message) parts.push(message);
+            setText('zhs-update-progress-detail', parts.filter(Boolean).join(' · ') || (
+                phase === 'completed' ? '源码已同步，独立环境已重装'
+                    : phase === 'failed' ? '已自动回滚到更新前的版本'
+                    : '正在准备下载...'
+            ));
+        }
+
+        async function checkZhsUpdate() {
+            return runWebActionLocked('show_zhs_update_dialog', [], async () => {
+                try {
+                    showToast('正在检查 ZHS 更新...', 'info');
+                    const result = await apiCall('perform_action', 'show_zhs_update_dialog', 'zhs');
+                    if (!handleWebActionResult(result, '无法检查 ZHS 更新')) return result;
+                    if (result && result.updateDialog) {
+                        showZhsUpdateModal(result.updateDialog);
+                    } else {
+                        showToast((result && result.toast) || 'ZHS 已是最新版本', 'success');
+                    }
+                    return result;
+                } catch (error) {
+                    if (!error || !error.silent) showToast((error && error.message) || '无法检查 ZHS 更新', 'error');
+                    return { ok: false, message: (error && error.message) || '无法检查 ZHS 更新' };
+                }
+            });
+        }
+
+        function showZhsUpdateModal(info) {
+            const modal = document.getElementById('zhs-update-modal');
+            if (!modal) return;
+            window.pendingZhsUpdateDialog = info || {};
+            zhsUpdateInstalling = false;
+            zhsUpdateConfirming = false;
+            zhsUpdateLastPhase = 'idle';
+            const confirmBtn = document.getElementById('zhs-update-confirm-btn');
+            // 先复位忙碌态，再覆盖文案与可用性；否则 setZhsUpdateBusy(false)
+            // 会把已禁用的「安装更新」重新启用，并丢掉「安装 ZHS」等文案。
+            setZhsUpdateBusy(false);
+            if (confirmBtn) {
+                confirmBtn.onclick = () => confirmZhsUpdate();
+                confirmBtn.innerHTML = info && info.installLabel
+                    ? '<i class="fas fa-download"></i> ' + escapeHtml(info.installLabel)
+                    : '<i class="fas fa-download"></i> 安装更新';
+                confirmBtn.disabled = !!(info && info.installDisabled);
+            }
+            const progressBox = document.getElementById('zhs-update-progress');
+            if (progressBox) {
+                progressBox.hidden = true;
+                progressBox.dataset.phase = 'downloading';
+            }
+            setText('zhs-update-current', (info && info.currentVersion) || '未知');
+            setText('zhs-update-latest', (info && info.latestVersion) || '未知');
+            setText('zhs-update-asset', (info && info.assetName) || '未知资源');
+            setText('zhs-update-published', (info && info.publishedAt) || '未提供');
+            setText('zhs-update-notes', (info && info.releaseNotes) || '该版本暂未提供更新说明。');
+            const summary = (info && info.installDisabledReason)
+                ? ((info && info.summary) || '') + ' ' + info.installDisabledReason
+                : ((info && info.summary) || '');
+            setText('zhs-update-summary', summary || '请确认是否下载并替换内置 zhs 源码。');
+            setText('zhs-update-notice', (info && info.notice) || '');
+            renderZhsUpdateLinks((info && info.downloadLinks) || []);
+            modal.classList.add('active');
+        }
+
+        function renderZhsUpdateLinks(links) {
+            const box = document.getElementById('zhs-update-links');
+            if (!box) return;
+            box.innerHTML = '';
+            (links || []).forEach(link => {
+                if (!link || !link.key) return;
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'update-link-btn';
+                button.addEventListener('click', () => openZhsUpdateLink(link.key));
+                const label = document.createElement('span');
+                label.className = 'update-link-label';
+                label.textContent = link.label || '打开链接';
+                const url = document.createElement('span');
+                url.className = 'update-link-url';
+                url.textContent = link.url || '';
+                button.appendChild(label);
+                button.appendChild(url);
+                box.appendChild(button);
+            });
+        }
+
+        async function openZhsUpdateLink(key) {
+            if (!key) return;
+            try {
+                const result = await apiCall('perform_action', 'open_zhs_link', key);
+                if (!handleWebActionResult(result, '无法打开链接')) return;
+                showToast('已在系统浏览器中打开链接', 'success');
+            } catch (error) {
+                if (!error || !error.silent) showToast((error && error.message) || '无法打开链接', 'error');
+            }
+        }
+
+        function closeZhsUpdateModal() {
+            if (zhsUpdateConfirming || zhsUpdateInstalling) return;
+            document.getElementById('zhs-update-modal')?.classList.remove('active');
+            window.pendingZhsUpdateDialog = null;
+            const progressBox = document.getElementById('zhs-update-progress');
+            if (progressBox) progressBox.hidden = true;
+            zhsUpdateLastPhase = 'idle';
+        }
+
+        async function confirmZhsUpdate() {
+            if (zhsUpdateConfirming || zhsUpdateInstalling) return;
+            zhsUpdateConfirming = true;
+            setZhsUpdateBusy(true, '正在启动更新...');
+            try {
+                const result = await apiCall('perform_action', 'install_zhs_update', 'zhs');
+                if (handleWebActionResult(result, 'ZHS 更新启动失败')) {
+                    zhsUpdateInstalling = true;
+                    zhsUpdateLastPhase = 'downloading';
+                    updateZhsProgressView({
+                        phase: 'downloading',
+                        percent: 0,
+                        message: '正在检测最快下载源...',
+                    });
+                    setZhsUpdateBusy(true, '正在下载...');
+                    showToast('ZHS 更新已开始，完成后会自动关闭该窗口', 'info');
+                } else {
+                    setZhsUpdateBusy(false);
+                }
+            } catch (error) {
+                setZhsUpdateBusy(false);
+                if (!error || !error.silent) showToast((error && error.message) || 'ZHS 更新启动失败', 'error');
+            } finally {
+                zhsUpdateConfirming = false;
+            }
+        }
+
         function closeAutovisorUpdateModal() {
             document.getElementById('autovisor-update-modal')?.classList.remove('active');
         }
@@ -4302,6 +4572,7 @@
         const DEVELOPER_LINK_ACHIEVEMENT_KEYS = [
             'yatori',
             'autovisor',
+            'zhs',
             'zerror',
             'autovisor_github',
         ];
@@ -4310,4 +4581,655 @@
             const normalized = String(key ?? '');
             if (!DEVELOPER_LINK_ACHIEVEMENT_KEYS.includes(normalized)) return false;
             return unlockAchievement('dev_link_visit');
+        }
+
+        /* ============================================================
+           ZHS 第三核心：扫码登录 / 课程拉取 / 运行控制
+           ============================================================ */
+        let zhsLoginTimer = null;
+        let zhsLoginPollCount = 0;
+        let zhsCourses = [];
+        let zhsPanelState = null;
+        // 课程勾选状态必须跨重渲染保留：切换 tab、点保存配置、扫码轮询都会重新渲染课程列表，
+        // 以前每次渲染都写死只勾第一门，导致「勾选多门后一保存就只剩一门」。
+        let zhsSelectedKeys = new Set();
+        let zhsSelectionTouched = false;
+        let zhsSettingsDirty = false;
+        let zhsPanelListenersBound = false;
+        // 最近一次「课程因验证码中断」的信息（后端从 zhs 日志里识别出来的）
+        let zhsCaptchaState = null;
+        let zhsCaptchaDismissedKey = '';
+
+        const ZHS_LOGIN_TEXT = {
+            idle: '尚未登录',
+            starting: '正在获取二维码…',
+            waiting: '请用智慧树 App 扫码',
+            scanned: '已扫码，请在手机上确认',
+            success: '登录成功',
+            cancelled: '已取消登录',
+            expired: '二维码已过期，请重新获取',
+            error: '登录失败',
+        };
+
+        function zhsEl(id) { return document.getElementById(id); }
+
+        // 表单里任何以 z- 开头的控件被改过，就认为 ZHS 配置有未保存修改。
+        function bindZhsPanelListeners() {
+            if (zhsPanelListenersBound) return;
+            const panel = zhsEl('config-zhs');
+            if (!panel) return;
+            zhsPanelListenersBound = true;
+            ['input', 'change'].forEach((evt) => panel.addEventListener(evt, (event) => {
+                const id = event?.target?.id || '';
+                if (id.indexOf('z-') === 0) zhsSettingsDirty = true;
+            }));
+        }
+
+        // ZHS 的 AI 走 OpenAI 兼容接口，这里只做“Base URL / 模型”的预设填充与预览；
+        // 测试连通性统一按 OTHER（自定义地址）+ base_url 处理。
+        const ZHS_AI_PROVIDERS = {
+            OPENAI: { url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+            SILICON: { url: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+            DEEPSEEK: { url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+            CHATGLM: { url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+            TONGYI: { url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-max' },
+            XINGHUO: { url: 'https://spark-api-open.xf-yun.com/v1', model: 'generalv3.5' },
+            DOUBAO: { url: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-pro-32k' },
+            METAAI: { url: 'https://api.meta.ai/v1', model: 'llama-3-70b' },
+            OTHER: { url: '', model: '' },
+        };
+
+        const ZHS_SESSION_TEXT = {
+            ok: '已登录',
+            unverified: '待校验',
+            checking: '校验中',
+            expired: '登录已过期',
+            unavailable: '状态未知',
+            none: '未登录',
+            corrupt: '凭证损坏',
+            error: '校验失败',
+        };
+
+        function renderZhsSession(session) {
+            const badge = zhsEl('zhs-session-badge');
+            const status = session?.status || (session?.logged_in ? 'unverified' : 'none');
+            const logged = status === 'ok';
+            if (badge) {
+                badge.textContent = ZHS_SESSION_TEXT[status] || (logged ? '已登录' : '未登录');
+                const badgeKind = logged ? 'ready' : (status === 'expired' ? 'expired' : 'idle');
+                badge.className = 'status-badge ' + badgeKind;
+                badge.title = session?.message || '';
+            }
+            return logged;
+        }
+
+        function renderZhsLogin(login) {
+            const status = login?.status || 'idle';
+            const el = zhsEl('zhs-login-status');
+            if (el) el.textContent = (ZHS_LOGIN_TEXT[status] || status) + (login?.message ? ' · ' + login.message : '');
+            const wrap = zhsEl('zhs-qr-wrap');
+            const img = zhsEl('zhs-qr-image');
+            if (img && login?.image) img.src = login.image;
+            if (wrap) wrap.hidden = !login?.image;
+            const path = zhsEl('zhs-qr-path');
+            if (path) path.textContent = login?.image_path || '';
+        }
+
+        function zhsLoginActive(login) {
+            return ['starting', 'waiting', 'scanned', 'success', 'error'].includes(login?.status);
+        }
+
+        function renderZhsSessionHint(session, login) {
+            if (!session || zhsLoginActive(login)) return;
+            const hint = zhsEl('zhs-login-status');
+            if (!hint) return;
+            hint.textContent = session.message || (session.logged_in ? '登录状态有效' : '尚未登录');
+            hint.style.color = session.logged_in
+                ? 'var(--success)'
+                : (session.status === 'expired' ? 'var(--danger)' : 'var(--text-muted)');
+        }
+
+        function renderZhsCard(zhsState) {
+            if (zhsState) zhsPanelState = Object.assign({}, zhsPanelState || {}, zhsState);
+            const session = zhsState?.session || zhsPanelState?.session || null;
+            renderZhsSession(session);
+            // 后台校验完成后，正在显示的面板提示也跟着更新（不必手动点刷新）
+            renderZhsSessionHint(session, zhsState?.login || zhsPanelState?.login);
+            // 运行时轮询也会带 captcha：用户一直停在 ZHS 页面时，验证码提示能自己冒出来
+            if (zhsState && Object.prototype.hasOwnProperty.call(zhsState, 'captcha')) {
+                renderZhsCaptcha(zhsState.captcha);
+            }
+        }
+
+        function renderZhsPanel(data) {
+            if (!data) return;
+            zhsPanelState = data;
+            bindZhsPanelListeners();
+            renderZhsSession(data.session);
+            renderZhsLogin(data.login);
+            renderZhsSessionHint(data.session, data.login);
+            // 用户正在改配置时不要用磁盘值覆盖输入框（点保存配置、切 tab 都会触发重渲染）。
+            if (!zhsSettingsDirty) renderZhsSettings(data.settings);
+            if (Array.isArray(data.courses) && data.courses.length) {
+                zhsCourses = data.courses;
+                renderZhsCourses(data.courses);
+            }
+            const msg = zhsEl('zhs-courses-msg');
+            if (msg) {
+                if (data.coursesMessage) msg.textContent = data.coursesMessage;
+                else updateZhsCoursesMsg();
+            }
+            renderZhsCaptcha(data.captcha);
+        }
+
+        function zhsCaptchaKey(captcha) {
+            return String((captcha && captcha.racId) || '') + '|' + String((captcha && captcha.videoId) || '');
+        }
+
+        function renderZhsCaptcha(captcha) {
+            zhsCaptchaState = captcha || null;
+            const tip = zhsEl('zhs-captcha-tip');
+            const text = zhsEl('zhs-captcha-text');
+            if (!tip) return;
+            if (!zhsCaptchaState || !zhsCaptchaState.url) { tip.style.display = 'none'; return; }
+            if (zhsCaptchaDismissedKey && zhsCaptchaDismissedKey === zhsCaptchaKey(zhsCaptchaState)) {
+                tip.style.display = 'none';
+                return;
+            }
+            tip.style.display = 'flex';
+            if (text) {
+                text.textContent = '《' + (zhsCaptchaState.course || '课程') + '》遇到智慧树验证码，这门课已停止（videoId=' +
+                    (zhsCaptchaState.videoId || '?') + '）。';
+            }
+        }
+
+        function hideZhsCaptchaTip() {
+            if (zhsCaptchaState) zhsCaptchaDismissedKey = zhsCaptchaKey(zhsCaptchaState);
+            const tip = zhsEl('zhs-captcha-tip');
+            if (tip) tip.style.display = 'none';
+        }
+
+        async function openZhsCoursePage() {
+            const url = (zhsCaptchaState && zhsCaptchaState.url) || '';
+            try {
+                const res = await apiCall('open_zhs_course_page', url);
+                if (res && res.ok === false) { showToast(res.message || '打开课程页失败', 'error'); return; }
+                showToast('已在浏览器打开课程页，完成验证后回来点「只重跑这门课」', 'success');
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '打开课程页失败', 'error');
+            }
+        }
+
+        async function retryZhsCourse() {
+            const url = (zhsCaptchaState && zhsCaptchaState.url) || '';
+            if (!url) { showToast('暂无可重跑的课程，请先运行一次任务', 'warning'); return; }
+            try {
+                const res = await apiCall('start_zhs', { action: 'play', url: url });
+                if (res?.state) applyRuntimeState(unwrapState(res.state));
+                if (res?.ok) showToast('已开始只重跑《' + (zhsCaptchaState.course || '') + '》', 'success');
+                else showToast(res?.message || '重跑失败', 'error');
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '重跑失败', 'error');
+            }
+        }
+
+        function renderZhsSettings(settings) {
+            if (!settings) return;
+            const v = settings.video || {};
+            const ai = settings.ai || {};
+            const qb = settings.question_bank || {};
+            const setValue = (id, value) => { const el = zhsEl(id); if (el && value !== undefined && value !== null) el.value = value; };
+            const setChecked = (id, value) => { const el = zhsEl(id); if (el) el.checked = !!value; };
+            setValue('z-speed-zhidao', v.zhidao_speed);
+            setValue('z-speed-ai', v.ai_speed);
+            setValue('z-limit', settings.limit);
+            setValue('z-threshold', settings.threshold);
+            setValue('z-ai-key', ai.api_key);
+            setValue('z-ai-base-url', ai.base_url);
+            setValue('z-ai-model', ai.model);
+            setValue('z-ai-max-token', ai.max_token);
+            const providerEl = zhsEl('z-ai-provider');
+            if (providerEl) providerEl.value = guessZhsProvider(ai.base_url);
+            renderZhsAiPreview();
+            setChecked('z-ai-enabled', ai.enabled);
+            setValue('z-qb-token', qb.token);
+            setValue('z-qb-url', qb.query_url);
+            setChecked('z-qb-enabled', qb.enabled);
+        }
+
+        function collectZhsSettings() {
+            const num = (id, fallback) => { const n = Number(zhsEl(id)?.value); return Number.isFinite(n) ? n : fallback; };
+            const txt = (id, fallback) => { const raw = zhsEl(id)?.value; return raw === undefined || raw === null ? fallback : String(raw).trim(); };
+            const cur = (zhsPanelState && zhsPanelState.settings) || {};
+            const video = Object.assign({}, cur.video || {});
+            const ai = Object.assign({}, cur.ai || {});
+            const qb = Object.assign({}, cur.question_bank || {});
+            video.zhidao_speed = num('z-speed-zhidao', video.zhidao_speed);
+            video.ai_speed = num('z-speed-ai', video.ai_speed);
+            const aiEl = zhsEl('z-ai-enabled');
+            ai.enabled = !!(aiEl && aiEl.checked);
+            ai.api_key = txt('z-ai-key', ai.api_key || '');
+            ai.base_url = txt('z-ai-base-url', ai.base_url || '');
+            ai.model = txt('z-ai-model', ai.model || '');
+            ai.max_token = num('z-ai-max-token', ai.max_token);
+            const qbEl = zhsEl('z-qb-enabled');
+            qb.enabled = !!(qbEl && qbEl.checked);
+            qb.token = txt('z-qb-token', qb.token || '');
+            qb.query_url = txt('z-qb-url', qb.query_url || '');
+            return {
+                limit: num('z-limit', cur.limit ?? 0),
+                threshold: num('z-threshold', cur.threshold ?? 0.91),
+                video: video,
+                ai: ai,
+                question_bank: qb,
+            };
+        }
+
+        async function loadZhsPanel(showErrors) {
+            try {
+                const data = await apiCall('get_zhs_state', 0);
+                renderZhsPanel(data);
+                return data;
+            } catch (error) {
+                if (showErrors && !error?.silent) showToast(error.message || '读取 ZHS 状态失败', 'error');
+                return null;
+            }
+        }
+
+        async function refreshZhsSession() {
+            const hint = zhsEl('zhs-login-status');
+            if (hint) { hint.textContent = '正在向智慧树校验登录状态…'; hint.style.color = 'var(--text-muted)'; }
+            try {
+                const res = await apiCall('refresh_zhs_session', 0);
+                if (res?.login) renderZhsLogin(res.login);
+                if (res?.session) renderZhsSession(res.session);
+                const session = res?.session || {};
+                if (hint) {
+                    hint.textContent = session.message || (session.logged_in ? '登录状态有效' : '尚未登录');
+                    hint.style.color = session.logged_in ? 'var(--success)' : 'var(--danger)';
+                }
+                if (session.logged_in) showToast('登录状态有效', 'success');
+                else showToast(session.message || 'ZHS 尚未登录，请先扫码', 'warning');
+            } catch (error) {
+                if (hint) { hint.textContent = error?.message || '校验登录状态失败'; hint.style.color = 'var(--danger)'; }
+                if (!error?.silent) showToast(error.message || '校验登录状态失败', 'error');
+            }
+        }
+
+        function stopZhsLoginPolling() {
+            if (zhsLoginTimer) { clearInterval(zhsLoginTimer); zhsLoginTimer = null; }
+            zhsLoginPollCount = 0;
+        }
+
+        async function pollZhsLoginOnce() {
+            zhsLoginPollCount += 1;
+            const data = await loadZhsPanel(false);
+            const status = data?.login?.status || 'idle';
+            if (status === 'success') {
+                stopZhsLoginPolling();
+                showToast('ZHS 登录成功', 'success');
+                await loadZhsPanel(false);
+            } else if (status === 'error' || status === 'cancelled' || status === 'expired') {
+                stopZhsLoginPolling();
+                if (status !== 'cancelled') showToast(data?.login?.message || 'ZHS 登录失败', 'error');
+            } else if (zhsLoginPollCount > 320) {
+                stopZhsLoginPolling();
+            }
+        }
+
+        async function startZhsLogin() {
+            try {
+                const res = await apiCall('start_zhs_login', 0);
+                if (res?.snapshot) renderZhsLogin(res.snapshot);
+                if (!res?.ok) { showToast(res?.message || '获取二维码失败', 'error'); return; }
+                showToast('请用智慧树 App 扫描二维码', 'info');
+                stopZhsLoginPolling();
+                zhsLoginTimer = setInterval(() => { pollZhsLoginOnce(); }, 1500);
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '获取二维码失败', 'error');
+            }
+        }
+
+        async function cancelZhsLogin() {
+            stopZhsLoginPolling();
+            try {
+                const res = await apiCall('cancel_zhs_login', 0);
+                if (res?.snapshot) renderZhsLogin(res.snapshot);
+                if (res?.snapshot?.session) renderZhsSession(res.snapshot.session);
+                await loadZhsPanel(false);
+                showToast('已取消扫码登录，并清除本地登录凭证', 'info');
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '取消登录失败', 'error');
+            }
+        }
+
+        async function clearZhsLogin() {
+            stopZhsLoginPolling();
+            try {
+                const res = await apiCall('clear_zhs_login', 0);
+                if (res?.login) renderZhsLogin(res.login);
+                if (res?.session) renderZhsSession(res.session);
+                if (res?.state) applyRuntimeState(unwrapState(res.state));
+                const hint = zhsEl('zhs-login-status');
+                if (hint) { hint.textContent = res?.message || '已清除登录凭证'; hint.style.color = 'var(--text-muted)'; }
+                showToast(res?.message || '已清除登录凭证', res?.removed ? 'success' : 'info');
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '清除登录凭证失败', 'error');
+            }
+        }
+
+        async function fetchZhsCourses() {
+            const msg = zhsEl('zhs-courses-msg');
+            if (msg) msg.textContent = '正在拉取课程…';
+            try {
+                const res = await apiCall('fetch_zhs_courses', 0);
+                if (!res?.ok) {
+                    if (msg) msg.textContent = res?.message || '拉取课程失败';
+                    showToast(res?.message || '拉取课程失败', 'error');
+                    return;
+                }
+                zhsCourses = res.courses || [];
+                renderZhsCourses(zhsCourses);
+                updateZhsCoursesMsg();
+                showToast('已拉取 ' + zhsCourses.length + ' 门课程', 'success');
+            } catch (error) {
+                if (msg) msg.textContent = error.message || '拉取课程失败';
+                if (!error?.silent) showToast(error.message || '拉取课程失败', 'error');
+            }
+        }
+
+        function zhsCourseKeys(courses) {
+            return (courses || []).map((c) => (c && c.key) || '').filter(Boolean);
+        }
+
+        function pruneZhsSelection(courses) {
+            const valid = new Set(zhsCourseKeys(courses));
+            Array.from(zhsSelectedKeys).forEach((key) => { if (!valid.has(key)) zhsSelectedKeys.delete(key); });
+        }
+
+        function updateZhsCoursesMsg() {
+            const msg = zhsEl('zhs-courses-msg');
+            if (!msg) return;
+            const total = (zhsCourses || []).length;
+            if (!total) { msg.textContent = ''; return; }
+            const picked = selectedZhsCourses().length;
+            msg.textContent = picked
+                ? '已拉取 ' + total + ' 门课程，当前勾选 ' + picked + ' 门（同一个 zhs 进程内逐门串行）'
+                : '已拉取 ' + total + ' 门课程，未勾选（将按 auto 模式处理全部课程）';
+        }
+
+        function setZhsCoursesAll(checked) {
+            if (!(zhsCourses || []).length) { showToast('还没有课程，请先点击「拉取课程」', 'warning'); return; }
+            zhsSelectionTouched = true;
+            if (checked) zhsCourseKeys(zhsCourses).forEach((key) => zhsSelectedKeys.add(key));
+            else zhsSelectedKeys.clear();
+            document.querySelectorAll('.zhs-course-check').forEach((el) => { el.checked = !!checked; });
+            updateZhsCoursesMsg();
+        }
+
+        function onZhsCourseToggle(el) {
+            const key = el?.dataset?.key;
+            if (!key) return;
+            zhsSelectionTouched = true;
+            if (el.checked) zhsSelectedKeys.add(key); else zhsSelectedKeys.delete(key);
+            updateZhsCoursesMsg();
+        }
+
+        function renderZhsCourses(courses) {
+            const box = zhsEl('zhs-course-list');
+            if (!box) return;
+            if (!courses || !courses.length) { zhsSelectedKeys.clear(); box.innerHTML = '<div class="empty-tip">还没有课程，请先点击「拉取课程」。</div>'; return; }
+            pruneZhsSelection(courses);
+            // 还没被用户手动改过时，默认勾选第一门；用户改过就完全按集合来（包括全部取消）。
+            if (!zhsSelectionTouched && !zhsSelectedKeys.size) {
+                const first = zhsCourseKeys(courses)[0];
+                if (first) zhsSelectedKeys.add(first);
+            }
+            box.innerHTML = courses.map((c) => {
+                const key = (c && c.key) || '';
+                const checked = zhsSelectedKeys.has(key) ? ' checked' : '';
+                return '<label class="zhs-course-row flex items-center gap-3 text-sm"><input type="checkbox" class="zhs-course-check" data-key="' + escapeHtml(key) + '"' + checked + ' onchange="onZhsCourseToggle(this)"><span>' + escapeHtml(c.label || c.name || key) + '</span></label>';
+            }).join('');
+            updateZhsCoursesMsg();
+        }
+
+        function selectedZhsCourses() {
+            // 勾选框只带 key，这里换回完整课程对象，后端才能拼出精确的 -c 参数；
+            // 找不到时退回 key 字符串，后端仍能解析 "type:courseId:classId"。
+            return Array.from(document.querySelectorAll('.zhs-course-check:checked'))
+                .map(el => el.dataset.key)
+                .filter(Boolean)
+                .map(key => (zhsCourses || []).find(c => c && c.key === key) || key);
+        }
+
+        async function saveZhsSettings() {
+            const status = zhsEl('zhs-save-status');
+            if (status) status.textContent = '保存中…';
+            try {
+                const res = await apiCall('save_zhs_settings', { accountIndex: 0, settings: collectZhsSettings() });
+                if (res?.ok) {
+                    zhsSettingsDirty = false;
+                    if (res.settings) { zhsPanelState = Object.assign({}, zhsPanelState || {}, { settings: res.settings }); renderZhsSettings(res.settings); }
+                    if (status) status.textContent = '已保存';
+                    showToast('ZHS 配置已保存', 'success');
+                } else {
+                    if (status) status.textContent = res?.message || '保存失败';
+                    showToast(res?.message || '保存 ZHS 配置失败', 'error');
+                }
+                return res;
+            } catch (error) {
+                if (status) status.textContent = error.message || '保存失败';
+                if (!error?.silent) showToast(error.message || '保存 ZHS 配置失败', 'error');
+                return { ok: false, message: error?.message || '保存失败' };
+            }
+        }
+
+        function toggleZhsApiKeyVisibility() {
+            const input = zhsEl('z-ai-key');
+            const icon = zhsEl('z-ai-key-icon');
+            if (!input) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                if (icon) icon.className = 'fas fa-eye-slash';
+            } else {
+                input.type = 'password';
+                if (icon) icon.className = 'fas fa-eye';
+            }
+        }
+
+        async function testZhsAIConnectivity() {
+            const btn = zhsEl('z-ai-test-btn');
+            const loading = zhsEl('z-ai-test-loading');
+            const resultDiv = zhsEl('z-ai-test-result');
+            const resultIcon = zhsEl('z-ai-test-result-icon');
+            const resultMsg = zhsEl('z-ai-test-result-message');
+            const apiKey = (zhsEl('z-ai-key')?.value || '').trim();
+            const apiUrl = (zhsEl('z-ai-base-url')?.value || '').trim();
+            const model = (zhsEl('z-ai-model')?.value || '').trim();
+            if (!apiKey) { showToast('请先输入 API Key', 'error'); return; }
+            if (!apiUrl) { showToast('请先填写 Base URL', 'error'); return; }
+            if (btn) btn.disabled = true;
+            if (loading) loading.style.display = 'inline-block';
+            if (resultDiv) resultDiv.style.display = 'none';
+            try {
+                const result = await apiCall('test_ai_connectivity', {
+                    provider: 'OTHER',
+                    api_url: apiUrl,
+                    api_key: apiKey,
+                    model: model,
+                });
+                if (resultDiv) {
+                    resultDiv.style.display = 'block';
+                    if (result?.success) {
+                        resultDiv.style.background = 'rgba(16, 185, 129, 0.1)';
+                        resultDiv.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+                        resultDiv.style.color = 'var(--success)';
+                        if (resultIcon) resultIcon.className = 'fas fa-check-circle';
+                        if (resultMsg) resultMsg.textContent = result.message || '连接成功！';
+                        showToast('AI 连通性测试成功', 'success');
+                    } else {
+                        resultDiv.style.background = 'rgba(239, 68, 68, 0.1)';
+                        resultDiv.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+                        resultDiv.style.color = 'var(--danger)';
+                        if (resultIcon) resultIcon.className = 'fas fa-exclamation-circle';
+                        if (resultMsg) resultMsg.textContent = result?.message || '连接失败，请检查配置';
+                        showToast('AI 连通性测试失败', 'error');
+                    }
+                }
+            } catch (error) {
+                if (resultDiv) {
+                    resultDiv.style.display = 'block';
+                    resultDiv.style.background = 'rgba(239, 68, 68, 0.1)';
+                    resultDiv.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+                    resultDiv.style.color = 'var(--danger)';
+                }
+                if (resultIcon) resultIcon.className = 'fas fa-exclamation-circle';
+                if (resultMsg) resultMsg.textContent = error?.message || '测试过程发生错误';
+                if (!error?.silent) showToast(error.message || '测试过程发生错误', 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+                if (loading) loading.style.display = 'none';
+            }
+        }
+
+        function zhsChatEndpoint(base) {
+            const endpoint = String(base || "").trim().replace(/\/+$/, "");
+            if (!endpoint) return "";
+            if (endpoint.endsWith("/chat/completions")) return endpoint;
+            if (endpoint.endsWith("/models")) return endpoint.slice(0, -"/models".length) + "/chat/completions";
+            return endpoint + "/chat/completions";
+        }
+
+        function renderZhsAiPreview() {
+            const el = zhsEl("z-ai-url-preview");
+            if (!el) return;
+            const endpoint = zhsChatEndpoint(zhsEl("z-ai-base-url")?.value || "");
+            el.textContent = endpoint ? ("预览: " + endpoint) : "预览: 请填写 Base URL（会自动补 /chat/completions）";
+        }
+
+        function guessZhsProvider(baseUrl) {
+            const base = String(baseUrl || "").trim().replace(/\/+$/, "");
+            if (base) {
+                const hit = Object.keys(ZHS_AI_PROVIDERS).find((key) => {
+                    const url = ZHS_AI_PROVIDERS[key].url;
+                    return !!url && url === base;
+                });
+                if (hit) return hit;
+            }
+            return "OTHER";
+        }
+
+        function syncZhsAiProvider() {
+            const select = zhsEl("z-ai-provider");
+            const preset = ZHS_AI_PROVIDERS[select?.value || "OTHER"] || ZHS_AI_PROVIDERS.OTHER;
+            const baseEl = zhsEl("z-ai-base-url");
+            const modelEl = zhsEl("z-ai-model");
+            const knownUrls = Object.keys(ZHS_AI_PROVIDERS).map((key) => ZHS_AI_PROVIDERS[key].url).filter((url) => !!url);
+            const knownModels = Object.keys(ZHS_AI_PROVIDERS).map((key) => ZHS_AI_PROVIDERS[key].model).filter((model) => !!model);
+            if (baseEl) {
+                const current = String(baseEl.value || "").trim();
+                if (!current || knownUrls.includes(current)) {
+                    baseEl.value = preset.url || "";
+                }
+            }
+            if (modelEl) {
+                const currentModel = String(modelEl.value || "").trim();
+                if (preset.model && (!currentModel || knownModels.includes(currentModel))) {
+                    modelEl.value = preset.model;
+                }
+            }
+            renderZhsAiPreview();
+        }
+
+        function onZhsBaseUrlInput() {
+            const select = zhsEl("z-ai-provider");
+            const baseEl = zhsEl("z-ai-base-url");
+            if (select && baseEl) select.value = guessZhsProvider(baseEl.value);
+            renderZhsAiPreview();
+        }
+
+        async function fetchZhsModelList() {
+            const btn = zhsEl("z-fetch-models-btn");
+            const loading = zhsEl("z-fetch-models-loading");
+            const icon = zhsEl("z-fetch-models-icon");
+            const datalist = zhsEl("z-model-list");
+            const input = zhsEl("z-ai-model");
+            const apiKey = (zhsEl("z-ai-key")?.value || "").trim();
+            const apiUrl = (zhsEl("z-ai-base-url")?.value || "").trim();
+            if (!apiKey) { showToast("请先输入 API Key", "error"); return; }
+            if (!apiUrl) { showToast("请先填写 Base URL", "error"); return; }
+            if (btn) btn.disabled = true;
+            if (icon) icon.style.display = "none";
+            if (loading) loading.style.display = "inline-block";
+            try {
+                const result = await apiCall("fetch_model_list", { provider: "OTHER", api_url: apiUrl, api_key: apiKey });
+                if (result?.success && Array.isArray(result.models) && result.models.length) {
+                    if (datalist) {
+                        datalist.innerHTML = "";
+                        result.models.forEach((model) => {
+                            const option = document.createElement("option");
+                            option.value = model.id || model;
+                            option.textContent = model.name || model.id || model;
+                            datalist.appendChild(option);
+                        });
+                    }
+                    if (input && !String(input.value || "").trim() && result.models.length) {
+                        const first = result.models[0];
+                        input.value = first.id || first;
+                    }
+                    showToast("成功获取 " + result.models.length + " 个模型", "success");
+                } else {
+                    showToast(result?.message || "获取模型列表失败", "error");
+                }
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || "获取模型列表时发生错误", "error");
+            } finally {
+                if (btn) btn.disabled = false;
+                if (icon) icon.style.display = "inline-block";
+                if (loading) loading.style.display = "none";
+            }
+        }
+
+        function showZhsExamModal() {
+            const modal = zhsEl('zhs-exam-modal');
+            if (modal) modal.classList.add('active');
+        }
+
+        function hideZhsExamModal() {
+            const modal = zhsEl('zhs-exam-modal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        function confirmZhsExam() {
+            hideZhsExamModal();
+            runZhsTask('exam');
+        }
+
+        async function startZhsTask(action) {
+            if (action === 'exam') { showZhsExamModal(); return; }
+            await runZhsTask(action);
+        }
+
+        async function runZhsTask(action) {
+            const courses = selectedZhsCourses();
+            const saved = await saveZhsSettings();
+            if (saved && saved.ok === false) return;
+            try {
+                const res = await apiCall('start_zhs', { action: action, courses: courses, submitExam: false });
+                if (res?.ok) showToast(res.message || ('ZHS 任务已启动' + (courses.length > 1 ? '（共 ' + courses.length + ' 门课，逐门串行）' : '')), 'success');
+                else showToast(res?.message || 'ZHS 启动失败', 'error');
+                if (res?.state) applyRuntimeState(unwrapState(res.state));
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || 'ZHS 启动失败', 'error');
+            }
+        }
+
+        async function stopZhsTask() {
+            try {
+                const res = await apiCall('stop_zhs');
+                if (res?.state) applyRuntimeState(unwrapState(res.state));
+                showToast(res?.message || 'ZHS 已停止', res?.ok === false ? 'error' : 'success');
+            } catch (error) {
+                if (!error?.silent) showToast(error.message || '停止 ZHS 失败', 'error');
+            }
         }

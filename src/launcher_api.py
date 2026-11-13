@@ -103,5 +103,47 @@ class WebLauncherAPI:
             account_index,
         )
 
+    def get_zhs_state(self, account_index=0):
+        return self._launcher.get_zhs_state_from_web(account_index)
+
+    def save_zhs_settings(self, payload):
+        return self._launcher.save_zhs_settings_from_web(payload)
+
+    def start_zhs_login(self, account_index=0):
+        return self._launcher.start_zhs_login_from_web(account_index)
+
+    def cancel_zhs_login(self, account_index=0):
+        return self._launcher.cancel_zhs_login_from_web(account_index)
+
+    def refresh_zhs_session(self, account_index=0):
+        return self._launcher.refresh_zhs_session_from_web(account_index)
+
+    def clear_zhs_login(self, account_index=0):
+        return self._launcher.clear_zhs_login_from_web(account_index)
+
+    def get_zhs_login_state(self, account_index=0):
+        return self._launcher.get_zhs_login_state_from_web(account_index)
+
+    def fetch_zhs_courses(self, account_index=0):
+        return self._launcher.fetch_zhs_courses_from_web(account_index)
+
+    def start_zhs(self, payload=None):
+        return self._launcher.start_zhs_from_web(payload)
+
+    def stop_zhs(self):
+        return self._launcher.stop_zhs_from_web()
+
+    def open_zhs_course_page(self, url=''):
+        return self._launcher.open_zhs_course_page_from_web(url)
+
+    def show_zhs_update_dialog(self):
+        return self._launcher.show_zhs_update_dialog()
+
+    def install_zhs_update(self, payload=None):
+        release_info = None
+        if isinstance(payload, dict):
+            release_info = payload.get('releaseInfo')
+        return self._launcher.install_zhs_update_async(release_info)
+
     def start_course(self, payload):
         return self._launcher.start_course_from_web(payload)

@@ -151,6 +151,17 @@ class CoreLaunchService:
             )
             return "failed", None
 
+        captcha_ready, captcha_error = launcher._ensure_autovisor_captcha_runtime(
+            python_executable
+        )
+        if not captcha_ready:
+            launcher.log_system(
+                f"警告: Autovisor 人机验证依赖不可用（{captcha_error or '未知原因'}）"
+            )
+            launcher.log_system(
+                "登录时如遇滑块验证，请在浏览器窗口中手动拖动完成，或改用扫码登录。"
+            )
+
         missing_dependencies = launcher._check_autovisor_dependencies(
             python_executable
         )
@@ -447,21 +458,106 @@ class CoreLaunchService:
             "--course-url",
             course_url,
         ]
-        try:
-            return launcher._get_runtime_process_service().start(
-                core="autovisor",
-                label="Autovisor",
-                command=command,
-                cwd=launcher.autovisor_path,
-                encodings=launcher._build_encoding_candidates(
-                    locale.getpreferredencoding(False),
-                    "utf-8",
-                    "gb18030",
-                    "gbk",
-                ),
-                before_launch=self.prepare_autovisor_question_bank,
-                env_factory=self.build_autovisor_runtime_env,
+
+    @staticmethod
+    def _describe_zhs_courses(courses) -> str:
+        """把勾选的课程拼成一行可读说明，写进控制台日志。"""
+        names = []
+        for item in courses or ():
+            if isinstance(item, dict):
+                name = item.get("label") or item.get("name") or item.get("key") or ""
+            else:
+                name = item
+            name = str(name or "").strip()
+            if name:
+                names.append(name)
+        if not names:
+            return ""
+        if len(names) == 1:
+            return names[0]
+        return "共 %d 门（按勾选顺序逐门串行）：%s" % (len(names), "、".join(names))
+
+    def start_zhs(
+        self,
+        *,
+        action: str = "play",
+        courses=None,
+        submit_exam: bool = False,
+        url: str | None = None,
+    ) -> bool:
+        """启动 ZHS 任务（刷课 / 作业 / 考试）。
+
+        url 用于「验证码救援」：直接用课程学习页地址重跑那一门课。
+        """
+        launcher = self.launcher
+        if launcher.running.get("zhs") or launcher.starting.get("zhs"):
+            launcher.log_system("ZHS 已经在运行或启动中")
+            return True
+
+        service = launcher._get_zhs_service()
+        env = service.environment_state(refresh=True)
+        if not env.get("ready"):
+            message = env.get("message") or "ZHS 运行环境不可用"
+            return launcher._reject_runtime_start(
+                "zhs", message, failure_kind="dependency",
             )
-        except Exception:
-            launcher._release_course_run_overlay("autovisor")
-            raise
+
+        session = service.session_state(verify=True)
+        if not session.get("logged_in"):
+            message = (
+                session.get("message")
+                or "ZHS 账号尚未登录，请先在 ZHS 页面扫码登录"
+            )
+            return launcher._reject_runtime_start(
+                "zhs", message, failure_kind="configuration",
+            )
+
+        try:
+            args = service.build_command(
+                action, courses, submit_exam=submit_exam, url=url,
+            )
+        except ValueError as exc:
+            return launcher._reject_runtime_start(
+                "zhs", str(exc), failure_kind="configuration",
+            )
+
+        service.ensure_account_dirs()
+        if not launcher._claim_runtime_start("zhs"):
+            if launcher._last_start_failure_kind.get("zhs") == "system":
+                return False
+            launcher.log_system("ZHS 已经在运行或启动中")
+            return True
+
+        if url:
+            # 新的重跑会重新观察验证码日志，先把上一次的提示清掉
+            launcher._zhs_captcha_hint = None
+        # 新一轮任务：清掉上一轮的失败标记和课程名缓存
+        launcher._zhs_run_had_failure = False
+        formatter = getattr(launcher, "_zhs_log_formatter", None)
+        if formatter is not None:
+            formatter.reset()
+
+        labels = {"play": "开始刷课", "homework": "开始写作业", "exam": "开始考试"}
+        label = labels.get(action, action)
+        if url:
+            label = "重新刷这一门"
+        launcher.log_system("正在启动 ZHS（" + label + "）...")
+        launcher.log("zhs", "正在启动 ZHS（" + label + "）...")
+        summary = self._describe_zhs_courses(courses)
+        if summary:
+            launcher.log_system("本次课程：" + summary)
+            launcher.log("zhs", "本次课程：" + summary)
+        elif url:
+            launcher.log_system("按课程链接重跑：" + str(url))
+            launcher.log("zhs", "按课程链接重跑：" + str(url))
+        command = [str(service.venv_python())] + list(args)
+        launcher.log_system("执行命令: " + " ".join(command))
+        return launcher._get_runtime_process_service().start(
+            core="zhs",
+            label="ZHS",
+            command=command,
+            cwd=str(service.account_dir()),
+            encodings=launcher._build_encoding_candidates(
+                "utf-8", "gb18030", "gbk", "cp936",
+            ),
+        )

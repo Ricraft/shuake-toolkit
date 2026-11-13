@@ -222,7 +222,8 @@ async def login_to_zhihuishu(
             logger.error("未检测到智慧树登录面板，且未跳转到课程门户，已停止登录.")
             return False
 
-        has_credentials = bool(config.username and config.password)
+        login_mode = getattr(config, "login_mode", "password")
+        has_credentials = bool(config.username and config.password) and login_mode != "qr"
         if has_credentials:
             await page.wait_for_selector(
                 USERNAME_INPUT,
@@ -258,7 +259,10 @@ async def login_to_zhihuishu(
             logger.info("登录信息已提交,等待登录结果...")
         else:
             wait_timeout = MANUAL_LOGIN_TIMEOUT_MS
-            logger.info("等待手动完成登录...")
+            if login_mode == "qr":
+                logger.info("扫码登录模式：请在浏览器窗口中切换到扫码并完成登录...")
+            else:
+                logger.info("等待手动完成登录...")
 
         await wait_for_login_completion(page, wait_timeout)
         cookies = await context.cookies()

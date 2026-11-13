@@ -1160,6 +1160,34 @@ class WebOnlyLauncherTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{element_id}"', page)
 
+    def test_log_history_replaces_in_place_progress_frames(self):
+        from src.process_supervisor import is_progress_log
+
+        class _LogHistoryLauncher:
+            _append_log_history = UnifiedLauncher._append_log_history
+            _is_progress_log = staticmethod(is_progress_log)
+
+            def __init__(self):
+                self.log_history = {"zhs": []}
+
+        launcher = _LogHistoryLauncher()
+        launcher._append_log_history(
+            "zhs", "[19:00:01] playing 1 [###    ] 32.7%", replace_last=True
+        )
+        launcher._append_log_history(
+            "zhs", "[19:00:02] playing 1 [####   ] 33.2%", replace_last=True
+        )
+        launcher._append_log_history("zhs", "[19:00:03] 登录状态有效")
+        launcher._append_log_history(
+            "zhs", "[19:00:04] playing 1 [#####  ] 33.9%", replace_last=True
+        )
+
+        history = launcher.log_history["zhs"]
+        self.assertEqual(len(history), 3)
+        self.assertIn("33.2%", history[0])
+        self.assertEqual(history[1], "[19:00:03] 登录状态有效")
+        self.assertIn("33.9%", history[2])
+
     def test_ai_helpers_do_not_report_transport_failures_as_ok(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
         launcher.log_system = lambda _message: None
