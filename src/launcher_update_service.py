@@ -4,10 +4,12 @@
 设计要点（对应自更新可行性分析的结论）：
 
 * 运行中的启动器**绝不覆盖自己**。本模块只下载、校验并把新版本解压到
-  ``<base>/.update-staging/<version>/``，随后生成一个进程外的 ``应用更新.cmd``，
-  由用户在退出启动器之后自行运行。
+  ``<base>/.update-staging/<version>/``，随后生成一个进程外的 ``应用更新.cmd``。
+  启动器在下载完成后自动启动该脚本并退出；脚本等待旧进程退出、备份、替换，
+  再准备 ZHS 运行环境并重新启动启动器（与核心更新"替换后立即生效"的体验一致）。
 * 替换白名单与 ``scripts/build_launcher_release.py`` 的发布契约保持一致：
-  ``统一启动器.py`` / ``requirements.txt`` / ``src`` / ``web``。``Yatori/``、
+  ``统一启动器.py`` / ``requirements.txt`` / ``bootstrap.py`` /
+  ``requirements-zhs.txt`` / ``src`` / ``web`` / ``zhs``。``Yatori/``、
   ``Autovisor/``、``data/``、``logs/`` 与所有用户配置文件都不在替换范围内。
 * 校验优先使用 GitHub Release 资产的 ``digest``（``sha256:<hex>``），缺失时回退
   下载 ``launcher-manifest.json`` 取 ``sha256`` + ``size`` 双重校验；两者都拿不到
@@ -27,12 +29,14 @@ import re
 import secrets
 import shutil
 import ssl
+import sys
 import threading
 import urllib.error
 import urllib.request
 import zipfile
 from datetime import datetime
 from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
 
 try:
@@ -60,7 +64,17 @@ LAUNCHER_ASSET_SUFFIX = ".zip"
 LAUNCHER_MANIFEST_NAME = "launcher-manifest.json"
 
 # 与 scripts/build_launcher_release.py 的 WHITELIST / manifest.replaceWhitelist 一致。
-REPLACE_WHITELIST = ("统一启动器.py", "requirements.txt", "src", "web")
+# bootstrap.py / requirements-zhs.txt / zhs 随启动器一起更新：更新脚本替换完成后调用
+# bootstrap.py --prepare-zhs，避免"更新完成但点击 ZHS 核心提示环境缺失"。
+REPLACE_WHITELIST = (
+    "统一启动器.py",
+    "requirements.txt",
+    "bootstrap.py",
+    "requirements-zhs.txt",
+    "src",
+    "web",
+    "zhs",
+)
 
 # 永不参与替换；仅用于生成脚本中的说明文字与回归断言。
 PRESERVED_PATHS = (
@@ -82,9 +96,13 @@ APPLY_SCRIPT_NAME = "应用更新.cmd"
 # 本来就存在，缺少它的残缺包会静默退化成新 app.js + 旧 HTML 的混合安装。
 REQUIRED_STAGED_FILES = (
     "统一启动器.py",
+    "requirements.txt",
+    "bootstrap.py",
+    "requirements-zhs.txt",
     os.path.join("src", "web_action_service.py"),
     os.path.join("web", "app.js"),
     os.path.join("web", "现代启动器_UI_预览.html"),
+    os.path.join("zhs", "pyproject.toml"),
 )
 
 USER_AGENT = "shuake-toolkit-launcher-updater/1.0"
@@ -318,6 +336,8 @@ def build_apply_script(
     launcher_pid=0,
     payload_dir_name=None,
     required_files=None,
+    launcher_python=None,
+    auto_restart=False,
 ):
     """Build the out-of-process apply script (CRLF, UTF-8).
 
@@ -330,6 +350,11 @@ def build_apply_script(
     passes the release manifest's full file list so the script verifies every
     file it was supposed to install, not just a few key ones. A package that
     omits any of them is rolled back instead of silently leaving old files.
+
+    launcher_python / auto_restart switch the script into auto-apply mode:
+    after replacing files it prepares the ZHS runtime and relaunches the
+    launcher itself, so the user no longer has to quit and run the script by
+    hand. Manual mode (the defaults) still ends with pause and exit code.
     """
     payload_name = payload_dir_name or safe_version_dirname(version)
     try:
@@ -337,6 +362,23 @@ def build_apply_script(
     except (TypeError, ValueError):
         pid_text = "0"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    python_text = str(launcher_python or "").strip()
+    # 重启时优先用同目录的 pythonw.exe，避免更新后多弹一个控制台窗口；
+    # 准备 ZHS 环境必须用控制台解释器，pythonw.exe 没有 stdout 会丢日志。
+    prepare_python_text = python_text
+    restart_python_text = python_text
+    if python_text:
+        interpreter = Path(python_text)
+        name = interpreter.name.lower()
+        if name == "pythonw.exe":
+            console_python = interpreter.with_name("python.exe")
+            if console_python.is_file():
+                prepare_python_text = str(console_python)
+        elif name == "python.exe":
+            windowless = interpreter.with_name("pythonw.exe")
+            if windowless.is_file():
+                restart_python_text = str(windowless)
+    restart_flag = "1" if auto_restart else "0"
 
     inventory = [
         str(entry).strip().replace("/", "\\")
@@ -351,7 +393,7 @@ def build_apply_script(
         "rem ==============================================================",
         "rem  统一启动器更新脚本",
         f"rem  版本: {current_version} 到 {version}",
-        "rem  替换白名单: 统一启动器.py requirements.txt src web",
+        f"rem  替换白名单: {' '.join(REPLACE_WHITELIST)}",
         "rem  Yatori Autovisor data logs 与全部用户配置文件不会被修改",
         "rem  先备份到 .update-backup，替换后逐字节校验，失败自动回滚",
         "rem ==============================================================",
@@ -362,6 +404,9 @@ def build_apply_script(
         f'set "VERSION={version}"',
         f'set "CURRENT={current_version}"',
         f'set "LAUNCHER_PID={pid_text}"',
+        f'set "AUTO_RESTART={restart_flag}"',
+        f'set "PYTHON={restart_python_text}"',
+        f'set "PREPARE_PYTHON={prepare_python_text}"',
         'set "FAILED=0"',
         "",
         "echo.",
@@ -398,6 +443,10 @@ def build_apply_script(
         'if errorlevel 8 set "FAILED=1"',
         'if exist "%ROOT%\\统一启动器.py" copy /Y "%ROOT%\\统一启动器.py" "%BACKUP%\\统一启动器.py" >nul',
         'if exist "%ROOT%\\requirements.txt" copy /Y "%ROOT%\\requirements.txt" "%BACKUP%\\requirements.txt" >nul',
+        'if exist "%ROOT%\\bootstrap.py" copy /Y "%ROOT%\\bootstrap.py" "%BACKUP%\\bootstrap.py" >nul',
+        'if exist "%ROOT%\\requirements-zhs.txt" copy /Y "%ROOT%\\requirements-zhs.txt" "%BACKUP%\\requirements-zhs.txt" >nul',
+        'if exist "%ROOT%\\zhs" robocopy "%ROOT%\\zhs" "%BACKUP%\\zhs" /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
+        'if errorlevel 8 set "FAILED=1"',
         'if "%FAILED%"=="1" (',
         "    echo [错误] 备份失败，已中止更新，未修改任何文件。",
         "    goto fail",
@@ -411,6 +460,12 @@ def build_apply_script(
         'copy /Y "%PAYLOAD%\\统一启动器.py" "%ROOT%\\统一启动器.py" >nul',
         'if errorlevel 1 set "FAILED=1"',
         'if exist "%PAYLOAD%\\requirements.txt" copy /Y "%PAYLOAD%\\requirements.txt" "%ROOT%\\requirements.txt" >nul',
+        'if exist "%PAYLOAD%\\bootstrap.py" copy /Y "%PAYLOAD%\\bootstrap.py" "%ROOT%\\bootstrap.py" >nul',
+        'if errorlevel 1 set "FAILED=1"',
+        'if exist "%PAYLOAD%\\requirements-zhs.txt" copy /Y "%PAYLOAD%\\requirements-zhs.txt" "%ROOT%\\requirements-zhs.txt" >nul',
+        'if errorlevel 1 set "FAILED=1"',
+        'if exist "%PAYLOAD%\\zhs" robocopy "%PAYLOAD%\\zhs" "%ROOT%\\zhs" /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
+        'if errorlevel 8 set "FAILED=1"',
         "",
         "rem ---- 逐一校验清单文件是否落地，缺失即回滚 ----",
     ]
@@ -420,13 +475,32 @@ def build_apply_script(
     for rel in inventory:
         lines.append(f'fc /b "%PAYLOAD%\\{rel}" "%ROOT%\\{rel}" >nul 2>nul')
         lines.append('if errorlevel 1 set "FAILED=1"')
+    restart_block = []
+    if auto_restart:
+        restart_block = [
+            "rem ---- 自动重启启动器（旧进程已在本脚本等待阶段退出）----",
+            "if defined PYTHON (",
+            "    echo 正在重启统一启动器...",
+            '    start "" "%PYTHON%" "%ROOT%\\统一启动器.py"',
+            ")",
+            "",
+        ]
     lines += [
         'if "%FAILED%"=="1" goto rollback',
         "",
+        "rem ---- 更新后立即准备 ZHS 运行环境，避免首次点击核心时才报环境缺失 ----",
+        'if exist "%ROOT%\\bootstrap.py" if defined PREPARE_PYTHON (',
+        "    echo 正在准备 ZHS 运行环境（首次可能需要几分钟）...",
+        '    "%PREPARE_PYTHON%" "%ROOT%\\bootstrap.py" --prepare-zhs --quiet',
+        "    if errorlevel 1 echo [警告] ZHS 运行环境准备未完成，可稍后在 ZHS 页面重新准备。",
+        ")",
+        "",
+        *restart_block,
         'echo [完成] 统一启动器已更新到 "%VERSION%"。',
         'echo         旧版本备份: "%BACKUP%"',
-        'echo         暂存目录可在确认更新成功后删除: "%PAYLOAD%"',
-        "echo         重新启动: 双击 启动器.exe 或运行 hide_run.vbs",
+        'if not "%AUTO_RESTART%"=="1" echo         暂存目录可在确认更新成功后删除: "%PAYLOAD%"',
+        'if not "%AUTO_RESTART%"=="1" echo         重新启动: 双击 启动器.exe 或运行 hide_run.vbs',
+        'if "%AUTO_RESTART%"=="1" goto done_auto',
         "goto done",
         "",
         ":rollback",
@@ -435,6 +509,9 @@ def build_apply_script(
         'if exist "%BACKUP%\\web" robocopy "%BACKUP%\\web" "%ROOT%\\web" /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
         'if exist "%BACKUP%\\统一启动器.py" copy /Y "%BACKUP%\\统一启动器.py" "%ROOT%\\统一启动器.py" >nul',
         'if exist "%BACKUP%\\requirements.txt" copy /Y "%BACKUP%\\requirements.txt" "%ROOT%\\requirements.txt" >nul',
+        'if exist "%BACKUP%\\bootstrap.py" copy /Y "%BACKUP%\\bootstrap.py" "%ROOT%\\bootstrap.py" >nul',
+        'if exist "%BACKUP%\\requirements-zhs.txt" copy /Y "%BACKUP%\\requirements-zhs.txt" "%ROOT%\\requirements-zhs.txt" >nul',
+        'if exist "%BACKUP%\\zhs" robocopy "%BACKUP%\\zhs" "%ROOT%\\zhs" /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
         'echo [已回滚] 统一启动器仍为更新前版本 "%CURRENT%"。',
         "goto fail",
         "",
@@ -448,6 +525,11 @@ def build_apply_script(
         ":done",
         "echo.",
         "pause",
+        "endlocal",
+        "exit /b 0",
+        "",
+        ":done_auto",
+        "echo.",
         "endlocal",
         "exit /b 0",
     ]
@@ -1265,12 +1347,14 @@ class LauncherUpdateService:
                 launcher_pid=self.pid,
                 payload_dir_name=payload_name,
                 required_files=expected_files,
+                launcher_python=sys.executable,
+                auto_restart=True,
             ),
         )
 
         message = (
-            f"统一启动器 {version} 已下载并校验完成：请退出启动器后运行 "
-            f"{script_path} 应用更新（脚本会先备份，失败时自动回滚）。"
+            f"统一启动器 {version} 已下载并校验完成：启动器将自动退出、"
+            "应用更新并重启（脚本会先备份，失败时自动回滚）。"
         )
         self._log(f"✅ {message}")
         return {
@@ -1282,10 +1366,10 @@ class LauncherUpdateService:
             "archivePath": archive_path,
             "scriptPath": script_path,
             "scriptName": APPLY_SCRIPT_NAME,
+            "autoApply": True,
             "message": message,
             "toast": (
-                f"更新 {version} 已准备就绪，退出启动器后运行"
-                f"「{APPLY_SCRIPT_NAME}」生效"
+                f"更新 {version} 已下载完成，启动器将自动应用更新并重启"
             ),
             "toastType": "success",
         }

@@ -1503,6 +1503,13 @@
                         </div>
                         <div class="flex flex-col" id="changelog-list">
                             <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.7.1 - 启动器自更新自动应用与 ZHS 环境准备</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">启动器自更新改为下载校验后自动应用并重启：更新脚本等待旧进程退出、备份并替换 统一启动器.py / requirements.txt / bootstrap.py / requirements-zhs.txt / src / web / zhs，随后运行 bootstrap.py --prepare-zhs 准备 .runtime/venv-zhs，再自动拉起启动器，任一步失败自动回滚；核心任务运行中则推迟到退出启动器时应用。自更新包与完整包内容保持一致，不再需要手动运行「应用更新.cmd」。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
                                 <span class="changelog-badge feature">新增</span>
                                 <div>
                                     <div class="text-sm font-semibold">v1.7.0 - 智慧树 ZHS 第三核心</div>
@@ -1925,7 +1932,7 @@
         <div class="modal-box update-modal-box">
             <div class="modal-icon accent"><i class="fas fa-rotate"></i></div>
             <div class="modal-title">发现统一启动器可用更新</div>
-            <div class="modal-desc" id="launcher-update-summary">请确认是否下载并暂存统一启动器新版本。</div>
+            <div class="modal-desc" id="launcher-update-summary">确认后将自动下载并应用统一启动器新版本，完成后自动重启；失败会自动回滚。</div>
             <div class="update-version-grid">
                 <div>
                     <span>当前版本</span>

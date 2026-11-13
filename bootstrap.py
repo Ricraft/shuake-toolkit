@@ -1034,11 +1034,52 @@ def run_checks(*, logger: Any = None) -> int:
     return 1 if failed else 0
 
 
+def prepare_zhs_runtime(
+    *,
+    venv_dir: str | os.PathLike[str] | None = None,
+    logger: Any = None,
+) -> int:
+    """Prepare only the ZHS virtual environment (--prepare-zhs).
+
+    Used by the launcher self-update script after replacing zhs/ and
+    requirements-zhs.txt so the updated launcher can start the ZHS core
+    right away instead of reporting a missing runtime.  Returns 0 on
+    success and 1 when no suitable Python 3.13/3.14 exists or the
+    dependency installation fails.
+    """
+    zhs_python = find_zhs_python(preferred=sys.executable, logger=logger)
+    if not zhs_python:
+        _emit(
+            logger,
+            "未找到 Python 3.13/3.14，无法准备 ZHS 运行环境；"
+            "请安装 Python 3.13 后重试。",
+            "error",
+        )
+        return 1
+    try:
+        ensure_zhs_runtime(
+            zhs_python,
+            venv_dir=venv_dir,
+            mirrors=ranked_pypi_mirrors(logger=logger),
+            logger=logger,
+        )
+    except Exception as exc:
+        _emit(logger, f"ZHS 核心环境准备失败：{exc}", "error")
+        return 1
+    _emit(logger, "ZHS 运行环境已就绪")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="刷课工具包一键依赖引导")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--install", action="store_true", help="安装依赖并启动（默认入口使用）")
     mode.add_argument("--check", action="store_true", help="只检查，不安装、不启动")
+    mode.add_argument(
+        "--prepare-zhs",
+        action="store_true",
+        help="只准备 ZHS 运行环境（.runtime/venv-zhs），不安装其他依赖、不启动启动器",
+    )
     parser.add_argument("--no-launch", action="store_true", help="准备完成后不启动启动器")
     parser.add_argument("--skip-yatori", action="store_true", help="跳过 Yatori 核心准备")
     parser.add_argument("--require-yatori", action="store_true", help="Yatori 准备失败时中止")
@@ -1103,6 +1144,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.check:
             return run_checks(logger=logger)
+        if args.prepare_zhs:
+            return prepare_zhs_runtime(
+                venv_dir=args.zhs_venv_dir,
+                logger=logger,
+            )
         if not args.install:
             build_parser().print_help()
             return 0

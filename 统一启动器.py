@@ -103,7 +103,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.7.0"
+    LAUNCHER_VERSION = "v1.7.1"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -1709,17 +1709,59 @@ class UnifiedLauncher:
     # ==================== 统一启动器自身更新 ====================
 
     def _handle_launcher_update_result(self, result):
-        message = str((result or {}).get("message") or "").strip()
-        if (result or {}).get("ok"):
-            self._show_info(
-                "统一启动器更新",
-                message or "统一启动器更新已就绪",
-            )
-        else:
+        result = dict(result or {})
+        message = str(result.get("message") or "").strip()
+        if not result.get("ok"):
             self._show_error(
                 "统一启动器更新",
                 message or "统一启动器更新失败",
             )
+            return
+        self.log_system(message or "统一启动器更新已就绪")
+        if result.get("autoApply") and result.get("scriptPath"):
+            # 与核心更新保持一致：下载校验完成后立即应用并重启，而不是让用户
+            # 手动退出、再手动运行「应用更新.cmd」。有核心任务在跑时等到退出。
+            self._pending_launcher_update = result
+            if self._launcher_update_cores_running():
+                self.log_system("当前有核心任务在运行：更新将在退出启动器时自动应用并重启。")
+                return
+            self._apply_launcher_update_and_exit()
+            return
+        self._show_info("统一启动器更新", message or "统一启动器更新已就绪")
+
+    def _launcher_update_cores_running(self):
+        return any(
+            self.running.get(name) or self.starting.get(name)
+            for name in ('yatori', 'autovisor', 'practice', 'zhs')
+        )
+
+    def _spawn_pending_launcher_update(self):
+        pending = getattr(self, '_pending_launcher_update', None)
+        if not pending:
+            return False
+        script_path = str(pending.get("scriptPath") or "").strip()
+        self._pending_launcher_update = None
+        if not script_path or not os.path.exists(script_path):
+            self.log_system("未找到更新脚本，已取消自动应用。")
+            return False
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        try:
+            subprocess.Popen(
+                [comspec, "/d", "/s", "/c", '""' + script_path + '""'],
+                cwd=os.path.dirname(script_path),
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            )
+        except Exception as exc:
+            self.log_system(f"启动更新脚本失败: {exc}")
+            return False
+        self.log_system("已启动更新脚本，启动器即将退出，更新完成后会自动重启。")
+        return True
+
+    def _apply_launcher_update_and_exit(self):
+        if not self._spawn_pending_launcher_update():
+            return False
+        self._after(500, lambda: self.on_closing(confirmed=True))
+        return True
 
     def _get_launcher_update_service(self):
         service = getattr(self, "_launcher_update_service", None)
@@ -1770,6 +1812,9 @@ class UnifiedLauncher:
             if course_service is not None:
                 course_service.stop_active_fetch()
         self.stop_question_bank()
+        # 有核心任务运行时会推迟到这里：退出前启动更新脚本，由脚本接管重启。
+        if getattr(self, '_pending_launcher_update', None):
+            self._spawn_pending_launcher_update()
         self._close_main_window()
 
 

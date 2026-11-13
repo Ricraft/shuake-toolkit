@@ -11,6 +11,12 @@ cores (``Yatori/``), the locally patched core (``Autovisor/``), user data
 (``data/``, ``logs/``) and the bootstrapper ``启动器.exe`` are never packaged:
 a self-update replaces files from a whitelist, and shipping anything else would
 risk clobbering user data or an executable that is locked while running.
+
+``zhs/`` and ``requirements-zhs.txt`` ARE packaged: the launcher update script
+updates them together with the launcher and then prepares the ZHS virtual
+environment, so a self-updated installation can start the ZHS core without a
+manual ``bootstrap.py --install`` run. The user's ``zhs/config.toml`` (API keys,
+cookies) is never packaged.
 """
 
 from __future__ import annotations
@@ -27,18 +33,25 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Paths (relative to the project root) that are part of a launcher update.
+# bootstrap.py / requirements-zhs.txt / zhs 随启动器一起更新：应用更新脚本在替换后
+# 会调用 bootstrap.py --prepare-zhs，避免更新后点击 ZHS 核心提示环境缺失。
 WHITELIST = (
     "统一启动器.py",
     "requirements.txt",
+    "bootstrap.py",
+    "requirements-zhs.txt",
     "src",
     "web",
+    "zhs",
 )
 
 # Never packaged, even when they live under a whitelisted directory.
-EXCLUDED_DIR_NAMES = {"__pycache__", ".pytest_cache", "node_modules", ".git", "data", "logs", "log", "output", "uploads", "attachments", "screenshots", ".dsh"}
+EXCLUDED_DIR_NAMES = {"__pycache__", ".pytest_cache", "node_modules", ".git", ".venv", "data", "logs", "log", "output", "uploads", "attachments", "screenshots", ".dsh"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 PRIVATE_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".log", ".bak", ".secret"}
 PRIVATE_NAMES = {"config.yaml", "configs.ini", "qb_config.json", "launcher_preferences.json", "cookies.json"}
+# 用户自己的 ZHS 账号配置（API Key / cookies）绝不进更新包。
+EXCLUDED_RELATIVE_PATHS = {"zhs/config.toml", "zhs/.venv"}
 
 
 def is_private_payload(relative: str) -> bool:
@@ -46,7 +59,9 @@ def is_private_payload(relative: str) -> bool:
     relative = Path(relative).as_posix()
     name = Path(relative).name.lower()
     return (
-        name in PRIVATE_NAMES
+        relative in EXCLUDED_RELATIVE_PATHS
+        or any(relative.startswith(path + "/") for path in EXCLUDED_RELATIVE_PATHS)
+        or name in PRIVATE_NAMES
         or (name.startswith("cookies_") and name.endswith(".json"))
         or name == ".env" or name.startswith(".env.")
         or Path(name).suffix in PRIVATE_SUFFIXES
@@ -60,9 +75,14 @@ VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
 REQUIRED_FILES = (
     "统一启动器.py",
     "requirements.txt",
+    "bootstrap.py",
+    "requirements-zhs.txt",
     "src/web_action_service.py",
+    "src/zhs_service.py",
     "web/app.js",
     "web/现代启动器_UI_预览.html",
+    "zhs/pyproject.toml",
+    "zhs/UPSTREAM.json",
 )
 LAUNCHER_VERSION_RE = re.compile(r'LAUNCHER_VERSION\s*=\s*"([^"]+)"')
 

@@ -72,17 +72,23 @@ class PayloadTests(unittest.TestCase):
             root = Path(folder)
             (root / "统一启动器.py").write_text("launcher", encoding="utf-8")
             (root / "requirements.txt").write_text("deps", encoding="utf-8")
+            (root / "bootstrap.py").write_text("bootstrap", encoding="utf-8")
+            (root / "requirements-zhs.txt").write_text("zhs", encoding="utf-8")
             for relative in (
                 "src/preferences.py", "src/config.yaml", "src/.env.local",
                 "src/data/personal.txt", "web/app.js", "web/cookies_abc.json",
                 "web/uploads/private.txt", "web/launcher_preferences.json",
+                "zhs/pyproject.toml", "zhs/config.toml", "zhs/.venv/pyvenv.cfg",
+                "zhs/src/zhs/__init__.py",
             ):
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture", encoding="utf-8")
             entries = {name for _, name in builder.iter_payload(root)}
             self.assertEqual(entries, {
-                "统一启动器.py", "requirements.txt", "src/preferences.py", "web/app.js"
+                "统一启动器.py", "requirements.txt", "bootstrap.py",
+                "requirements-zhs.txt", "src/preferences.py", "web/app.js",
+                "zhs/pyproject.toml", "zhs/src/zhs/__init__.py",
             })
 
     def test_payload_skips_caches(self):
@@ -128,6 +134,7 @@ class BuildTests(unittest.TestCase):
                 for name in top_level
                 if (PROJECT_ROOT / name).is_file()
                 and (PROJECT_ROOT / name).suffix == ".py"
+                and any(ord(ch) > 127 for ch in name)
             ]
             self.assertTrue(entry_point, "entry point not found in archive")
             for name in entry_point:

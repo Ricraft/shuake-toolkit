@@ -4209,9 +4209,9 @@
         // 执行到文件末尾时不会触碰不存在的 document.addEventListener。
 
         // ==================== 统一启动器自身更新 ====================
-        // 与 Yatori 更新流程同构：检查 -> 确认弹窗 -> 一次性确认令牌 -> 下载暂存。
-        // 运行中的启动器不会自我覆盖：确认后只下载并暂存新版本，退出启动器后由
-        // 生成的「应用更新.cmd」完成替换，失败可回滚。
+        // 与核心更新同构：检查 -> 确认弹窗 -> 一次性确认令牌 -> 下载校验 -> 自动应用。
+        // 运行中的启动器不会自我覆盖：确认后下载并暂存新版本，随后自动启动
+        // 「应用更新.cmd」并退出，脚本替换完成后会重新启动启动器；失败自动回滚。
         let launcherUpdateConfirming = false;
 
         async function openLauncherUpdateDialog() {
@@ -4249,7 +4249,7 @@
             setText(
                 'launcher-update-summary',
                 info?.summary
-                    || `将从 ${info?.currentVersion || '未知'} 更新到 ${info?.latestVersion || '未知'}。请确认后开始下载并暂存新版本。`
+                    || `将从 ${info?.currentVersion || '未知'} 更新到 ${info?.latestVersion || '未知'}。确认后将自动下载、应用更新并重启启动器。`
             );
             modal.classList.add('active');
         }
@@ -4283,7 +4283,7 @@
                 if (handleWebActionResult(result, '统一启动器更新启动失败')) {
                     document.getElementById('launcher-update-modal')?.classList.remove('active');
                     window.pendingLauncherUpdateDialog = null;
-                    showToast('统一启动器更新已开始下载，完成后请退出启动器并运行「应用更新.cmd」生效', 'success');
+                    showToast('统一启动器更新已开始下载，完成后将自动应用并重启启动器', 'success');
                 }
             } catch (error) {
                 if (!error?.silent) showToast(error.message || '统一启动器更新启动失败', 'error');

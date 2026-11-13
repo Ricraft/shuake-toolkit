@@ -150,6 +150,9 @@ def write_payload_zip(path, *, extra=None):
     entries = {
         "统一启动器.py": "# launcher\n",
         "requirements.txt": "# req\n",
+        "bootstrap.py": "# bootstrap\n",
+        "requirements-zhs.txt": "# zhs req\n",
+        "zhs/pyproject.toml": "[project]\n",
         "src/__init__.py": "",
         "src/web_action_service.py": "# web actions\n",
         "src/launcher_update_service.py": "# update service\n",
@@ -469,7 +472,8 @@ def test_install_verifies_asset_digest_and_stages_without_touching_files(workspa
     assert result["ok"] is True, result
     assert result["staged"] is True
     assert result["scriptName"] == APPLY_SCRIPT_NAME
-    assert "退出启动器后运行" in result["message"]
+    assert result["autoApply"] is True
+    assert "自动" in result["message"]
 
     staging = base / UPDATE_STAGING_DIR_NAME
     assert (staging / TAG / "统一启动器.py").is_file()
@@ -703,7 +707,8 @@ def test_async_install_reports_result_through_schedule(workspace):
     assert scheduled == [0]
     assert service.installing is False
     assert results and results[0]["ok"] is True
-    assert "退出启动器后运行" in results[0]["message"]
+    assert results[0]["autoApply"] is True
+    assert "自动" in results[0]["message"]
 
 
 def test_async_install_rejects_unusable_token(workspace):
@@ -717,7 +722,15 @@ def test_async_install_rejects_unusable_token(workspace):
 # --------------------------------------------------------------- 替换白名单与脚本
 
 def test_replace_whitelist_matches_release_builder_contract():
-    assert REPLACE_WHITELIST == ("统一启动器.py", "requirements.txt", "src", "web")
+    assert REPLACE_WHITELIST == (
+        "统一启动器.py",
+        "requirements.txt",
+        "bootstrap.py",
+        "requirements-zhs.txt",
+        "src",
+        "web",
+        "zhs",
+    )
     assert PRESERVED_PATHS[:4] == ("Yatori", "Autovisor", "data", "logs")
     for entry in REPLACE_WHITELIST:
         assert entry in BUILDER_SOURCE, entry
@@ -745,7 +758,11 @@ def test_apply_script_only_replaces_whitelist_and_quotes_every_path():
         'robocopy "%PAYLOAD%\\web" "%ROOT%\\web"',
         'copy /Y "%PAYLOAD%\\统一启动器.py" "%ROOT%\\统一启动器.py"',
         'copy /Y "%PAYLOAD%\\requirements.txt" "%ROOT%\\requirements.txt"',
+        'copy /Y "%PAYLOAD%\\bootstrap.py" "%ROOT%\\bootstrap.py"',
+        'copy /Y "%PAYLOAD%\\requirements-zhs.txt" "%ROOT%\\requirements-zhs.txt"',
+        'robocopy "%PAYLOAD%\\zhs" "%ROOT%\\zhs"',
         'robocopy "%ROOT%\\src" "%BACKUP%\\src"',
+        'robocopy "%ROOT%\\zhs" "%BACKUP%\\zhs"',
         'robocopy "%ROOT%\\web" "%BACKUP%\\web"',
         'copy /Y "%ROOT%\\统一启动器.py" "%BACKUP%\\统一启动器.py"',
         'robocopy "%BACKUP%\\src" "%ROOT%\\src" /MIR',
@@ -794,6 +811,31 @@ def test_apply_script_round_trips_unicode_and_space_paths(workspace):
     restored = target.read_text(encoding="utf-8-sig")
     assert "%~dp0" in restored
     assert "统一启动器.py" in restored
+
+
+def test_apply_script_prepares_zhs_runtime_and_restarts_automatically():
+    script = build_apply_script(
+        version=TAG,
+        current_version=CURRENT,
+        launcher_pid=0,
+        launcher_python=r"C:\Python\python.exe",
+        auto_restart=True,
+    )
+
+    assert 'set "AUTO_RESTART=1"' in script
+    assert 'set "PYTHON=C:\\Python\\python.exe"' in script
+    assert 'set "PREPARE_PYTHON=C:\\Python\\python.exe"' in script
+    assert '"%PREPARE_PYTHON%" "%ROOT%\\bootstrap.py" --prepare-zhs --quiet' in script
+    assert 'start "" "%PYTHON%" "%ROOT%\\统一启动器.py"' in script
+    assert ":done_auto" in script
+    assert "goto done_auto" in script
+
+    manual = build_apply_script(version=TAG, current_version=CURRENT, launcher_pid=0)
+    assert 'set "AUTO_RESTART=0"' in manual
+    assert 'set "PYTHON="' in manual
+    assert 'set "PREPARE_PYTHON="' in manual
+    assert 'start "" "%PYTHON%"' not in manual
+    assert ":done_auto" in manual
 
 
 def test_apply_script_waits_for_the_launcher_pid():
@@ -852,6 +894,35 @@ def test_web_action_dispatch_reports_check_failure():
 
     assert result["ok"] is False
     assert result["message"] == "GitHub 访问被拒绝"
+
+
+def test_launcher_auto_applies_update_and_exits(monkeypatch):
+    from 统一启动器 import UnifiedLauncher
+
+    launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+    logs = []
+    launcher.log_system = logs.append
+    launcher._show_info = lambda *args: logs.append(("info",) + args)
+    launcher._show_error = lambda *args: logs.append(("error",) + args)
+    launcher.running = {"yatori": False, "autovisor": False, "practice": False, "zhs": False}
+    launcher.starting = dict(launcher.running)
+    applied = []
+    launcher._apply_launcher_update_and_exit = lambda: applied.append(1) or True
+    result = {
+        "ok": True,
+        "message": "已下载并校验完成",
+        "autoApply": True,
+        "scriptPath": r"C:\tmp\.update-staging\应用更新.cmd",
+    }
+
+    launcher._handle_launcher_update_result(dict(result))
+    assert applied == [1]
+    assert launcher._pending_launcher_update["autoApply"] is True
+
+    launcher.running["zhs"] = True
+    launcher._handle_launcher_update_result(dict(result))
+    assert applied == [1]
+    assert any("退出启动器时自动应用" in str(item) for item in logs)
 
 
 def test_launcher_forwards_launcher_update_actions():
@@ -980,6 +1051,10 @@ def _make_e2e_root(base, *, complete_payload=True):
         (root / name).mkdir()
     (root / "统一启动器.py").write_text("OLD-LAUNCHER", encoding="utf-8")
     (root / "requirements.txt").write_text("OLD-REQ", encoding="utf-8")
+    (root / "bootstrap.py").write_text("OLD-BOOT", encoding="utf-8")
+    (root / "requirements-zhs.txt").write_text("OLD-ZHSREQ", encoding="utf-8")
+    (root / "zhs").mkdir()
+    (root / "zhs" / "pyproject.toml").write_text("OLD-ZHS", encoding="utf-8")
     (root / "src" / "keep.py").write_text("OLD-SRC", encoding="utf-8")
     (root / "web" / "app.js").write_text("OLD-APP", encoding="utf-8")
     (root / "web" / "styles.css").write_text("OLD-CSS", encoding="utf-8")
@@ -994,6 +1069,10 @@ def _make_e2e_root(base, *, complete_payload=True):
     (payload / "web").mkdir()
     (payload / "统一启动器.py").write_text("NEW-LAUNCHER", encoding="utf-8")
     (payload / "requirements.txt").write_text("NEW-REQ", encoding="utf-8")
+    (payload / "bootstrap.py").write_text("NEW-BOOT", encoding="utf-8")
+    (payload / "requirements-zhs.txt").write_text("NEW-ZHSREQ", encoding="utf-8")
+    (payload / "zhs").mkdir()
+    (payload / "zhs" / "pyproject.toml").write_text("NEW-ZHS", encoding="utf-8")
     (payload / "src" / "module.py").write_text("NEW-SRC", encoding="utf-8")
     if complete_payload:
         (payload / "src" / "web_action_service.py").write_text("NEW-WAS", encoding="utf-8")
