@@ -1252,7 +1252,10 @@ def test_package_missing_a_file_declared_by_manifest_is_rejected(workspace):
 
     manifest = {
         "version": TAG,
-        "fileList": sorted(list(entries) + ["web/styles.css"]),
+        # fileList 只列 v1.7.0 客户端能替换的旧白名单路径；fullFileList 才是完整清单。
+        # 缺失校验必须用 fullFileList，否则没被覆盖的文件就漏检了。
+        "fileList": ["统一启动器.py"],
+        "fullFileList": sorted(list(entries) + ["web/styles.css"]),
     }
     release = _release(TAG, assets=[_zip_asset(TAG, partial), _manifest_asset_entry()])
     service = make_service(

@@ -185,6 +185,31 @@ def test_start_zhs_passes_every_selected_course_to_the_process(tmp_path):
     ]
 
 
+def test_start_zhs_starts_runtime_prepare_when_environment_missing(tmp_path):
+    """环境缺失时不应该只报错：顺手在后台准备 venv-zhs，用户重试即可。"""
+    from src.core_launch_service import CoreLaunchService
+
+    launcher = make_launch_launcher(tmp_path)
+    requested = []
+    launcher._request_zhs_runtime_prepare = (
+        lambda **kwargs: requested.append(kwargs) or True
+    )
+    launcher._get_zhs_service().environment_state = lambda **_kw: {
+        "ready": False,
+        "message": "未找到 ZHS 运行环境（.runtime/venv-zhs）",
+    }
+
+    started = CoreLaunchService(launcher).start_zhs(
+        action="play", courses=[zhidao(1000006293)],
+    )
+
+    assert started is False
+    assert requested == [{"force": True}]
+    assert any(
+        "正在后台准备" in message for _source, message in launcher.logs
+    )
+
+
 def test_start_zhs_rejects_exam_with_mixed_course_types(tmp_path):
     from src.core_launch_service import CoreLaunchService
 

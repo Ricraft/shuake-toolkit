@@ -161,8 +161,31 @@ class BuildTests(unittest.TestCase):
         with zipfile.ZipFile(result["archive"]) as zf:
             names = sorted(zf.namelist())
 
-        self.assertEqual(manifest["fileList"], names)
-        self.assertEqual(len(manifest["fileList"]), manifest["files"])
+        self.assertEqual(manifest["fullFileList"], names)
+        self.assertEqual(len(manifest["fullFileList"]), manifest["files"])
+        self.assertEqual(len(manifest["fileList"]), manifest["legacyFiles"])
+
+        # v1.7.0 客户端会把 fileList 整份当作“必须替换成功”的校验清单，而它只会
+        # 替换 统一启动器.py / requirements.txt / src / web。清单里混进别的路径
+        # 就会让这些客户端回滚，所以 fileList 必须是这 4 项的子集。
+        for entry in manifest["fileList"]:
+            self.assertTrue(
+                entry in builder.LEGACY_WHITELIST
+                or any(
+                    entry.startswith(prefix + "/")
+                    for prefix in builder.LEGACY_WHITELIST
+                ),
+                entry,
+            )
+        for newer in ("bootstrap.py", "requirements-zhs.txt"):
+            self.assertIn(newer, manifest["fullFileList"])
+            self.assertNotIn(newer, manifest["fileList"])
+        self.assertTrue(
+            any(entry.startswith("zhs/") for entry in manifest["fullFileList"])
+        )
+        self.assertFalse(
+            any(entry.startswith("zhs/") for entry in manifest["fileList"])
+        )
     def test_version_match_guard_accepts_declared_version(self):
         version = builder.declared_launcher_version()
         result = builder.build(version, self.tmpdir, require_version_match=True)

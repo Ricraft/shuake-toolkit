@@ -1505,6 +1505,13 @@
                             <div class="changelog-item">
                                 <span class="changelog-badge fix">修复</span>
                                 <div>
+                                    <div class="text-sm font-semibold">v1.7.2 - 旧版本自更新兼容与 ZHS 环境自愈</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">修复 v1.7.0 及更早客户端更新到 v1.7.1 时必然回滚的问题：manifest 的 fileList 只列旧客户端能替换的 统一启动器.py / requirements.txt / src / web，完整清单改由 fullFileList 提供，旧客户端不再因 bootstrap.py、zhs/ 校验失败而放弃更新。更新后首次启动会自检 ZHS 环境，缺失且已配置过 ZHS 时在后台经 src/zhs_runtime_prepare.py 补建 .runtime/venv-zhs（旧版 bootstrap.py 没有 --prepare-zhs 也能生效）；点击启动核心时也会顺带触发准备并给出明确提示。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
                                     <div class="text-sm font-semibold">v1.7.1 - 启动器自更新自动应用与 ZHS 环境准备</div>
                                     <div class="text-xs mt-1" style="color: var(--text-muted);">启动器自更新改为下载校验后自动应用并重启：更新脚本等待旧进程退出、备份并替换 统一启动器.py / requirements.txt / bootstrap.py / requirements-zhs.txt / src / web / zhs，随后运行 bootstrap.py --prepare-zhs 准备 .runtime/venv-zhs，再自动拉起启动器，任一步失败自动回滚；核心任务运行中则推迟到退出启动器时应用。自更新包与完整包内容保持一致，不再需要手动运行「应用更新.cmd」。</div>
                                 </div>

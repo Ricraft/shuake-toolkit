@@ -498,6 +498,20 @@ class CoreLaunchService:
         env = service.environment_state(refresh=True)
         if not env.get("ready"):
             message = env.get("message") or "ZHS 运行环境不可用"
+            prepare = getattr(launcher, "_request_zhs_runtime_prepare", None)
+            started = False
+            if callable(prepare):
+                try:
+                    started = bool(prepare(force=True))
+                except Exception:
+                    started = False
+            if started:
+                message = (
+                    "ZHS 运行环境缺失，正在后台准备（首次可能需要几分钟）；"
+                    "完成后请重新点击启动核心。"
+                )
+            elif getattr(launcher, "_zhs_runtime_prepare_running", False):
+                message = "ZHS 运行环境正在后台准备中，完成后请重新点击启动核心。"
             return launcher._reject_runtime_start(
                 "zhs", message, failure_kind="dependency",
             )

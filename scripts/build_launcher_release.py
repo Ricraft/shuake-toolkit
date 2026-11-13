@@ -45,6 +45,13 @@ WHITELIST = (
     "zhs",
 )
 
+# v1.7.0 及更早客户端的替换白名单只有这 4 项，而且会把 manifest.fileList
+# 整份当作“必须替换成功”的校验清单：只要清单里出现它们不会复制的路径
+# （bootstrap.py / requirements-zhs.txt / zhs/ 等），替换后逐字节校验就会失败并
+# 回滚。所以 fileList 只列这 4 项下的文件，完整清单放进 fullFileList 供
+# v1.7.1+ 客户端校验——以新清单发布旧包，才不会把 v1.7.0 用户卡在“更新不生效”。
+LEGACY_WHITELIST = ("统一启动器.py", "requirements.txt", "src", "web")
+
 # Never packaged, even when they live under a whitelisted directory.
 EXCLUDED_DIR_NAMES = {"__pycache__", ".pytest_cache", "node_modules", ".git", ".venv", "data", "logs", "log", "output", "uploads", "attachments", "screenshots", ".dsh"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
@@ -159,13 +166,22 @@ def build(version: str, out_dir: Path, *, require_version_match: bool = False) -
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
 
+    legacy_names = sorted(
+        name
+        for name in names
+        if name in LEGACY_WHITELIST
+        or any(name.startswith(prefix + "/") for prefix in LEGACY_WHITELIST)
+    )
+
     manifest = {
         "version": version,
         "asset": asset_name,
         "size": archive_path.stat().st_size,
         "sha256": digest.hexdigest(),
         "files": len(payload),
-        "fileList": sorted(names),
+        "legacyFiles": len(legacy_names),
+        "fileList": legacy_names,
+        "fullFileList": sorted(names),
         "replaceWhitelist": list(WHITELIST),
     }
     manifest_path = out_dir / "launcher-manifest.json"

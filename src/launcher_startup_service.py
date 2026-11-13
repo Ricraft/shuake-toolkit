@@ -15,6 +15,9 @@ class LauncherStartupService:
         (600, "auto_start_question_bank"),
         (1000, "auto_check_cores"),
         (1400, "_apply_auto_run_preference"),
+        # 自更新后 bootstrap.py 可能仍是旧版（不认 --prepare-zhs），这里用
+        # src/zhs_runtime_prepare.py 在后台补建 .runtime/venv-zhs。
+        (3000, "_auto_prepare_zhs_runtime"),
     )
 
     def __init__(

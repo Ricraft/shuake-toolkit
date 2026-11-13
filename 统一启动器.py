@@ -7,6 +7,7 @@
 
 import subprocess
 import threading
+import time
 import os
 import sys
 import re
@@ -103,7 +104,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.7.1"
+    LAUNCHER_VERSION = "v1.7.2"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -265,6 +266,113 @@ class UnifiedLauncher:
             service = ZhsService(self)
             self._zhs_service = service
         return service
+
+    # -------------------------------------------------- ZHS 运行环境自愈
+    # 自更新只替换旧白名单里的文件；从 v1.7.0 升级时 bootstrap.py 仍是旧版，
+    # 不会执行 --prepare-zhs。启动后在后台用 src/zhs_runtime_prepare.py 补建
+    # .runtime/venv-zhs，避免用户点「启动核心」才看到环境缺失。
+    ZHS_PREPARE_RETRY_SECONDS = 7 * 24 * 3600
+    ZHS_PREPARE_TIMEOUT_SECONDS = 30 * 60
+
+    def _zhs_runtime_sources_ready(self):
+        base = self.get_base_dir()
+        return all(
+            os.path.isfile(os.path.join(base, *parts))
+            for parts in (
+                ("bootstrap.py",),
+                ("requirements-zhs.txt",),
+                ("zhs", "pyproject.toml"),
+            )
+        )
+
+    def _zhs_runtime_prepare_marker(self):
+        return os.path.join(self.get_base_dir(), ".runtime", ".zhs-prepare-attempted")
+
+    def _zhs_runtime_prepare_allowed(self, *, force=False):
+        """环境缺失时才准备；已配置过 ZHS 的用户才自动下载依赖。"""
+        if getattr(self, "_zhs_runtime_prepare_running", False):
+            return False
+        if not self._zhs_runtime_sources_ready():
+            return False
+        if force:
+            return True
+        base = self.get_base_dir()
+        configured = os.path.isdir(os.path.join(base, "data", "zhs")) or os.path.isdir(
+            os.path.join(base, ".runtime", "venv-zhs")
+        )
+        if not configured:
+            return False
+        marker = self._zhs_runtime_prepare_marker()
+        try:
+            if (
+                os.path.isfile(marker)
+                and time.time() - os.path.getmtime(marker)
+                < self.ZHS_PREPARE_RETRY_SECONDS
+            ):
+                return False
+        except OSError:
+            pass
+        return True
+
+    def _request_zhs_runtime_prepare(self, *, force=False):
+        """后台准备 ZHS 环境；返回是否真的启动了准备工作。"""
+        if not self._zhs_runtime_prepare_allowed(force=force):
+            return False
+        self._zhs_runtime_prepare_running = True
+        self.log_system("[ZHS] 运行环境缺失，正在后台准备（首次可能需要几分钟）...")
+        threading.Thread(
+            target=self._zhs_runtime_prepare_worker,
+            name="zhs-runtime-prepare",
+            daemon=True,
+        ).start()
+        return True
+
+    def _zhs_runtime_prepare_worker(self):
+        base = self.get_base_dir()
+        marker = self._zhs_runtime_prepare_marker()
+        detail = ""
+        ok = False
+        try:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w", encoding="utf-8") as handle:
+                handle.write(datetime.now().isoformat(timespec="seconds"))
+            completed = subprocess.run(
+                [sys.executable, "-m", "src.zhs_runtime_prepare", "--quiet"],
+                cwd=base,
+                capture_output=True,
+                timeout=self.ZHS_PREPARE_TIMEOUT_SECONDS,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+            ok = getattr(completed, "returncode", 1) == 0
+            if not ok:
+                raw = completed.stderr or completed.stdout or b""
+                detail = raw.decode("utf-8", "ignore").strip()[:300]
+        except subprocess.TimeoutExpired:
+            detail = "准备超时（超过 %d 分钟）" % (self.ZHS_PREPARE_TIMEOUT_SECONDS // 60)
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+        finally:
+            self._zhs_runtime_prepare_running = False
+        if ok:
+            self.log_system("[ZHS] 运行环境已就绪，可以启动 ZHS 核心")
+        else:
+            self.log_system(
+                "[ZHS] 运行环境准备失败："
+                + (detail or "未知错误")
+                + "；可手动运行 bootstrap.py --install 重试"
+            )
+
+    def _auto_prepare_zhs_runtime(self):
+        """启动后延迟自检：环境缺失且用过 ZHS 时，后台补建运行环境。"""
+        try:
+            environment = self._get_zhs_service().environment_state(refresh=True)
+        except Exception as exc:
+            self.log_system(f"[ZHS] 运行环境自检失败：{type(exc).__name__}: {exc}")
+            return
+        if environment.get("ready"):
+            return
+        self._request_zhs_runtime_prepare()
 
     def _get_core_launch_service(self):
         service = getattr(self, '_core_launch_service', None)

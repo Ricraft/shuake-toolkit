@@ -1377,14 +1377,17 @@ class LauncherUpdateService:
     def _expected_payload_files(self, release):
         """Return ``(posix_relative_paths, source_label)`` for completeness checks.
 
-        The release manifest's ``fileList`` is authoritative when available, so
-        a package that silently omits files is rejected instead of producing a
-        mixed install. Older releases without a file list fall back to the
-        built-in required files.
+        ``fullFileList`` is preferred over ``fileList``: the latter is trimmed
+        to the paths v1.7.0-and-earlier clients can replace (see
+        ``scripts/build_launcher_release.py``), so validating only that subset
+        would miss a payload that omits bootstrap.py / zhs/. Older releases
+        without a file list fall back to the built-in required files.
         """
         manifest, _error = self._fetch_manifest(release)
         if manifest is not None:
-            files = normalize_payload_paths(manifest.get("fileList"))
+            files = normalize_payload_paths(manifest.get("fullFileList"))
+            if not files:
+                files = normalize_payload_paths(manifest.get("fileList"))
             if files:
                 return files, "launcher-manifest.json"
             self._log(

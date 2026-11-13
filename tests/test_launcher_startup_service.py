@@ -80,6 +80,9 @@ class _Launcher:
     def _apply_auto_run_preference(self):
         return None
 
+    def _auto_prepare_zhs_runtime(self):
+        return None
+
 
 def test_compose_builds_services_in_order_and_preserves_callbacks():
     launcher = _Launcher(accounts=[{"id": 1}, {"id": 2}])
@@ -191,4 +194,5 @@ def test_deferred_tasks_keep_original_order_delays_and_callbacks():
             1400,
             "_apply_auto_run_preference",
         ),
+        "_auto_prepare_zhs_runtime": (3000, "_auto_prepare_zhs_runtime"),
     }
