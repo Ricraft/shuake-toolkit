@@ -2872,6 +2872,7 @@
                 if (payload.runtime) applyRuntimeState(payload.runtime, requestId);
                 initialized = true;
                 backendConnected = true;
+                if (document.getElementById('view-about')?.classList.contains('active')) void loadLatestChangelog();
                 setBackendStatus('Python 后端已连接');
                 backendInitErrorShown = false;
                 showToast('HTML UI 已连接 Python 后端', 'success');
@@ -2916,7 +2917,7 @@
             initSpotlightEffect();
             initMagneticButtons();
             initTypewriterPaths();
-            setupChangelogCollapse();
+            void loadLatestChangelog();
         }
 
         function initAmbientLight() {
@@ -4008,10 +4009,8 @@
         }
 
         /* ============================================================
-           关于页：感谢名单外链 + 更新日志折叠
+           关于页：感谢名单外链 + 在线最新发布说明
            ============================================================ */
-
-        const CHANGELOG_DEFAULT_VISIBLE = 15;
 
         function openContributorLink(evt, anchor) {
             if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
@@ -4037,45 +4036,74 @@
             return false;
         }
 
-        function setupChangelogCollapse() {
-            const list = document.getElementById('changelog-list');
-            if (!list) return;
-            const button = document.getElementById('changelog-more-btn');
-            const items = Array.from(list.querySelectorAll('.changelog-item'));
-            const hiddenCount = items.length - CHANGELOG_DEFAULT_VISIBLE;
-            if (hiddenCount <= 0) {
-                if (button) button.hidden = true;
-                return;
+        let latestChangelogLoading = false;
+        let latestChangelogLoadedAt = 0;
+
+        function renderLatestChangelogNotes(notes) {
+            const content = document.getElementById('latest-changelog-content');
+            content.replaceChildren();
+            let list = null;
+            for (const raw of String(notes || '该版本暂未提供更新说明。').split(/\r?\n/)) {
+                const line = raw.trim();
+                if (!line) { list = null; continue; }
+                const heading = line.match(/^(#{1,6})\s+(.+)/);
+                const bullet = line.match(/^(?:[-*]|\d+[.)])\s+(.+)/);
+                if (heading) {
+                    list = null;
+                    const element = document.createElement(heading[1].length < 3 ? 'h3' : 'h4');
+                    element.textContent = heading[2];
+                    content.appendChild(element);
+                } else if (bullet) {
+                    const kind = /^\d/.test(line) ? 'ol' : 'ul';
+                    if (!list || list.tagName.toLowerCase() !== kind) {
+                        list = document.createElement(kind);
+                        content.appendChild(list);
+                    }
+                    const item = document.createElement('li');
+                    item.textContent = bullet[1];
+                    list.appendChild(item);
+                } else {
+                    list = null;
+                    const element = document.createElement('p');
+                    element.textContent = line;
+                    content.appendChild(element);
+                }
             }
-            if (list.dataset.changelogReady === '1') return;
-            list.dataset.changelogReady = '1';
-            items.forEach((item, index) => {
-                if (index >= CHANGELOG_DEFAULT_VISIBLE) item.classList.add('is-overflow');
-            });
-            if (button) {
-                button.hidden = false;
-                button.addEventListener('click', () => {
-                    setChangelogExpanded(!list.classList.contains('is-expanded'));
-                });
-            }
-            setChangelogExpanded(false);
         }
 
-        function setChangelogExpanded(expanded) {
-            const list = document.getElementById('changelog-list');
-            if (!list) return false;
-            const button = document.getElementById('changelog-more-btn');
-            const label = document.getElementById('changelog-more-label');
-            const total = list.querySelectorAll('.changelog-item').length;
-            const remaining = Math.max(total - CHANGELOG_DEFAULT_VISIBLE, 0);
-            list.classList.toggle('is-expanded', !!expanded);
-            if (button) button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            if (label) {
-                label.textContent = expanded
-                    ? '收起'
-                    : `显示更多（还有 ${remaining} 条）`;
+        async function loadLatestChangelog(refresh = false) {
+            const panel = document.getElementById('latest-changelog');
+            if (!panel || latestChangelogLoading || (!refresh && Date.now() - latestChangelogLoadedAt < 300000)) return;
+            latestChangelogLoading = true;
+            const button = document.getElementById('latest-changelog-refresh');
+            const status = document.getElementById('latest-changelog-status');
+            const meta = document.getElementById('latest-changelog-meta');
+            const content = document.getElementById('latest-changelog-content');
+            panel.dataset.state = 'loading';
+            panel.setAttribute('aria-busy', 'true');
+            button.disabled = true;
+            meta.hidden = content.hidden = true;
+            content.replaceChildren();
+            status.textContent = '正在联网获取最新版本更新说明…';
+            try {
+                const result = await apiCall('get_latest_launcher_changelog', !!refresh);
+                if (!result?.ok) throw new Error(result?.message || '无法读取最新更新说明，请重试');
+                document.getElementById('latest-changelog-version').textContent = '最新发布：' + result.version;
+                document.getElementById('latest-changelog-date').textContent = result.publishedAt ? '发布于 ' + result.publishedAt.slice(0, 10) : '';
+                renderLatestChangelogNotes(result.notes);
+                meta.hidden = content.hidden = false;
+                status.textContent = '来自 GitHub 最新发布说明，仅显示此版本。';
+                panel.dataset.state = 'ready';
+                latestChangelogLoadedAt = Date.now();
+            } catch (error) {
+                latestChangelogLoadedAt = 0;
+                panel.dataset.state = 'error';
+                status.textContent = error.message || '联网失败，请点击刷新 / 重试';
+            } finally {
+                latestChangelogLoading = false;
+                button.disabled = false;
+                panel.setAttribute('aria-busy', 'false');
             }
-            return true;
         }
 
         /* ============================================================

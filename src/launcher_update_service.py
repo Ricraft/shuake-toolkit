@@ -38,7 +38,7 @@ import zipfile
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 from src.launcher_update_receipt import apply_receipt_command, receipt_snapshot, acknowledge_receipt
 
 try:
@@ -214,6 +214,45 @@ def safe_extract_zip(zip_ref, destination):
         if os.path.commonpath((destination, target)) != destination:
             raise ValueError(f"压缩包包含越界路径: {member.filename}")
     zip_ref.extractall(destination)
+
+
+class _ReleasePageNotes(HTMLParser):
+    """Extract the first rendered release body, excluding page chrome and assets."""
+    VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}
+    BLOCKS = {'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'pre', 'blockquote'}
+
+    def __init__(self):
+        super().__init__()
+        self.depth, self.done, self.parts = 0, False, []
+
+    def handle_starttag(self, tag, attrs):
+        if self.done:
+            return
+        if not self.depth:
+            if 'markdown-body' not in dict(attrs).get('class', '').split():
+                return
+            self.depth = 1
+            return
+        if tag not in self.VOID:
+            self.depth += 1
+        if tag in self.BLOCKS or tag == 'br':
+            self.parts.append('\n')
+        if tag == 'li':
+            self.parts.append('- ')
+
+    def handle_endtag(self, tag):
+        if self.depth and tag not in self.VOID:
+            if tag in self.BLOCKS:
+                self.parts.append('\n')
+            self.depth -= 1
+            self.done = self.depth == 0
+
+    def handle_data(self, data):
+        if self.depth:
+            self.parts.append(data)
+
+    def text(self):
+        return '\n'.join(line.strip() for line in ''.join(self.parts).splitlines() if line.strip())
 
 
 def format_release_notes(body, *, max_lines=14, max_chars=900):
@@ -616,6 +655,9 @@ class LauncherUpdateService:
         # Separate HTML reader keeps normal API checks unchanged and makes the
         # narrowly-scoped official-page fallback deterministic in tests.
         self.page_reader = page_reader or self._default_page_reader
+        self._changelog_lock = threading.Lock()
+        self._changelog_cache = None
+        self._changelog_cached_at = 0.0
         self.downloader = downloader or self._default_downloader
         self.pid = self._coerce_pid(pid)
         self.request_timeout = request_timeout
@@ -636,6 +678,44 @@ class LauncherUpdateService:
         with self._lock:
             self._install_progress.update(fields)
             self._install_progress["updated_at"] = time.monotonic()
+
+    def get_latest_changelog(self, *, refresh=False):
+        """Read only the newest published release, without touching install confirmations."""
+        if not isinstance(refresh, bool):
+            return {'ok': False, 'message': '刷新参数须为布尔值'}
+        with self._changelog_lock:
+            if not refresh and self._changelog_cache and time.monotonic() - self._changelog_cached_at < 300:
+                return {**copy.deepcopy(self._changelog_cache), 'cached': True}
+            releases, error = self._fetch_releases()
+            release = select_latest_release(releases)
+            if error or not release:
+                self._changelog_cache = None
+                return {'ok': False, 'message': error or '尚未找到已发布的启动器版本，请稍后重试'}
+            version = str(release['tag_name']).strip()
+            notes = str(release.get('body') or '').strip()
+            # Official-page fallback can identify the version without a Release body.
+            # Fetch only the matching tag's Markdown, never main or an older version.
+            if not notes:
+                tag = quote(version, safe='')
+                url = f'https://raw.githubusercontent.com/{self.repo}/{tag}/docs/releases/{tag}.md'
+                try:
+                    status, body = self.opener(url, self.request_timeout)
+                    if int(status) == 200:
+                        notes = body.decode('utf-8-sig') if isinstance(body, bytes) else str(body or '')
+                    elif int(status) != 404:
+                        raise RuntimeError(f'HTTP {status}')
+                except Exception:
+                    self._changelog_cache = None
+                    return {'ok': False, 'message': f'已找到最新版本 {version}，但无法读取更新说明，请重试'}
+            result = {
+                'ok': True, 'version': version, 'notes': notes.strip()[:100000],
+                'publishedAt': str(release.get('published_at') or ''),
+                'sourceUrl': f'https://github.com/{self.repo}/releases/tag/{quote(version, safe="")}',
+                'fetchedAt': datetime.now().isoformat(timespec='seconds'), 'cached': False,
+            }
+            self._changelog_cache = copy.deepcopy(result)
+            self._changelog_cached_at = time.monotonic()
+            return result
 
     def last_result_snapshot(self):
         return receipt_snapshot(self.base_dir, self.current_version, pid=self.pid)
@@ -977,11 +1057,13 @@ class LauncherUpdateService:
 
         # The /releases/latest route represents a published stable release. It
         # intentionally does not discover prereleases, unlike the API listing.
+        notes_parser = _ReleasePageNotes()
+        notes_parser.feed(body.decode('utf-8', 'replace') if isinstance(body, bytes) else body)
         return {
             "tag_name": tag,
             "draft": False,
             "published_at": "",
-            "body": "",
+            "body": notes_parser.text(),
             "html_url": tag_url,
             "assets": assets,
             "_launcher_page_fallback": True,

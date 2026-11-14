@@ -124,7 +124,7 @@ class VersionTests(unittest.TestCase):
                     run=fake_popen,
                 )
 
-    def test_launcher_accepts_simple_fake_popen_and_prefers_pythonw(self):
+    def test_launcher_accepts_simple_fake_popen_and_uses_console_python_without_window(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / bootstrap.LAUNCHER_NAME).write_text("", encoding="utf-8")
@@ -148,7 +148,7 @@ class VersionTests(unittest.TestCase):
             )
 
             self.assertEqual(result, 0)
-            self.assertEqual(launched["command"][0], str(pythonw))
+            self.assertEqual(launched["command"][0], str(python_exe))
             self.assertEqual(launched["command"][1], str(root / bootstrap.LAUNCHER_NAME))
 
 

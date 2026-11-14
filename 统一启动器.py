@@ -21,6 +21,7 @@ from src.application_bootstrap import (
     WebApplicationBootstrap,
     enable_windows_dpi_awareness,
     install_crash_hook,
+    relaunch_without_console,
     resolve_file_dialog_constants,
 )
 from src.autovisor_dependency_manager import AutovisorDependencyManager
@@ -1989,7 +1990,10 @@ class UnifiedLauncher:
 
 def main():
     """主程序入口"""
-    install_crash_hook(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    install_crash_hook(base_dir)
+    if relaunch_without_console(base_dir):
+        return 0
 
     # 启动时自动检查并安装缺失依赖（PyPI 镜像按实测速度排序，逐个降级重试）
     dependency_failures = ensure_core_dependencies(

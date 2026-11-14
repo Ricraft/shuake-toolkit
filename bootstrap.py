@@ -974,41 +974,11 @@ def launch_launcher(
     if not launcher.is_file():
         raise RuntimeError(f"未找到启动器入口: {launcher}")
     python_exe = Path(venv_python)
-    pythonw = venv_pythonw_path(python_exe.parent.parent)
-    executable = pythonw if pythonw.is_file() else python_exe
-    command = [str(executable), str(launcher)]
+    command = [str(python_exe), str(launcher)]
     if debug:
         command.append("--dev")
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
-    process = run(command, cwd=str(root_path), env=env)
-
-    # Do not wait for the GUI for its full lifetime.  Give Popen a short
-    # bounded window to expose an immediate startup failure; a still-running
-    # process (or a simple test double without wait/poll) is considered started.
-    wait = getattr(process, "wait", None)
-    returncode: Any = None
-    if callable(wait):
-        try:
-            returncode = wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
-            return 0
-        except TypeError:
-            # Some lightweight Popen fakes expose wait() without the timeout
-            # argument.  Never call that potentially-unbounded method.
-            poll = getattr(process, "poll", None)
-            if callable(poll):
-                returncode = poll()
-    else:
-        poll = getattr(process, "poll", None)
-        if callable(poll):
-            returncode = poll()
-
-    if returncode is None:
-        returncode = getattr(process, "returncode", None)
-    if isinstance(returncode, int):
-        raise RuntimeError(f"启动器在启动确认期间提前退出，返回码: {returncode}")
-    return 0
+    from src.application_bootstrap import launch_desktop_process
+    return launch_desktop_process(command, root=root_path, debug=debug, run=run)
 
 
 def run_checks(*, logger: Any = None) -> int:

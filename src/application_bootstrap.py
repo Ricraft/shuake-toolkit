@@ -3,9 +3,80 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import traceback
 from datetime import datetime
+from pathlib import Path
+
+
+def launch_desktop_process(command, *, root, debug=False, run=None):
+    """Launch independently of bootstrap's console and redirected output pipes."""
+    command = list(map(str, command))
+    root = Path(root)
+    env = os.environ.copy()
+    env.update(PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
+    kwargs = {'cwd': str(root), 'env': env}
+    log_path = None
+    runner = run or subprocess.Popen
+    if os.name == 'nt' and not debug:
+        # Some Windows venv pythonw redirectors still spawn base python.exe.
+        # Use the console interpreter with an explicit no-console creation flag.
+        executable = Path(command[0])
+        if executable.name.lower() == 'pythonw.exe':
+            console_python = executable.with_name('python.exe')
+            if console_python.is_file():
+                command[0] = str(console_python)
+        log_dir = root / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f'launcher_startup_{datetime.now():%Y%m%d_%H%M%S_%f}.log'
+        env['SHUAKE_WINDOWLESS_CHILD'] = '1'
+        with log_path.open('a', encoding='utf-8') as output:
+            process = runner(command, **kwargs, creationflags=subprocess.CREATE_NO_WINDOW,
+                             stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+    else:
+        process = runner(command, **kwargs)
+
+    # A short confirmation catches immediate failures without waiting for the UI lifetime.
+    returncode = None
+    wait = getattr(process, 'wait', None)
+    if callable(wait):
+        try:
+            returncode = wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return 0
+        except TypeError:
+            poll = getattr(process, 'poll', None)
+            if callable(poll):
+                returncode = poll()
+    else:
+        poll = getattr(process, 'poll', None)
+        if callable(poll):
+            returncode = poll()
+    if returncode is None:
+        returncode = getattr(process, 'returncode', None)
+    if isinstance(returncode, int):
+        detail = f'；启动日志: {log_path}' if log_path else ''
+        raise RuntimeError(f'启动器在启动确认期间提前退出，返回码: {returncode}{detail}')
+    return 0
+
+
+def relaunch_without_console(root, *, args=None):
+    """Hand off direct .py / legacy launches before starting any account work."""
+    args = list(sys.argv[1:] if args is None else args)
+    if os.name != 'nt' or '--dev' in args or getattr(sys, 'frozen', False):
+        return False
+    import ctypes
+    windowless_child = os.environ.pop('SHUAKE_WINDOWLESS_CHILD', '') == '1'
+    if not ctypes.windll.kernel32.GetConsoleWindow():
+        return False
+    if windowless_child:
+        # Defensive fallback for a nonstandard interpreter; avoid a relaunch loop.
+        if not ctypes.windll.kernel32.FreeConsole():
+            raise RuntimeError('无法脱离启动控制台，请通过统一启动器.exe 启动并检查日志')
+        return False
+    launch_desktop_process([sys.executable, str(Path(root) / '统一启动器.py'), *args], root=root)
+    return True
 
 
 def install_crash_hook(base_dir, *, clock=None):

@@ -18,6 +18,9 @@ class WebLauncherAPI:
     def get_runtime_state(self):
         return self._launcher.get_web_runtime_state()
 
+    def get_latest_launcher_changelog(self, refresh=False):
+        return self._launcher._get_launcher_update_service().get_latest_changelog(refresh=refresh)
+
     def get_preferences(self):
         return self._launcher.get_web_preferences()
 

@@ -175,21 +175,6 @@ def test_reset_and_background_switch_discard_pending_blur_frames():
     assert "applyGlassBlur(blurValue);" in apply_bg
 
 
-def test_collapsed_changelog_drops_the_trailing_divider():
-    assert (
-        "#changelog-list:not(.is-expanded) .changelog-item:nth-child(15) { border-bottom: none; }"
-        in STYLES
-    )
-    assert (
-        "#changelog-list:not(.is-expanded) .changelog-item:has(+ .changelog-item.is-overflow) { border-bottom: none; }"
-        in STYLES
-    )
-    assert (
-        "#changelog-list.is-expanded .changelog-item.is-overflow:last-child { border-bottom: none; }"
-        in STYLES
-    )
-
-
 # ------------------------------------------------- 行为契约（node 直跑真实函数）
 
 PILL_BLOCK = "let themePillObserver = null;" + FRONTEND.split(

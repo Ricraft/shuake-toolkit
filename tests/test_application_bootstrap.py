@@ -15,6 +15,7 @@ def test_main_delegates_window_lifecycle_to_bootstrap(monkeypatch):
     import 统一启动器 as launcher_module
 
     calls = []
+    monkeypatch.setattr(launcher_module, 'relaunch_without_console', lambda root: False)
     webview = SimpleNamespace(
         FileDialog=SimpleNamespace(OPEN=12, SAVE=32),
     )
@@ -78,6 +79,7 @@ def test_main_stops_before_window_when_dependencies_remain_broken(monkeypatch):
     import 统一启动器 as launcher_module
 
     calls = []
+    monkeypatch.setattr(launcher_module, 'relaunch_without_console', lambda root: False)
     monkeypatch.setattr(
         launcher_module,
         "install_crash_hook",
@@ -103,6 +105,14 @@ def test_main_stops_before_window_when_dependencies_remain_broken(monkeypatch):
         launcher_module.main()
 
     assert calls == ["crash_hook"]
+
+
+def test_console_handoff_happens_before_dependencies_or_account_work(monkeypatch):
+    import 统一启动器 as launcher_module
+    monkeypatch.setattr(launcher_module, 'install_crash_hook', lambda root: None)
+    monkeypatch.setattr(launcher_module, 'relaunch_without_console', lambda root: True)
+    monkeypatch.setattr(launcher_module, 'ensure_core_dependencies', lambda **kw: pytest.fail('parent must not start application work'))
+    assert launcher_module.main() == 0
 
 
 class FakeLauncher:
