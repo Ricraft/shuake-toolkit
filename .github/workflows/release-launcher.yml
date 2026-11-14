@@ -55,6 +55,7 @@ jobs:
       # update/rollback, configuration transactions and Agent confirmations.
       - name: Run complete Windows regression suite
         run: |
+          mkdir -p .runtime/test-results
           python -m pytest -q --basetemp .runtime/pytest-release \
             --junitxml=.runtime/test-results/launcher-release.xml
 

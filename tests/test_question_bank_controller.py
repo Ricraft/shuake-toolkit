@@ -407,7 +407,7 @@ class QuestionBankControllerTests(unittest.TestCase):
                 controller, logs = self.make_controller(temp_dir)
                 controller.configure_zerror_environment()
 
-                self.assertEqual(controller.detect_zerror_db_path(), str(database.resolve()))
+                self.assertTrue(os.path.samefile(controller.detect_zerror_db_path(), database))
                 self.assertIn("2 条记录", controller.get_zerror_db_info())
                 self.assertTrue(any("ZError" in entry for entry in logs))
 
