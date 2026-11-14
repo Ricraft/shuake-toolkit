@@ -18,6 +18,7 @@ DEFAULT_PREFERENCES = {
     "autoShutdown": False,
     "closeLauncherOnComplete": False,
     "autoRun": False,
+    "batchTargets": ["yatori", "autovisor"],
     "yatoriMaxRuntimeMinutes": 0,
     "minimizeToTray": False,
     "startMinimized": False,
@@ -35,6 +36,15 @@ DEFAULT_PREFERENCES = {
     "achievements": {},
     "achievementResetToken": 0,
 }
+
+
+def normalize_batch_targets(value):
+    if not isinstance(value, list) or any(
+        not isinstance(core, str) or core not in ("yatori", "autovisor", "zhs")
+        for core in value
+    ):
+        raise ValueError("启动目标须为 yatori/autovisor/zhs 的列表")
+    return list(dict.fromkeys(value))
 
 
 def normalize_yatori_max_runtime(value):
@@ -81,6 +91,10 @@ class PreferencesService:
                 stored = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(stored, dict):
                     values.update(deepcopy(stored))
+                    try:
+                        values["batchTargets"] = normalize_batch_targets(values["batchTargets"])
+                    except ValueError:
+                        values["batchTargets"] = deepcopy(DEFAULT_PREFERENCES["batchTargets"])
                     try:
                         values["yatoriMaxRuntimeMinutes"] = normalize_yatori_max_runtime(
                             values["yatoriMaxRuntimeMinutes"]
@@ -130,6 +144,8 @@ class PreferencesService:
 
         try:
             normalized_payload = deepcopy(payload)
+            if "batchTargets" in normalized_payload:
+                normalized_payload["batchTargets"] = normalize_batch_targets(normalized_payload["batchTargets"])
             if "yatoriMaxRuntimeMinutes" in normalized_payload:
                 normalized_payload["yatoriMaxRuntimeMinutes"] = normalize_yatori_max_runtime(
                     normalized_payload["yatoriMaxRuntimeMinutes"]

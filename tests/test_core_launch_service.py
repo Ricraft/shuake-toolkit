@@ -1,6 +1,24 @@
 from types import SimpleNamespace
 
 from src.core_launch_service import CoreLaunchService
+from src.config_service import ConfigService
+
+
+def test_batch_preflight_skips_unconfigured_yatori_without_launching_or_logging_in():
+    launcher = SimpleNamespace(
+        _load_yatori_config_data=lambda: {'users': []},
+        _validate_yatori_runtime=ConfigService.validate_yatori_runtime,
+    )
+    assert '尚未配置' in CoreLaunchService(launcher).batch_skip_reason('yatori')
+
+
+def test_batch_preflight_zhs_checks_local_session_without_network_verification():
+    calls = []
+    launcher = SimpleNamespace(_get_zhs_service=lambda: SimpleNamespace(
+        session_state=lambda **kw: calls.append(kw) or {'logged_in': False},
+    ))
+    assert '尚未登录' in CoreLaunchService(launcher).batch_skip_reason('zhs')
+    assert calls == [{'verify': False}]
 
 
 def make_python_runtime_launcher(*, install_accepted=True):

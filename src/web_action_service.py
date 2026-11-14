@@ -136,6 +136,10 @@ class WebActionService:
                 )
             elif action == "show_zhs_update_dialog":
                 return self._with_state(launcher.show_zhs_update_dialog())
+            elif action == "prepare_zhs_environment":
+                if not launcher._request_zhs_runtime_prepare(force=True):
+                    return self._failure("暂时无法准备环境：请等待当前任务或更新完成，并确认 ZHS 源码完整")
+                return self._with_state({'ok': True, 'message': '已开始准备 ZHS 环境，完成后请点击启动核心'})
             elif action == "install_zhs_update":
                 if not launcher.install_zhs_update_async(None):
                     return self._failure(
@@ -143,6 +147,13 @@ class WebActionService:
                     )
             elif action == "check_launcher_update":
                 return self._with_state(launcher.show_launcher_update_dialog())
+            elif action == "dismiss_launcher_update_result":
+                return self._with_state(launcher._get_launcher_update_service().dismiss_last_result(script_type))
+            elif action == "open_launcher_update_log":
+                receipt = launcher._get_launcher_update_service().last_result_snapshot()
+                if not receipt or receipt.get('id') != script_type or not receipt.get('logPath'):
+                    return self._failure("当前更新日志不可用")
+                return self._with_state(launcher._get_desktop_platform_service().open_path(receipt['logPath']))
             elif action == "install_launcher_update":
                 if not launcher.install_launcher_update_async(script_type):
                     return self._failure(

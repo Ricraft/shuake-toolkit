@@ -1,10 +1,9 @@
 """Prepare the isolated ZHS runtime from any launcher-side bootstrap version.
 
-v1.7.0 的 bootstrap.py 没有 --prepare-zhs；从 v1.7.0 自更新时，更新脚本只能
-替换旧白名单里的 统一启动器.py / requirements.txt / src / web，bootstrap.py
-仍然是旧版。这个模块只依赖两个版本都有的 find_zhs_python / ensure_zhs_runtime，
-让自更新后的首次启动也能把 .runtime/venv-zhs 准备好，而不是让用户手动跑
-``bootstrap.py --install``。
+旧更新器只复制四项白名单，可能遗漏 bootstrap.py 与 ZHS 源码。服务装配前由
+launcher_migration 从随 src 下发的兼容包补齐文件，本模块随后复用 bootstrap 的
+find_zhs_python / ensure_zhs_runtime。对已有这两个 helper 的旧 bootstrap 也兼容，
+无需启动整个安装流程或重复打开桌面窗口。
 """
 
 from __future__ import annotations

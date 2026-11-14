@@ -159,7 +159,8 @@ class FrontendContractTests(unittest.TestCase):
     def test_page_exposes_a_read_only_autovisor_modal(self):
         self.assertIn('id="autovisor-update-modal"', PAGE)
         self.assertIn("Autovisor 版本信息", PAGE)
-        self.assertGreaterEqual(PAGE.count("openAutovisorUpdateDialog()"), 2)
+        self.assertGreaterEqual(PAGE.count("openAutovisorUpdateDialog()"), 1)
+        self.assertIn("安装 ZHS 更新", PAGE)
         self.assertNotIn("performAction('check_autovisor_update')", PAGE)
         self.assertNotIn("performAction('install_autovisor_update')", PAGE)
         self.assertIn("本地适配版：不提供直接覆盖安装", PAGE)

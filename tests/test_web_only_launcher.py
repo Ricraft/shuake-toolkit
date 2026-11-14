@@ -292,6 +292,7 @@ class WebOnlyLauncherTests(unittest.TestCase):
         launcher.stop_yatori = lambda: events.append("stop_yatori")
         launcher.stop_autovisor = lambda: events.append("stop_autovisor")
         launcher.stop_practice_mode = lambda: events.append("stop_practice")
+        launcher.stop_zhs = lambda: events.append("stop_zhs")
 
         result = launcher.stop_all()
 
@@ -303,6 +304,7 @@ class WebOnlyLauncherTests(unittest.TestCase):
                 "stop_yatori",
                 "stop_autovisor",
                 "stop_practice",
+                "stop_zhs",
             ],
         )
 
@@ -938,6 +940,8 @@ class WebOnlyLauncherTests(unittest.TestCase):
 
     def test_start_all_reports_partial_failure_to_web(self):
         launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.get_web_preferences = lambda: {"batchTargets": ["yatori", "autovisor"]}
+        launcher._batch_start_skip_reason = lambda core: ""
         launcher.question_bank = SimpleNamespace(running=True, available=True)
         launcher.running = {"yatori": False, "autovisor": False}
         launcher.starting = {"yatori": False, "autovisor": False}
@@ -1265,3 +1269,24 @@ class WebOnlyLauncherTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_confirmed_exit_stops_zhs_and_inflight_tasks_before_pending_update():
+    for core, phase in [('zhs', 'running'), ('zhs', 'starting'), ('autovisor', 'starting')]:
+        launcher = UnifiedLauncher.__new__(UnifiedLauncher)
+        launcher.web_window = None
+        launcher.running = {core: phase == 'running'}
+        launcher.starting = {core: phase == 'starting'}
+        launcher._preference_enabled = lambda *a, **kw: False
+        events = []
+        launcher.log_system = events.append
+        launcher._get_yatori_runtime_limit = lambda: SimpleNamespace(cancel=lambda: None)
+        launcher._cancel_scheduled_callbacks = lambda: None
+        launcher.stop_all = lambda: events.append('stop_all')
+        launcher.stop_question_bank = lambda: None
+        launcher._pending_launcher_update = {'scriptPath': 'fake'}
+        launcher._spawn_pending_launcher_update = lambda: events.append('apply_update')
+        launcher._close_main_window = lambda: events.append('close')
+        launcher._zhs_service = SimpleNamespace(shutdown=lambda: events.append('stop_login'))
+        launcher.on_closing(confirmed=True)
+        assert events == ['stop_all', 'stop_login', 'apply_update', 'close'], (core, phase, events)

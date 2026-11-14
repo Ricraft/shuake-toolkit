@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -23,6 +24,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from build_launcher_release import declared_launcher_version, normalize_version, is_private_payload
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DESKTOP_EXE = "统一启动器.exe"
 
 ROOT_FILES = (
     "统一启动器.py",
@@ -81,6 +83,7 @@ EXCLUDED_RELATIVE_PATHS = {
 }
 
 REQUIRED_FILES = (
+    DESKTOP_EXE,
     "统一启动器.py",
     "requirements.txt",
     "requirements-zhs.txt",
@@ -145,6 +148,7 @@ def build(
     root: Path | None = None,
     yatori_core: dict | None = None,
     require_version_match: bool = False,
+    desktop_exe: Path | None = None,
 ) -> dict:
     root = Path(root or PROJECT_ROOT).resolve()
     version = normalize_version(version)
@@ -162,13 +166,29 @@ def build(
 
     payload = list(iter_payload(root))
     names = {arcname for _, arcname in payload}
-    missing = [name for name in REQUIRED_FILES if name not in names]
+    missing = [name for name in REQUIRED_FILES if name != DESKTOP_EXE and name not in names]
     if missing:
         raise RuntimeError("full package is missing required file(s): " + ", ".join(missing))
 
-    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        for path, arcname in payload:
-            zf.write(path, arcname)
+    # Compile from source, never pick up an arbitrary historical *.exe from root.
+    # A supplied Windows build also permits packaging on a non-Windows host.
+    with tempfile.TemporaryDirectory(prefix="toolkit-desktop-entry-") as folder:
+        if desktop_exe is None:
+            try:
+                from .build_desktop_entry import build as build_entry
+            except ImportError:  # direct maintenance script
+                from build_desktop_entry import build as build_entry
+            desktop_exe = build_entry(Path(folder), root=root)
+        desktop_exe = Path(desktop_exe)
+        data = desktop_exe.read_bytes()
+        pe_offset = int.from_bytes(data[0x3c:0x40], "little") if len(data) >= 64 else 0
+        if len(data) < 64 or data[:2] != b"MZ" or data[pe_offset:pe_offset + 4] != b"PE\0\0":
+            raise ValueError("统一启动器.exe 不是有效的 Windows 可执行文件")
+        names.add(DESKTOP_EXE)
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            for path, arcname in payload:
+                zf.write(path, arcname)
+            zf.writestr(DESKTOP_EXE, data)
 
     digest = hashlib.sha256()
     with archive_path.open("rb") as handle:
@@ -180,7 +200,7 @@ def build(
         "asset": asset_name,
         "size": archive_path.stat().st_size,
         "sha256": digest.hexdigest(),
-        "files": len(payload),
+        "files": len(names),
         "fileList": sorted(names),
         "requiredFiles": list(REQUIRED_FILES),
     }
@@ -210,6 +230,7 @@ def main(argv=None) -> int:
     parser.add_argument("--yatori-core-size", type=int, default=None)
     parser.add_argument("--yatori-core-version", default="")
     parser.add_argument("--print-json", action="store_true")
+    parser.add_argument("--desktop-exe", type=Path, help="使用已编译的 Windows 启动入口；默认自动编译")
     args = parser.parse_args(argv)
 
     yatori_core = None
@@ -227,6 +248,7 @@ def main(argv=None) -> int:
             Path(args.out),
             yatori_core=yatori_core,
             require_version_match=args.require_version_match,
+            desktop_exe=args.desktop_exe,
         )
     except Exception as exc:
         print(f"full package build failed: {exc}", file=sys.stderr)

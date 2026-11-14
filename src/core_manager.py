@@ -22,9 +22,9 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from .atomic_io import atomic_dump_json
+    from .atomic_io import atomic_dump_json, capture_file_state, restore_file_state
 except ImportError:  # pragma: no cover - direct maintenance execution
-    from atomic_io import atomic_dump_json
+    from atomic_io import atomic_dump_json, capture_file_state, restore_file_state
 
 try:
     from .source_probe import collect_probes
@@ -1814,6 +1814,8 @@ class CoreManager:
         extract_dir = os.path.join(work_dir, "extract")
         backup_dir = os.path.join(self.base_dir, f"zhs-backup-{timestamp}")
         backed_up = False
+        metadata_snapshot = None
+        old_versions = dict(self.local_versions)
 
         try:
             self._log(f"正在安装 ZHS {tag}...")
@@ -1844,6 +1846,10 @@ class CoreManager:
                 shutil.rmtree(backup_dir)
             shutil.copytree(zhs_path, backup_dir)
             backed_up = True
+            metadata_snapshot = capture_file_state([
+                Path(self.base_dir) / "requirements-zhs.txt",
+                Path(self.version_file),
+            ])
 
             git_rev = f"tag:{tag}"
             if release_info.get("commit"):
@@ -1887,7 +1893,8 @@ class CoreManager:
 
             self.local_versions["zhs"] = tag
             self.local_versions["last_check"] = datetime.now().isoformat()
-            self._save_local_versions()
+            if not self._save_local_versions():
+                raise RuntimeError("无法保存 ZHS 新版本记录")
 
             if os.path.exists(backup_dir):
                 shutil.rmtree(backup_dir, ignore_errors=True)
@@ -1896,6 +1903,7 @@ class CoreManager:
 
         except Exception as exc:
             self._log(f"ZHS 更新失败: {exc}")
+            self.local_versions = old_versions
             if backed_up and os.path.exists(backup_dir):
                 try:
                     if os.path.exists(zhs_path):
@@ -1904,6 +1912,12 @@ class CoreManager:
                     self._log("已回滚到旧版 zhs")
                 except Exception as rollback_error:
                     self._log(f"回滚 zhs 失败: {rollback_error}")
+            if metadata_snapshot is not None:
+                try:
+                    restore_file_state(metadata_snapshot)
+                    self._log("已恢复 ZHS 依赖清单与版本记录；pip 已安装的依赖不自动降级")
+                except Exception as rollback_error:
+                    self._log(f"恢复 ZHS 依赖清单/版本记录失败: {rollback_error}")
             return False
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)

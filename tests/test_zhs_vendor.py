@@ -1,10 +1,13 @@
 import subprocess
+import shutil
+import zipfile
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
 from src import zhs_vendor
+from src.core_manager import CoreManager
 from src.web_action_service import ZHS_UPDATE_LINKS, WebActionService
 
 
@@ -35,6 +38,38 @@ def make_vendor(root, version="0.1.5", dependencies=("httpx>=0.28", "typer>=0.15
 def test_read_dependencies_parses_project_table(tmp_path):
     make_vendor(tmp_path, dependencies=("httpx>=0.28", "qrcode>=8.2"))
     assert zhs_vendor.read_dependencies(tmp_path) == ["httpx>=0.28", "qrcode>=8.2"]
+
+
+@pytest.mark.parametrize('failure', ['reinstall', 'requirements', 'smoke', 'version_record'])
+def test_core_update_restores_source_dependencies_and_version_record(tmp_path, monkeypatch, failure):
+    root = tmp_path / 'installed'
+    target = make_vendor(root / 'zhs', dependencies=('httpx>=0.28',))
+    zhs_vendor.write_manifest(target)
+    requirements = root / 'requirements-zhs.txt'
+    requirements.write_bytes(b'# old exact bytes\r\nhttpx>=0.28\r\n')
+    source = make_vendor(tmp_path / 'upstream', version='0.1.6', dependencies=('httpx>=0.29',))
+    archive = tmp_path / 'upstream.zip'
+    with zipfile.ZipFile(archive, 'w') as package:
+        for path in source.rglob('*'):
+            if path.is_file():
+                package.write(path, 'upstream/' + path.relative_to(source).as_posix())
+    manager = CoreManager(str(root))
+    manager.local_versions = {'zhs': '0.1.5', 'last_check': 'before'}
+    manager._save_local_versions()
+    before_version = (root / '.core_versions.json').read_bytes()
+    before_source = (target / 'pyproject.toml').read_bytes()
+    monkeypatch.setattr(manager, 'download_file', lambda url, dest, *a, **kw: bool(shutil.copyfile(archive, dest)))
+    monkeypatch.setattr(zhs_vendor, 'find_venv_python', lambda *a: 'fake-python')
+    for key, method in [('reinstall', 'reinstall_editable'), ('requirements', 'ensure_requirements'), ('smoke', 'smoke_check')]:
+        monkeypatch.setattr(zhs_vendor, method, lambda *a, _key=key, **kw: (_key != failure, 'injected failure'))
+    if failure == 'version_record':
+        monkeypatch.setattr(manager, '_save_local_versions', lambda: False)
+    assert manager.install_zhs({'version': '0.1.6', 'tag': 'v0.1.6', 'download_url': 'https://example.invalid/source.zip'}) is False
+    assert (target / 'pyproject.toml').read_bytes() == before_source
+    assert requirements.read_bytes() == b'# old exact bytes\r\nhttpx>=0.28\r\n'
+    assert (root / '.core_versions.json').read_bytes() == before_version
+    assert manager.local_versions == {'zhs': '0.1.5', 'last_check': 'before'}
+    assert zhs_vendor.check_drift(target) == ([], [])
 
 
 def test_read_dependencies_missing_file_returns_empty(tmp_path):

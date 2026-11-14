@@ -235,3 +235,15 @@ def test_core_update_progress_failure_is_recorded_not_fatal(tmp_path):
     assert state["core_update"]["phase"] == "idle"
     assert any("核心更新进度" in issue for issue in state["state_issues"])
     assert state["backend_ready"] is True
+
+
+
+def test_launcher_download_progress_is_exposed_without_blocking_state(tmp_path):
+    launcher = _Launcher(tmp_path)
+    launcher._launcher_update_service = SimpleNamespace(
+        install_progress_snapshot=lambda: {'phase': 'downloading', 'percent': 42, 'downloaded': 42, 'total': 100},
+        startup_update_snapshot=lambda: {},
+    )
+    state = WebStateService(launcher).runtime_state()
+    assert state['launcher_update']['percent'] == 42
+    assert state['backend_ready'] is True

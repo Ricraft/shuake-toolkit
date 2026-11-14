@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.desktop_platform_service import DesktopPlatformService
+from src.launcher_migration import finish_legacy_update
 from src.preferences_service import PreferencesService
 from src.question_bank_controller import QuestionBankController
 from src.update_controller import UpdateController
@@ -44,6 +45,7 @@ class LauncherStartupService:
     def compose(self) -> str:
         launcher = self.launcher
         base_dir = launcher.get_base_dir()
+        finish_legacy_update(base_dir, log=launcher.log_system)
 
         launcher._desktop_platform_service = self.desktop_factory(
             base_dir,
@@ -96,7 +98,16 @@ class LauncherStartupService:
             show_info=launcher._show_info,
             show_warning=launcher._show_warning,
             show_error=launcher._show_error,
-            is_core_running=lambda core: bool(launcher.running.get(core)),
+            is_core_running=lambda core: bool(
+                launcher.running.get(core)
+                or getattr(launcher, "starting", {}).get(core)
+                or (core == "zhs" and getattr(launcher, "_zhs_runtime_prepare_running", False))
+                or (core == "autovisor" and (
+                    launcher.running.get("practice")
+                    or getattr(launcher, "starting", {}).get("practice")
+                    or getattr(getattr(launcher, "autovisor_dependencies", None), "installing", False)
+                ))
+            ),
             on_installed=launcher._handle_core_installed,
             get_autovisor_version=launcher._get_autovisor_display_version,
             schedule=launcher._after,

@@ -107,6 +107,7 @@ def _service(tmp_path, script):
         launcher,
         ai_service=ai,
         logger=launcher.log_system,
+        local_routing=False,  # This fixture tests model tool protocol, not local routing.
     )
     return agent, launcher, ai
 
@@ -175,6 +176,7 @@ def test_read_tool_runs_then_returns_final_reply(tmp_path):
         {
             "yatori_running": True,
             "autovisor_running": False,
+            "zhs_running": False,
             "practice_running": False,
             "question_bank_running": False,
             "shutdown_pending": False,
@@ -305,8 +307,8 @@ def test_invalid_write_arguments_do_not_create_pending(tmp_path):
     assert result["pending"] is None
     assert agent.pending_ids() == []
     assert launcher.preferences == []
-    tool_messages = [m for m in ai.calls[1]["messages"] if m.get("role") == "tool"]
-    assert "不支持修改偏好项" in tool_messages[0]["content"]
+    assert len(ai.calls) == 1
+    assert "不支持修改偏好项" in result['reply']
 
 
 def test_unsupported_tools_falls_back_to_text_protocol(tmp_path):

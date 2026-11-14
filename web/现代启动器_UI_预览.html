@@ -97,14 +97,22 @@
         <main class="main-content">
             <!-- ===== 中控台 ===== -->
             <div id="view-dashboard" class="view-page active">
+                <div id="launcher-update-result" class="glass-card mb-5" hidden role="status" aria-live="polite" style="padding: 1rem;">
+                    <strong id="launcher-update-result-title"></strong>
+                    <p id="launcher-update-result-detail" class="text-xs mt-2"></p>
+                    <div class="flex gap-2 mt-3" style="flex-wrap: wrap;">
+                        <button id="launcher-update-result-log" class="btn btn-outline btn-sm" onclick="openLastLauncherUpdateLog()">打开更新日志</button>
+                        <button class="btn btn-outline btn-sm" onclick="dismissLastLauncherUpdateResult()">知道了</button>
+                    </div>
+                </div>
                 <div class="section-header">
                     <div>
                         <h1 class="section-title">中控台</h1>
                         <p class="section-subtitle">统一管理 Yatori、Autovisor 与 ZHS 核心，实时监控运行状态</p>
                     </div>
-                    <button id="btn-start-all" class="btn btn-primary btn-pill" onclick="saveAndPerform('start_all')">
+                    <button id="btn-start-all" class="btn btn-primary btn-pill" title="按软件设置的目标与已保存的核心配置启动" onclick="performAction('start_all')">
                         <i class="fas fa-play"></i>
-                        一键启动全部
+                        启动所选核心
                     </button>
                 </div>
 
@@ -117,7 +125,7 @@
                                     <img class="core-logo-img" src="assets/yatori_logo.png" alt="Yatori Logo">
                                 </div>
                                 <div class="core-info">
-                                    <h3>通用平台</h3>
+                                    <h3 class="core-title">通用平台<sup id="yatori-update-badge" class="core-update-badge" hidden aria-label="Yatori 有可用更新">New</sup></h3>
                                     <span id="yatori-version">Yatori Core</span>
                                 </div>
                             </div>
@@ -182,6 +190,10 @@
                             </div>
                         </div>
 
+                        <div class="core-environment" id="autovisor-environment" role="status" aria-live="polite">
+                            <div class="core-environment-content"><span id="autovisor-environment-message">首次启动时检查运行环境</span><small id="autovisor-environment-detail"></small></div>
+                            <button id="autovisor-environment-retry" class="btn btn-outline btn-sm" hidden onclick="handleCoreAction('autovisor')">重试启动</button>
+                        </div>
                         <div class="core-actions">
                             <button id="autovisor-action-btn" class="btn btn-primary flex-1" onclick="handleCoreAction('autovisor')">
                                 <i class="fas fa-power-off"></i> 启动核心
@@ -203,7 +215,7 @@
                             <div class="flex items-center gap-3">
                                 <div class="core-icon logo-core-icon zhs"><img class="core-logo-img" src="assets/zhs_logo.svg" alt="ZHS Logo"></div>
                                 <div class="core-info">
-                                    <h3>智慧树 ZHS（推荐）</h3>
+                                    <h3 class="core-title">智慧树 ZHS（推荐）<sup id="zhs-update-badge" class="core-update-badge" hidden aria-label="ZHS 有可用更新">New</sup></h3>
                                     <span id="zhs-version">ZHS Core</span>
                                 </div>
                             </div>
@@ -218,6 +230,10 @@
                             <span id="zhs-session-badge" class="status-badge idle">未登录</span>
                         </div>
 
+                        <div class="core-environment" id="zhs-environment" role="status" aria-live="polite">
+                            <div class="core-environment-content"><span id="zhs-environment-message">正在检查 ZHS 环境…</span><small id="zhs-environment-detail"></small></div>
+                            <button id="zhs-environment-retry" class="btn btn-outline btn-sm" onclick="prepareZhsEnvironment()">准备环境</button>
+                        </div>
                         <div class="core-actions">
                             <button id="zhs-action-btn" class="btn btn-primary flex-1" onclick="handleCoreAction('zhs')">
                                 <i class="fas fa-power-off"></i> 启动核心
@@ -1383,9 +1399,20 @@
                         <div class="setting-row">
                             <div class="setting-info">
                                 <div class="setting-title">启动后自动运行</div>
-                                <div class="setting-desc">启动器打开后自动开始刷课任务</div>
+                                <div class="setting-desc">使用下方所选目标，与中控台按钮及天依的一键启动一致</div>
                             </div>
                             <label class="switch"><input id="pref-auto-run" type="checkbox" onchange="savePreference('autoRun', this.checked)"><span class="slider"></span></label>
+                        </div>
+                        <div class="setting-row" style="align-items: flex-start; flex-wrap: wrap;">
+                            <div class="setting-info">
+                                <div class="setting-title">一键启动目标</div>
+                                <div class="setting-desc">按钮、自动运行和天依共用。未配置的核心会跳过；Yatori 和旧智慧树需要时自动启动题库。</div>
+                            </div>
+                            <div class="flex gap-3" style="flex-wrap: wrap;">
+                                <label><input id="batch-target-yatori" type="checkbox" onchange="saveBatchTargets()"> Yatori</label>
+                                <label><input id="batch-target-autovisor" type="checkbox" onchange="saveBatchTargets()"> 旧智慧树</label>
+                                <label><input id="batch-target-zhs" type="checkbox" onchange="saveBatchTargets()"> ZHS</label>
+                            </div>
                         </div>
                     </div>
 
@@ -1480,10 +1507,10 @@
                             <i class="fas fa-rotate"></i> 检查统一启动器更新
                         </button>
                         <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="openYatoriUpdateDialog()">
-                            <i class="fas fa-download"></i> 安装 Yatori 更新
+                            <i class="fas fa-cloud-arrow-down"></i> 安装 Yatori 更新
                         </button>
-                        <button class="btn btn-outline btn-pill" onclick="openAutovisorUpdateDialog()">
-                            <i class="fas fa-cloud-arrow-down"></i> 检查 Autovisor 更新
+                        <button class="btn btn-primary btn-pill btn-glow btn-magnetic" onclick="checkZhsUpdate()">
+                            <i class="fas fa-cloud-arrow-down"></i> 安装 ZHS 更新
                         </button>
                         <button class="btn btn-outline btn-pill" disabled title="当前为本地适配版，不使用上游包覆盖安装">
                             <i class="fas fa-shield-halved"></i> Autovisor 本地适配版
@@ -1503,17 +1530,45 @@
                         </div>
                         <div class="flex flex-col" id="changelog-list">
                             <div class="changelog-item">
+                                <span class="changelog-badge feature">新增</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.7.3 - 统一启动目标与环境重试</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">软件设置新增一键启动目标，中控台、自动运行和洛天依共用所选核心；默认保留 Yatori 与旧智慧树，ZHS 可勾选加入，未配置的核心明确提示跳过。ZHS 卡片显示环境缺失、准备中、失败详情及已就绪，并提供准备和重试按钮；准备完成后再点击启动核心。旧智慧树依赖安装失败显示详情与重试启动入口。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.7.3 - 更新进度与重启结果回执</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">启动时检查 Yatori、ZHS 和启动器版本；核心有更新显示 New，启动器有更新展示详情，确认后安装。启动器下载进度保留在详情页，支持失败重试；应用脚本保存更新结果和日志，重启后核对实际版本，支持打开日志和标记已读。补齐核心启动与更新互斥、安装期间退出保护，以及 ZHS 扫码进程退出清理。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge improve">优化</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.7.3 - 洛天依 Agent 设置控制与调用优化</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">洛天依可查询和修改公开启动器偏好、已有核心配置与题库设置，写操作统一确认，敏感内容隐藏，保存后刷新界面。明确指令优先本地识别，复杂指令再调用模型；限制历史和工具结果长度，按意图选择工具并复用只读查询。完善否定、歧义和多步骤指令处理，执行失败时报告已完成部分。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
+                                <span class="changelog-badge fix">修复</span>
+                                <div>
+                                    <div class="text-sm font-semibold">v1.7.3 - 桌面入口、旧版升级与发布回归</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">完整包新增带图标的统一启动器.exe，引导环境并兼容中文和空格路径；构建时修正入口的完整性标签，避免继承 Low 导致日志写入失败。旧版本升级补齐遗漏的 ZHS 源码、bootstrap 与依赖清单，成功应用后清理对应启动器 ZIP，失败保留。关于页使用 ZHS 更新入口与云朵图标；Windows 发布流程先跑完整回归和 JS 检查，再构建发布资产。</div>
+                                </div>
+                            </div>
+                            <div class="changelog-item">
                                 <span class="changelog-badge fix">修复</span>
                                 <div>
                                     <div class="text-sm font-semibold">v1.7.2 - 旧版本自更新兼容与 ZHS 环境自愈</div>
-                                    <div class="text-xs mt-1" style="color: var(--text-muted);">修复 v1.7.0 及更早客户端更新到 v1.7.1 时必然回滚的问题：manifest 的 fileList 只列旧客户端能替换的 统一启动器.py / requirements.txt / src / web，完整清单改由 fullFileList 提供，旧客户端不再因 bootstrap.py、zhs/ 校验失败而放弃更新。更新后首次启动会自检 ZHS 环境，缺失且已配置过 ZHS 时在后台经 src/zhs_runtime_prepare.py 补建 .runtime/venv-zhs（旧版 bootstrap.py 没有 --prepare-zhs 也能生效）；点击启动核心时也会顺带触发准备并给出明确提示。</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">为旧更新器提供四项 fileList 兼容清单，并通过 fullFileList 提供完整清单。原发布版的 ZHS 环境自愈链路仍有缺口，遗漏文件补齐、环境重试与对应 ZIP 清理在 v1.7.3 中完善。</div>
                                 </div>
                             </div>
                             <div class="changelog-item">
                                 <span class="changelog-badge fix">修复</span>
                                 <div>
                                     <div class="text-sm font-semibold">v1.7.1 - 启动器自更新自动应用与 ZHS 环境准备</div>
-                                    <div class="text-xs mt-1" style="color: var(--text-muted);">启动器自更新改为下载校验后自动应用并重启：更新脚本等待旧进程退出、备份并替换 统一启动器.py / requirements.txt / bootstrap.py / requirements-zhs.txt / src / web / zhs，随后运行 bootstrap.py --prepare-zhs 准备 .runtime/venv-zhs，再自动拉起启动器，任一步失败自动回滚；核心任务运行中则推迟到退出启动器时应用。自更新包与完整包内容保持一致，不再需要手动运行「应用更新.cmd」。</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">新增更新器在下载校验后启动进程外脚本，等待旧进程退出、备份、替换七项白名单并逐文件校验，再准备 ZHS 环境并重启。文件替换或校验失败回滚；ZHS 环境准备失败只告警，保留启动器更新。核心任务运行中推迟到退出时应用；首次从更旧客户端升级仍受旧更新器限制。自更新包不包含完整包中的 Autovisor、Yatori 资产及全部脚本。</div>
                                 </div>
                             </div>
                             <div class="changelog-item">
@@ -1590,7 +1645,7 @@
                                 <span class="changelog-badge fix">修复</span>
                                 <div>
                                     <div class="text-sm font-semibold">v1.3.1 - 自更新完整性加固</div>
-                                    <div class="text-xs mt-1" style="color: var(--text-muted);">更新包改为按发布清单逐字节核对全部文件，缺任一文件（例如样式文件）都会拒绝暂存并回滚，不再出现新脚本配旧资源的混合安装</div>
+                                    <div class="text-xs mt-1" style="color: var(--text-muted);">更新包先按发布清单检查文件完整性，缺文件时拒绝生成应用脚本；替换后逐字节比对，失败则回滚，避免新脚本配旧资源的混合安装</div>
                                 </div>
                             </div>
                             <div class="changelog-item">
@@ -1960,8 +2015,18 @@
             </div>
             <div class="update-notes-title">最新版本介绍</div>
             <pre class="update-release-notes" id="launcher-update-notes">该版本暂未提供更新说明。</pre>
+            <div class="update-progress" id="launcher-update-progress" data-phase="downloading" hidden role="status" aria-live="polite">
+                <div class="update-progress-head">
+                    <span id="launcher-update-progress-label">正在下载</span>
+                    <strong id="launcher-update-progress-percent">0%</strong>
+                </div>
+                <div class="update-progress-track">
+                    <div class="update-progress-bar" id="launcher-update-progress-bar"></div>
+                </div>
+                <div class="update-progress-detail" id="launcher-update-progress-detail"></div>
+            </div>
             <div class="modal-actions">
-                <button class="btn btn-outline" onclick="closeLauncherUpdateModal()">稍后再说</button>
+                <button class="btn btn-outline" id="launcher-update-cancel-btn" onclick="closeLauncherUpdateModal()">稍后再说</button>
                 <button class="btn btn-primary" id="launcher-update-confirm-btn" onclick="confirmLauncherUpdate()">
                     <i class="fas fa-download"></i> 确认更新
                 </button>

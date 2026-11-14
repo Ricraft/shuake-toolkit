@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import threading
+from contextlib import nullcontext
 from datetime import datetime
+from src.preferences_service import DEFAULT_PREFERENCES, normalize_batch_targets
 
 
 class RuntimeCoordinator:
@@ -93,7 +95,16 @@ class RuntimeCoordinator:
             if not self._cancel_pending_shutdown_locked(script_type):
                 return False
             was_idle = self._runtime_is_idle()
-            claimed = launcher._get_process_supervisor().claim_start(script_type)
+            updates = getattr(launcher, "update_controller", None)
+            guard = updates.core_start_guard(script_type) if updates else nullcontext(True)
+            with guard as allowed:
+                if not allowed:
+                    message = "核心正在更新，请等待更新完成后再启动任务"
+                    launcher.log_system(message)
+                    return launcher._reject_runtime_start(
+                        script_type, message, failure_kind="system",
+                    )
+                claimed = launcher._get_process_supervisor().claim_start(script_type)
             if (
                 claimed
                 and was_idle
@@ -252,7 +263,11 @@ class RuntimeCoordinator:
         )
         launcher._runtime_batch_starting = True
         try:
-            launcher.log_system("正在一键启动所有脚本...")
+            preferences = launcher.get_web_preferences() if hasattr(launcher, "get_web_preferences") else {}
+            targets = normalize_batch_targets(preferences.get("batchTargets", DEFAULT_PREFERENCES["batchTargets"]))
+            if not targets:
+                return {"ok": False, "message": "未选择启动目标，请在软件设置中选择核心", "skipped": [], "submitted": []}
+            launcher.log_system("正在启动所选核心: " + "、".join(self.CORE_LABELS[core] for core in targets))
             if not self.prepare_start("batch"):
                 message = getattr(launcher, "_last_start_error", {}).get(
                     "batch",
@@ -269,15 +284,34 @@ class RuntimeCoordinator:
 
             failures = []
             failure_kinds = []
+            skipped, submitted, already_running = [], [], []
+            eligible = []
+            running = getattr(launcher, "running", {})
+            starting = getattr(launcher, "starting", {})
+            for core in targets:
+                if running.get(core) or starting.get(core):
+                    already_running.append(core)
+                    continue
+                checker = getattr(launcher, '_batch_start_skip_reason', None)
+                try:
+                    reason = checker(core) if callable(checker) else ""
+                except Exception:
+                    reason = "无法读取配置，请打开核心设置检查"
+                if reason:
+                    skipped.append({"core": core, "message": reason})
+                    launcher.log_system(f"跳过 {self.CORE_LABELS[core]}: {reason}")
+                else:
+                    eligible.append(core)
             if not hasattr(launcher, "_last_start_error"):
                 launcher._last_start_error = {}
             if not hasattr(launcher, "_last_start_failure_kind"):
                 launcher._last_start_failure_kind = {}
 
             question_bank = launcher.question_bank
-            if not question_bank.available:
+            needs_question_bank = any(core in ("yatori", "autovisor") for core in eligible)
+            if needs_question_bank and not question_bank.available:
                 failures.append("题库服务器模块不可用")
-            elif not question_bank.running:
+            elif needs_question_bank and not question_bank.running:
                 try:
                     started = launcher.start_question_bank(silent=True)
                 except Exception as exc:
@@ -288,7 +322,7 @@ class RuntimeCoordinator:
 
             running = getattr(launcher, "running", {})
             starting = getattr(launcher, "starting", {})
-            for core in ("yatori", "autovisor"):
+            for core in eligible:
                 if running.get(core) or starting.get(core):
                     continue
                 launcher._last_start_failure_kind.pop(core, None)
@@ -303,6 +337,7 @@ class RuntimeCoordinator:
                         f"{self.CORE_LABELS[core]} 启动异常: {exc}"
                     )
                 if started:
+                    submitted.append(core)
                     continue
                 failures.append(
                     getattr(launcher, "_last_start_error", {}).get(
@@ -322,12 +357,17 @@ class RuntimeCoordinator:
                     "ok": False,
                     "message": message,
                     "failureKinds": list(dict.fromkeys(failure_kinds)),
+                    "submitted": submitted, "skipped": skipped, "alreadyRunning": already_running,
                 }
+            message = "启动请求已提交" if submitted else "所选核心已在运行" if already_running else "没有可启动的核心"
+            if skipped:
+                message += "；" + "；".join(f"跳过 {self.CORE_LABELS[item['core']]}：{item['message']}" for item in skipped)
             return {
-                "ok": True,
-                "message": "全部启动请求已提交",
-                "toast": "全部启动请求已提交",
-                "toastType": "success",
+                "ok": bool(submitted or already_running),
+                "message": message,
+                "toast": message,
+                "toastType": "warning" if skipped else "success",
+                "submitted": submitted, "skipped": skipped, "alreadyRunning": already_running,
             }
         finally:
             launcher._runtime_batch_starting = previous_batch_state

@@ -963,7 +963,7 @@ def test_about_page_exposes_launcher_update_button_and_modal():
     assert 'id="yatori-update-modal"' in PAGE
     assert "openYatoriUpdateDialog()" in PAGE
     assert "安装 Yatori 更新" in PAGE
-    assert "检查 Autovisor 更新" in PAGE
+    assert "安装 ZHS 更新" in PAGE
     assert "Autovisor 本地适配版" in PAGE
     assert "我的成就" in PAGE
     assert "最新版本介绍" in PAGE
@@ -1102,10 +1102,13 @@ def _run_apply_script(script):
 @pytest.mark.skipif(os.name != "nt", reason="应用脚本是 Windows 批处理")
 def test_apply_script_runs_on_a_space_and_cjk_path(workspace):
     root, script = _make_e2e_root(workspace)
+    archive = script.parent / f"{TAG}.zip"
+    archive.write_bytes(b"downloaded archive")
 
     completed = _run_apply_script(script)
 
     assert completed.returncode == 0, completed.stdout.decode("utf-8", "replace")
+    assert not archive.exists(), "成功应用后必须清理本次下载 ZIP"
     assert (root / "统一启动器.py").read_text(encoding="utf-8") == "NEW-LAUNCHER"
     assert (root / "requirements.txt").read_text(encoding="utf-8") == "NEW-REQ"
     assert (root / "src" / "module.py").read_text(encoding="utf-8") == "NEW-SRC"
@@ -1129,10 +1132,13 @@ def test_apply_script_runs_on_a_space_and_cjk_path(workspace):
 @pytest.mark.skipif(os.name != "nt", reason="应用脚本是 Windows 批处理")
 def test_apply_script_rolls_back_when_a_replaced_file_is_missing(workspace):
     root, script = _make_e2e_root(workspace, complete_payload=False)
+    archive = script.parent / f"{TAG}.zip"
+    archive.write_bytes(b"downloaded archive")
 
     completed = _run_apply_script(script)
 
     assert completed.returncode == 1
+    assert archive.read_bytes() == b"downloaded archive", "回滚时必须保留 ZIP"
     assert not (root / "src" / "module.py").exists()
     assert (root / "src" / "keep.py").read_text(encoding="utf-8") == "OLD-SRC"
     assert (root / "统一启动器.py").read_text(encoding="utf-8") == "OLD-LAUNCHER"
@@ -1269,3 +1275,64 @@ def test_package_missing_a_file_declared_by_manifest_is_rejected(workspace):
     assert "web/styles.css" in result["message"]
     assert "launcher-manifest.json" in result["message"]
     assert not (base / UPDATE_STAGING_DIR_NAME / APPLY_SCRIPT_NAME).exists()
+
+
+@pytest.mark.parametrize('known_total', [True, False])
+def test_launcher_progress_reports_download_verify_extract_and_ready(workspace, known_total):
+    archive = write_payload_zip(workspace / 'progress.zip')
+    release = _release(TAG, assets=[_zip_asset(TAG, archive), _manifest_asset_entry()])
+    delivered = []
+    service = make_service(make_base_dir(workspace), releases=[release], archive=str(archive), on_result=delivered.append)
+    original = service.downloader
+    samples = []
+    phases = []
+    update = service._update_install_progress
+    def capture(**fields):
+        update(**fields)
+        phases.append(service.install_progress_snapshot()['phase'])
+    service._update_install_progress = capture
+    def download(url, target, callback, timeout):
+        size = archive.stat().st_size
+        callback(size // 2, size if known_total else None)
+        samples.append(service.install_progress_snapshot())
+        return original(url, target, callback, timeout)
+    service.downloader = download
+    token = service.prepare_update_confirmation()['updateDialog']['confirmationToken']
+    queued = []
+    assert service.install_confirmed_async(token, run_async=queued.append)
+    assert service.install_progress_snapshot()['phase'] == 'downloading'
+    assert service.installing
+    queued[0]()
+    assert samples[0]['downloaded'] > 0
+    assert samples[0]['speed'] > 0
+    assert (samples[0]['eta'] is not None) is known_total
+    assert phases.index('verifying') < phases.index('extracting') < phases.index('ready')
+    assert service.install_progress_snapshot()['percent'] == 100
+    assert not service.installing
+    assert delivered[0]['staged']
+    snapshot = service.install_progress_snapshot()
+    snapshot['phase'] = 'external mutation'
+    assert service.install_progress_snapshot()['phase'] == 'ready'
+
+
+@pytest.mark.parametrize('failure', ['download', 'checksum', 'exception'])
+def test_launcher_progress_records_failure_without_claiming_ready(workspace, failure):
+    archive = write_payload_zip(workspace / 'failed.zip')
+    asset = _zip_asset(TAG, archive)
+    if failure == 'checksum':
+        asset['digest'] = 'sha256:' + '0' * 64
+    release = _release(TAG, assets=[asset, _manifest_asset_entry()])
+    service = make_service(make_base_dir(workspace), releases=[release], archive=str(archive))
+    if failure == 'download':
+        service.downloader = lambda *a: False
+    elif failure == 'exception':
+        def fail(*a):
+            raise OSError('connection lost')
+        service.downloader = fail
+    token = service.prepare_update_confirmation()['updateDialog']['confirmationToken']
+    assert service.install_confirmed_async(token, run_async=lambda worker: worker())
+    progress = service.install_progress_snapshot()
+    assert progress['phase'] == 'failed'
+    assert progress['message']
+    assert not service.installing
+    assert not (Path(service.base_dir) / UPDATE_STAGING_DIR_NAME / APPLY_SCRIPT_NAME).exists()

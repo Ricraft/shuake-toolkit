@@ -31,6 +31,7 @@ import shutil
 import ssl
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -38,6 +39,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
+from src.launcher_update_receipt import apply_receipt_command, receipt_snapshot, acknowledge_receipt
 
 try:
     from .core_manager import CoreManager
@@ -357,11 +359,17 @@ def build_apply_script(
     hand. Manual mode (the defaults) still ends with pause and exit code.
     """
     payload_name = payload_dir_name or safe_version_dirname(version)
+    if not re.fullmatch(r'[A-Za-z0-9._-]+', payload_name) or payload_name in ('.', '..'):
+        raise ValueError('无效的更新暂存目录名')
     try:
         pid_text = str(int(launcher_pid or 0))
     except (TypeError, ValueError):
         pid_text = "0"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_name = payload_name + '-' + stamp + '-apply.log'
+    receipt = {'id': secrets.token_hex(16), 'targetVersion': str(version),
+               'previousVersion': str(current_version), 'launcherPid': int(pid_text),
+               'logPath': '.update-staging/' + log_name}
     python_text = str(launcher_python or "").strip()
     # 重启时优先用同目录的 pythonw.exe，避免更新后多弹一个控制台窗口；
     # 准备 ZHS 环境必须用控制台解释器，pythonw.exe 没有 stdout 会丢日志。
@@ -390,6 +398,15 @@ def build_apply_script(
         "@echo off",
         "chcp 65001 >nul",
         "setlocal enableextensions enabledelayedexpansion",
+        f'set "UPDATE_LOG=%~dp0{log_name}"',
+        f'set "AUTO_RESTART={restart_flag}"',
+        'if "%~1"=="--logged" goto execute_logged',
+        'call "%~f0" --logged >"%UPDATE_LOG%" 2>&1',
+        'set "UPDATE_EXIT=!ERRORLEVEL!"',
+        'type "%UPDATE_LOG%"',
+        'if "%AUTO_RESTART%"=="0" (pause) else if not "!UPDATE_EXIT!"=="0" pause',
+        'exit /b !UPDATE_EXIT!',
+        ':execute_logged',
         "rem ==============================================================",
         "rem  统一启动器更新脚本",
         f"rem  版本: {current_version} 到 {version}",
@@ -408,6 +425,9 @@ def build_apply_script(
         f'set "PYTHON={restart_python_text}"',
         f'set "PREPARE_PYTHON={prepare_python_text}"',
         'set "FAILED=0"',
+        'set "ZHS_PREPARE_FAILED=0"',
+        'set "FAILURE_REASON="',
+        apply_receipt_command(receipt, 'applying'),
         "",
         "echo.",
         'echo [统一启动器更新] 当前版本 "%CURRENT%" 到 "%VERSION%"',
@@ -430,6 +450,7 @@ def build_apply_script(
         ")",
         "",
         ":ready",
+        'set "FAILURE_REASON=更新包不完整或备份失败，未完成更新"',
         'if not exist "%PAYLOAD%\\统一启动器.py" (',
         '    echo [错误] 暂存目录缺少更新内容: "%PAYLOAD%"',
         "    goto fail",
@@ -488,22 +509,31 @@ def build_apply_script(
     lines += [
         'if "%FAILED%"=="1" goto rollback',
         "",
+        "rem ---- 完整落地校验成功后才删除本次下载的 ZIP，失败路径保留 ----",
+        f'if exist "%~dp0{payload_name}.zip" del /Q "%~dp0{payload_name}.zip"',
+        "",
         "rem ---- 更新后立即准备 ZHS 运行环境，避免首次点击核心时才报环境缺失 ----",
         'if exist "%ROOT%\\bootstrap.py" if defined PREPARE_PYTHON (',
         "    echo 正在准备 ZHS 运行环境（首次可能需要几分钟）...",
         '    "%PREPARE_PYTHON%" "%ROOT%\\bootstrap.py" --prepare-zhs --quiet',
-        "    if errorlevel 1 echo [警告] ZHS 运行环境准备未完成，可稍后在 ZHS 页面重新准备。",
+        "    if errorlevel 1 (",
+        '        set "ZHS_PREPARE_FAILED=1"',
+        "        echo [警告] ZHS 运行环境准备未完成，可稍后在 ZHS 页面重新准备。",
+        "    )",
         ")",
         "",
+        'set "FAILURE_REASON="',
+        apply_receipt_command(receipt, 'success'),
         *restart_block,
         'echo [完成] 统一启动器已更新到 "%VERSION%"。',
         'echo         旧版本备份: "%BACKUP%"',
         'if not "%AUTO_RESTART%"=="1" echo         暂存目录可在确认更新成功后删除: "%PAYLOAD%"',
-        'if not "%AUTO_RESTART%"=="1" echo         重新启动: 双击 启动器.exe 或运行 hide_run.vbs',
+        'if not "%AUTO_RESTART%"=="1" echo         重新启动: 双击 统一启动器.exe 或 启动依赖.cmd',
         'if "%AUTO_RESTART%"=="1" goto done_auto',
         "goto done",
         "",
         ":rollback",
+        'set "FAILURE_REASON=替换校验失败，已尝试恢复旧版本；请检查日志确认回滚结果"',
         "echo [错误] 替换后校验失败，正在回滚到更新前版本 ...",
         'if exist "%BACKUP%\\src" robocopy "%BACKUP%\\src" "%ROOT%\\src" /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
         'if exist "%BACKUP%\\web" robocopy "%BACKUP%\\web" "%ROOT%\\web" /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 >nul',
@@ -516,15 +546,14 @@ def build_apply_script(
         "goto fail",
         "",
         ":fail",
+        apply_receipt_command(receipt, 'failed'),
         "echo.",
         "echo 更新未完成。请查看上面的提示后重试，或手动从 GitHub Releases 重新下载。",
-        "pause",
         "endlocal",
         "exit /b 1",
         "",
         ":done",
         "echo.",
-        "pause",
         "endlocal",
         "exit /b 0",
         "",
@@ -594,6 +623,62 @@ class LauncherUpdateService:
         self._lock = threading.RLock()
         self._pending_confirmation = None
         self.installing = False
+        self._startup_checked = False
+        self._startup_update_result = {}
+        self._install_progress = {"phase": "idle", "percent": 0.0, "version": ""}
+        self._download_started = 0.0
+
+    def install_progress_snapshot(self):
+        with self._lock:
+            return copy.deepcopy(self._install_progress)
+
+    def _update_install_progress(self, **fields):
+        with self._lock:
+            self._install_progress.update(fields)
+            self._install_progress["updated_at"] = time.monotonic()
+
+    def last_result_snapshot(self):
+        return receipt_snapshot(self.base_dir, self.current_version, pid=self.pid)
+
+    def dismiss_last_result(self, receipt_id):
+        return acknowledge_receipt(self.base_dir, str(receipt_id or ''))
+
+    def _finish_install_progress(self, result):
+        if result.get("ok") and result.get("staged"):
+            self._update_install_progress(phase="ready", percent=100.0, speed=0.0, eta=None,
+                message="更新包已校验并准备完成，将在退出启动器后应用并重启")
+        else:
+            self._update_install_progress(phase="failed", speed=0.0, eta=None,
+                message=result.get("message") or "更新失败，请重新检查更新后重试")
+
+    def check_startup_async(self):
+        """Check once per launch and expose a dialog candidate to state polling."""
+        with self._lock:
+            if self._startup_checked:
+                return False
+            self._startup_checked = True
+
+        def worker():
+            try:
+                result = self.prepare_update_confirmation()
+            except Exception as exc:
+                self._log(f"启动时检查统一启动器更新失败: {exc}")
+                result = {}
+            with self._lock:
+                self._startup_update_result = copy.deepcopy(result)
+
+        threading.Thread(target=worker, name="launcher-startup-update", daemon=True).start()
+        return True
+
+    def startup_update_snapshot(self):
+        with self._lock:
+            result = copy.deepcopy(self._startup_update_result)
+            dialog = result.get("updateDialog") or {}
+            if not dialog or dialog.get("confirmationToken") != (self._pending_confirmation or {}).get("token"):
+                return {}
+            if self.installing:
+                return {}
+            return result
 
     # -------------------------------------------------- infrastructure
 
@@ -1140,8 +1225,8 @@ class LauncherUpdateService:
             )
         else:
             summary = (
-                f"将从 {current} 更新到 {latest}。确认后只下载并暂存新版本，"
-                "不会在运行中覆盖当前文件。"
+                f"将从 {current} 更新到 {latest}。确认后下载、校验并暂存新版本，"
+                "退出后自动应用并重启；核心任务运行中会推迟到退出启动器时处理。"
             )
         dialog = {
             "core": "launcher",
@@ -1180,6 +1265,12 @@ class LauncherUpdateService:
             self.installing = True
             release = copy.deepcopy(pending.get("release") or {})
             current = pending.get("currentVersion") or self.current_version
+            self._download_started = time.monotonic()
+            self._install_progress = {
+                "phase": "downloading", "version": release.get("version") or "",
+                "percent": 0.0, "downloaded": 0, "total": 0, "speed": 0.0,
+                "eta": None, "message": "正在准备下载...", "updated_at": self._download_started,
+            }
         return release, current
 
     def install_confirmed(self, confirmation_token, *, progress=None):
@@ -1194,10 +1285,13 @@ class LauncherUpdateService:
             }
         release, current = claimed
         try:
-            return self._install(release, current, progress=progress)
+            result = self._install(release, current, progress=progress)
+            self._finish_install_progress(result)
+            return result
         except Exception as exc:
             message = f"统一启动器更新失败: {exc}"
             self._log(f"❌ {message}")
+            self._finish_install_progress({"message": message})
             return {"ok": False, "message": message}
         finally:
             with self._lock:
@@ -1227,6 +1321,7 @@ class LauncherUpdateService:
             finally:
                 with self._lock:
                     self.installing = False
+            self._finish_install_progress(result)
             self._deliver_result(result, schedule)
 
         (run_async or _run_in_background)(worker)
@@ -1305,18 +1400,31 @@ class LauncherUpdateService:
             os.remove(archive_path)
 
         self._log(f"开始下载统一启动器 {version} ...")
+        def report_download(downloaded, total):
+            elapsed = max(time.monotonic() - self._download_started, 0.001)
+            speed = downloaded / elapsed
+            self._update_install_progress(
+                phase="downloading", downloaded=downloaded, total=total or 0,
+                percent=min(100.0, downloaded / total * 100) if total else 0.0,
+                speed=speed, eta=max(total - downloaded, 0) / speed if total and speed else None,
+                message="正在下载更新包",
+            )
+            if callable(progress):
+                progress(downloaded, total)
         downloaded = self.downloader(
-            download_url, archive_path, progress, self.download_timeout
+            download_url, archive_path, report_download, self.download_timeout
         )
         if not downloaded:
             return {"ok": False, "message": "更新资源下载失败，请检查网络后重试。"}
 
+        self._update_install_progress(phase="verifying", speed=0.0, eta=None, message="正在校验文件大小与 SHA-256")
         verified, reason = self.verify_download(archive_path, release)
         if not verified:
             return {"ok": False, "message": f"更新资源校验失败：{reason}"}
         self._log("更新资源大小与 SHA-256 校验通过")
 
         self._log("正在解压更新包...")
+        self._update_install_progress(phase="extracting", message="正在解压并检查更新包文件清单")
         with zipfile.ZipFile(archive_path) as zip_ref:
             safe_extract_zip(zip_ref, payload_dir)
 

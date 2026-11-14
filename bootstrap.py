@@ -958,7 +958,7 @@ def ensure_webview2(*, logger: Any = None, os_name: str | None = None) -> bool:
         "error",
     )
     _emit(logger, f"请先安装 WebView2 Runtime: {WEBVIEW2_URL}", "error")
-    _emit(logger, "安装完成后重新运行 启动依赖.cmd。", "error")
+    _emit(logger, "安装完成后重新打开 统一启动器.exe（或备用入口 启动依赖.cmd）。", "error")
     return False
 
 

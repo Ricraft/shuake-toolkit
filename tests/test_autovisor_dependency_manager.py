@@ -113,6 +113,8 @@ class AutovisorDependencyManagerTests(unittest.TestCase):
             self.assertFalse(manager.installing)
             self.assertEqual(errors, [])
             self.assertEqual(ready, [])
+            self.assertEqual(manager.environment_snapshot()['phase'], 'failed')
+            self.assertIn('没有安装规则', manager.environment_snapshot()['detail'])
 
             callbacks.pop()()
             self.assertIn("没有安装规则", errors[0][1])

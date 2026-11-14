@@ -146,6 +146,7 @@ class ZhsService:
         self._env_cache: tuple[float, dict[str, Any]] | None = None
         self._env_lock = threading.Lock()
         self._login_lock = threading.Lock()
+        self._closing = False
         self._logins: dict[int, dict[str, Any]] = {}
         self._fetch_lock = threading.Lock()
         self._session_lock = threading.Lock()
@@ -232,7 +233,7 @@ class ZhsService:
             "checked_at": time.time(),
         }
         if not os.path.isfile(python):
-            state["message"] = "未找到 ZHS 运行环境（.runtime/venv-zhs），请先运行 bootstrap.py --install"
+            state["message"] = "未找到 ZHS 运行环境（.runtime/venv-zhs），点击扫码登录或启动核心可自动准备"
             return state
         self.ensure_account_dirs()
         probe = self._run_command(
@@ -471,6 +472,8 @@ class ZhsService:
         account = self.normalize_account_id(account_id)
         entry = self._login_entry(account)
         with self._login_lock:
+            if self._closing:
+                return {"ok": False, "message": "启动器正在退出，无法开始扫码登录"}
             thread = entry.get("thread")
             if thread is not None and thread.is_alive():
                 return {"ok": False, "message": "扫码登录已在进行中", "snapshot": self.login_snapshot(account)}
@@ -493,6 +496,20 @@ class ZhsService:
             thread.start()
         self._log("开始扫码登录，正在获取二维码…")
         return {"ok": True, "message": "已开始获取二维码", "snapshot": self.login_snapshot(account)}
+
+    def shutdown(self) -> None:
+        """Stop QR workers on exit without clearing saved account credentials."""
+        with self._login_lock:
+            self._closing = True
+            processes = []
+            for entry in self._logins.values():
+                entry["cancelled"] = True
+                if entry["status"] in ("starting", "waiting", "scanned"):
+                    entry.update({"status": "cancelled", "message": "启动器已退出，扫码登录已停止"})
+                if entry.get("process") is not None:
+                    processes.append(entry["process"])
+        for process in processes:
+            self._terminate(process)
 
     def cancel_login(self, account_id: Any = ACCOUNT_ID_DEFAULT) -> dict[str, Any]:
         account = self.normalize_account_id(account_id)
@@ -526,18 +543,22 @@ class ZhsService:
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = None
+        watchdog = None
         stderr_tail: list[str] = []
         try:
-            process = subprocess.Popen(
-                command,
-                cwd=self.account_dir(account),
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                **kwargs,
-            )
-            entry["process"] = process
+            with self._login_lock:
+                if self._closing or entry["cancelled"]:
+                    return
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.account_dir(account),
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    **kwargs,
+                )
+                entry["process"] = process
             watchdog = threading.Timer(LOGIN_TIMEOUT_SECONDS, self._terminate, args=(process,))
             watchdog.daemon = True
             watchdog.start()
@@ -571,6 +592,8 @@ class ZhsService:
         except Exception as exc:
             entry.update({"status": "error", "message": f"扫码登录异常：{exc}"})
         finally:
+            if watchdog is not None:
+                watchdog.cancel()
             entry["process"] = None
             entry["updated_at"] = time.time()
             if entry["status"] == "success":
@@ -612,6 +635,8 @@ class ZhsService:
 
     def _verify_after_login(self, account: int) -> None:
         """扫码成功后立刻做一次服务端校验（后台线程），让界面显示真实登录态。"""
+        if self._closing:
+            return
         try:
             state = self.session_state(account, verify=True, force=True)
         except Exception as exc:  # noqa: BLE001 - 校验失败不影响登录结果

@@ -74,6 +74,11 @@ class AutovisorDependencyManager:
         self.playwright_host_resolver = playwright_host_resolver
         self.installing = False
         self._lock = threading.RLock()
+        self._environment_status = {"phase": "unchecked", "message": "首次启动时检查运行环境"}
+
+    def environment_snapshot(self):
+        with self._lock:
+            return dict(self._environment_status)
 
     @property
     def autovisor_path(self) -> str:
@@ -450,6 +455,7 @@ class AutovisorDependencyManager:
                 self.log_system("Autovisor 依赖安装正在进行中，请稍候。")
                 return False
             self.installing = True
+            self._environment_status = {"phase": "preparing", "message": "正在安装依赖，完成后将继续启动任务"}
 
         targets = [package_name for _, package_name, _ in missing_packages]
         if ensure_playwright_browser:
@@ -481,6 +487,11 @@ class AutovisorDependencyManager:
             finally:
                 with self._lock:
                     self.installing = False
+                    self._environment_status = {
+                        "phase": "ready" if success else "failed",
+                        "message": "依赖安装完成" if success else "依赖安装失败，可重试启动",
+                        "detail": error_message[-500:],
+                    }
                 if success:
                     self.schedule(0, self.on_ready)
                 else:
@@ -493,5 +504,12 @@ class AutovisorDependencyManager:
                         lambda message=message: self.show_error("依赖安装失败", message),
                     )
 
-        self.run_async(worker)
+        try:
+            self.run_async(worker)
+        except Exception as exc:
+            with self._lock:
+                self.installing = False
+                self._environment_status = {'phase': 'failed', 'message': '无法开始依赖安装，可重试启动', 'detail': str(exc)[-500:]}
+            self.log_system(f'无法开始依赖安装: {exc}')
+            return False
         return True

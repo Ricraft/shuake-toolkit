@@ -21,6 +21,17 @@ def test_load_merges_saved_values_with_defaults():
         assert service.get()["customFutureKey"] == 3
 
 
+def test_batch_targets_validate_persist_and_preserve_legacy_default(tmp_path):
+    path = tmp_path / 'preferences.json'
+    service = PreferencesService(path)
+    assert service.get()['batchTargets'] == ['yatori', 'autovisor']
+    assert service.update({'batchTargets': ['zhs', 'yatori', 'zhs']})['ok']
+    assert PreferencesService(path).get()['batchTargets'] == ['zhs', 'yatori']
+    assert service.update({'batchTargets': ['unknown']})['ok'] is False
+    assert service.update({'batchTargets': 'zhs'})['ok'] is False
+    assert service.get()['batchTargets'] == ['zhs', 'yatori']
+
+
 def test_damaged_file_falls_back_without_overwriting_source(tmp_path):
     path = tmp_path / "preferences.json"
     path.write_text("{damaged", encoding="utf-8")

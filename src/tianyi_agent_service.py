@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import threading
 import time
@@ -11,6 +12,8 @@ from collections.abc import Callable
 
 from src.course_overlay_service import CourseOverlayError
 from src.course_plan_service import normalize_course_name
+from src.agent_settings_service import AgentSettingsService, SCOPES, sensitive, redact
+from src.agent_intent import recognize, read_only_question
 
 
 PREFERENCE_WHITELIST = (
@@ -22,6 +25,7 @@ PREFERENCE_WHITELIST = (
     "soundEnabled",
     "minimizeToTray",
     "alwaysOnTop",
+    "autoStart", "startMinimized", "rememberGeometry", "autoCleanLogs",
 )
 
 PREFERENCE_LABELS = {
@@ -35,7 +39,7 @@ PREFERENCE_LABELS = {
     "alwaysOnTop": "窗口置顶",
 }
 
-CORE_LABELS = {"yatori": "Yatori", "autovisor": "Autovisor"}
+CORE_LABELS = {"yatori": "Yatori", "autovisor": "Autovisor", "zhs": "ZHS", "questionbank": "题库服务器"}
 
 AGENT_SYSTEM_PROMPT = (
     "你可以调用工具真正操作这个程序。需要读取状态或课程时直接调用只读工具；"
@@ -47,6 +51,9 @@ AGENT_SYSTEM_PROMPT = (
     "系统会自动拉一次 Yatori 账号课程（后台登录，不弹窗）。"
     "如果还没找到，会返回 needs_autovisor_fetch：这时你要先征得用户同意，"
     "再调用 refresh_account_courses（core=autovisor），因为它会真开浏览器。"
+    "\n修改设置前先用 get_settings 查询字段，用 update_settings 按路径局部修改；"
+    "不要臆造字段，不要把 [已隐藏] 当作真实密码或密钥写回。核心支持 Yatori、Autovisor、ZHS，"
+    "以及题库和启动器常规偏好；不能修改内部成就状态或整体替换账号列表。"
 )
 
 
@@ -67,7 +74,7 @@ def _tool(name, description, properties, required=()):
 TOOL_SPECS = [
     _tool(
         "get_status",
-        "查询 Yatori / Autovisor / 题库服务器的当前运行状态。",
+        "查询 Yatori / Autovisor / ZHS / 题库服务器的当前运行状态。",
         {},
     ),
     _tool(
@@ -143,7 +150,7 @@ TOOL_SPECS = [
     ),
     _tool(
         "control_runtime",
-        "启动或停止刷课核心。",
+        "启动或停止刷课核心。start_all 使用软件设置中保存的启动目标，与中控台和自动运行一致；未配置的目标会跳过。",
         {
             "action": {
                 "type": "string",
@@ -151,7 +158,7 @@ TOOL_SPECS = [
             },
             "core": {
                 "type": "string",
-                "enum": ["yatori", "autovisor"],
+                "enum": ["yatori", "autovisor", "zhs", "questionbank"],
                 "description": "action 为 start/stop 时必填。",
             },
         },
@@ -171,7 +178,26 @@ TOOL_SPECS = [
     ),
 ]
 
+TOOL_SPECS.extend([
+    _tool("get_settings", "读取核心或启动器设置及现有字段路径；密码、Cookie 和密钥隐藏。", {
+        "scope": {"type": "string", "enum": list(SCOPES)},
+        "paths": {"type": "array", "items": {"type": "string"}, "description": "只返回指定字段/分组，如 video 或 accounts.0.limit_speed，避免重复读取整份配置。"},
+        "account_index": {"type": "integer", "minimum": 0, "description": "ZHS 账号索引，从 0 开始；其他核心使用设置路径中的账号索引。"},
+    }, ("scope",)),
+    _tool("update_settings", "确认后按路径修改现有设置，保留未修改字段。先用 get_settings 查询。", {
+        "scope": {"type": "string", "enum": list(SCOPES)},
+        "account_index": {"type": "integer", "minimum": 0},
+        "changes": {"type": "array", "minItems": 1, "maxItems": 20, "items": {
+            "type": "object", "properties": {
+                "path": {"type": "string", "description": "例如 accounts.0.limit_speed、video.zhidao_speed、theme、yatoriMaxRuntimeMinutes"},
+                "value": {"description": "原始 JSON 值，类型须与现有字段一致；不整体替换配置/账号数组。"},
+            }, "required": ["path", "value"],
+        }},
+    }, ("scope", "changes")),
+])
+
 WRITE_TOOLS = {
+    "update_settings",
     "start_course",
     "control_runtime",
     "set_preference",
@@ -191,6 +217,7 @@ class TianyiAgentService:
         ai_service=None,
         logger: Callable[[str], None] | None = None,
         clock: Callable[[], float] | None = None,
+        local_routing: bool = True,
     ):
         self.launcher = launcher
         self._ai_service = ai_service
@@ -198,6 +225,9 @@ class TianyiAgentService:
         self._clock = clock or time.time
         self._lock = threading.RLock()
         self._pending: dict[str, dict] = {}
+        self._settings = AgentSettingsService(launcher)
+        self.local_routing = local_routing
+        self._unsupported_tools = {}
 
     def _ai(self):
         if self._ai_service is None:
@@ -209,6 +239,24 @@ class TianyiAgentService:
 
     def tool_specs(self) -> list:
         return copy.deepcopy(TOOL_SPECS)
+
+    def _tools_for(self, text):
+        names = None
+        if any(word in text for word in ('设置', '主题', '深色', '浅色', '暗色', '亮色', '提示音', '声音', '置顶', '通知', '倍速', '时限', '关机', '关掉程序', '关闭程序', '偏好', '日志级别', '背景', '模型', 'key', '开关')):
+            names = {'get_settings', 'update_settings', 'set_preference', 'get_status'}
+        elif any(word in text for word in ('课程', '刷', '学习')):
+            names = {'list_courses', 'find_course', 'start_course', 'refresh_account_courses', 'control_runtime', 'get_status'}
+        elif any(word in text.lower() for word in ('启动', '停止', '运行', '状态', 'yatori', 'autovisor', 'zhs')):
+            names = {'control_runtime', 'get_status'}
+        elif text.strip() in ('你好', '谢谢', '早上好', '晚安'):
+            names = {'get_status'}
+        if names is not None and any(word in text for word in ('启动', '停止', '运行', '暂停', '关闭', '打开', '开启')):
+            names |= {'control_runtime'}
+        if names is not None and any(word in text for word in ('课程', '刷课')):
+            names |= {'list_courses', 'find_course', 'start_course', 'refresh_account_courses'}
+        if read_only_question(text):
+            names = (names or {s['function']['name'] for s in TOOL_SPECS}) - WRITE_TOOLS
+        return [s for s in self.tool_specs() if names is None or s['function']['name'] in names]
 
     @staticmethod
     def _parse_args(raw) -> dict:
@@ -229,6 +277,7 @@ class TianyiAgentService:
         return {
             "yatori_running": bool(running.get("yatori")),
             "autovisor_running": bool(running.get("autovisor")),
+            "zhs_running": bool(running.get("zhs")),
             "practice_running": bool(running.get("practice")),
             "question_bank_running": bool(
                 getattr(question_bank, "running", False)
@@ -286,6 +335,18 @@ class TianyiAgentService:
         }
 
     def _validate(self, name: str, args: dict):
+        if name in ("get_settings", "update_settings"):
+            if args.get('scope') not in SCOPES:
+                return "设置范围无效，请先选择 launcher/yatori/autovisor/zhs/questionbank"
+            index = args.get('account_index', 0)
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                return "账号索引须为从 0 开始的整数"
+            if name == 'update_settings':
+                try:
+                    self._settings.patched(args)
+                except Exception as exc:
+                    return str(exc) if isinstance(exc, ValueError) else "读取设置失败，请检查核心配置是否可用"
+            return None
         if name == "control_runtime":
             action = args.get("action")
             core = args.get("core")
@@ -294,8 +355,10 @@ class TianyiAgentService:
             if action in ("start", "stop") and core not in (
                 "yatori",
                 "autovisor",
+                "zhs",
+                "questionbank",
             ):
-                return "请说明要操作哪个核心（yatori 或 autovisor）"
+                return "请说明要操作 yatori、autovisor、zhs 或 questionbank"
             return None
         if name == "refresh_account_courses":
             core = args.get("core")
@@ -322,6 +385,10 @@ class TianyiAgentService:
         return CORE_LABELS.get(core or "", "") or "自动选择核心"
 
     def _summarize(self, name: str, args: dict) -> str:
+        if name == 'batch':
+            return '依次执行：' + ' → '.join(self._summarize(s['name'], s['args']) for s in args['steps'])
+        if name == 'update_settings':
+            return self._settings.summary(args)
         if name == "start_course":
             course = str(args.get("course") or "").strip()
             detail = [self._core_text(args.get("core"))]
@@ -336,7 +403,7 @@ class TianyiAgentService:
             labels = {
                 "start": f"启动 {core}",
                 "stop": f"停止 {core}",
-                "start_all": "一键启动全部核心",
+                "start_all": "按软件设置中保存的启动目标运行核心，未配置的核心会跳过",
                 "stop_all": "停止全部核心",
             }
             return labels.get(action, str(action))
@@ -398,16 +465,25 @@ class TianyiAgentService:
         action_id = uuid.uuid4().hex
         record = {
             "action": name,
-            "args": dict(args),
+            "args": copy.deepcopy(args),
             "created": self._clock(),
         }
         with self._lock:
             self._prune_locked()
             self._pending[action_id] = record
+        public_args = copy.deepcopy(args)
+        if name == 'update_settings':
+            for change in public_args.get('changes', []):
+                if any(sensitive(part) for part in change.get('path', '').split('.')):
+                    change['value'] = '[已隐藏]'
+                else:
+                    change['value'] = redact(change.get('value'))
+        if name == 'batch':
+            public_args = {'steps': [{'name': s['name'], 'summary': self._summarize(s['name'], s['args'])} for s in args['steps']]}
         return {
             "id": action_id,
             "action": name,
-            "args": dict(args),
+            "args": public_args,
             "summary": self._summarize(name, args),
         }
 
@@ -429,6 +505,14 @@ class TianyiAgentService:
     def _dispatch(self, call: dict) -> dict:
         name = str(call.get("name") or "")
         args = self._parse_args(call.get("arguments"))
+        if name == 'get_settings':
+            problem = self._validate(name, args)
+            if problem:
+                return {"tool": name, "ok": False, "result": {"ok": False, "message": problem}}
+            try:
+                return {"tool": name, "ok": True, "result": self._settings.read(args)}
+            except Exception:
+                return {"tool": name, "ok": False, "result": {"ok": False, "message": "读取设置失败，请检查核心配置是否可用"}}
         if name == "get_status":
             return {"tool": name, "ok": True, "result": self._status()}
         if name == "list_courses":
@@ -451,6 +535,22 @@ class TianyiAgentService:
         }
 
     def _execute(self, name: str, args: dict) -> dict:
+        if name == 'batch':
+            completed = []
+            changed = None
+            for step in args['steps']:
+                try:
+                    result = self._execute(step['name'], step['args'])
+                except Exception:
+                    result = {'ok': False, 'message': '执行失败，请检查配置或日志'}
+                if result.get('settingsChanged'):
+                    changed = 'zhs' if 'zhs' in (changed, result['settingsChanged']) else result['settingsChanged']
+                if not result.get('ok'):
+                    return {'ok': False, 'settingsChanged': changed, 'message': f'已完成 {len(completed)} 步；后续已停止：' + str(result.get('message') or '操作失败'), 'completed': completed}
+                completed.append(self._summarize(step['name'], step['args']))
+            return {'ok': True, 'settingsChanged': changed, 'message': '已依次完成：' + ' → '.join(completed)}
+        if name == 'update_settings':
+            return self._settings.apply(args)
         if name == "start_course":
             try:
                 return self._course_run().start(
@@ -465,19 +565,10 @@ class TianyiAgentService:
         if name == "control_runtime":
             action = args.get("action")
             core = args.get("core") if action in ("start", "stop") else None
+            if core == 'questionbank':
+                action, core = ('start_question_bank' if action == 'start' else 'stop_question_bank'), None
             result = self.launcher.perform_web_action(action, core)
             return result if isinstance(result, dict) else {"ok": bool(result)}
-        if name == "refresh_account_courses":
-            core = args.get("core")
-            if core not in ("yatori", "autovisor"):
-                core = None
-            try:
-                return self._course_run().fetch_catalog(
-                    core,
-                    args.get("account_index") or 0,
-                )
-            except Exception as exc:
-                return {"ok": False, "message": f"拉取账号课程失败: {exc}"}
         if name == "refresh_account_courses":
             core = args.get("core")
             if core not in ("yatori", "autovisor"):
@@ -493,7 +584,10 @@ class TianyiAgentService:
             key = args.get("key")
             value = bool(args.get("value"))
             result = self.launcher.save_web_preference({key: value})
-            return result if isinstance(result, dict) else {"ok": bool(result)}
+            result = result if isinstance(result, dict) else {"ok": bool(result)}
+            if result.get('ok'):
+                result['settingsChanged'] = 'launcher'
+            return result
         return {"ok": False, "message": f"未知操作: {name}"}
 
     def confirm(self, action_id: str) -> dict:
@@ -506,7 +600,10 @@ class TianyiAgentService:
                 "code": "pending_expired",
                 "message": "这条待确认操作已经失效，请重新说一次",
             }
-        result = self._execute(record["action"], record["args"])
+        try:
+            result = self._execute(record["action"], record["args"])
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc) if isinstance(exc, ValueError) else "操作失败，请检查配置和运行日志"}
         result = dict(result) if isinstance(result, dict) else {"ok": bool(result)}
         result.setdefault(
             "summary", self._summarize(record["action"], record["args"])
@@ -523,7 +620,17 @@ class TianyiAgentService:
         return {"ok": True, "cancelled": removed}
 
     def _history_with_agent_prompt(self, messages) -> list:
-        history = [dict(m) for m in messages if isinstance(m, dict)]
+        systems = [str(m.get('content') or '')[:2400] for m in messages if isinstance(m, dict) and m.get('role') == 'system']
+        turns = [dict(role=m['role'], content=str(m.get('content') or '')) for m in messages if isinstance(m, dict) and m.get('role') in ('user', 'assistant')][-8:]
+        budget = 6500
+        kept = []
+        for message in reversed(turns):
+            limit = min(budget, 3000 if not kept else 1000)
+            if limit <= 0: break
+            message['content'] = message['content'][-limit:]
+            budget -= len(message['content'])
+            kept.append(message)
+        history = [{'role': 'system', 'content': systems[0] if systems else ''}] + list(reversed(kept))
         for message in history:
             if str(message.get("role")) == "system":
                 content = str(message.get("content") or "")
@@ -533,6 +640,11 @@ class TianyiAgentService:
         return history
 
     def _fallback(self, config, messages, *, reason: str) -> dict:
+        if any(word in reason.lower() for word in ('不支持工具', 'unsupported tool', 'tools not supported', 'function calling is not supported')):
+            key = hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            with self._lock:
+                self._unsupported_tools = {k: v for k, v in self._unsupported_tools.items() if v > self._clock()}
+                self._unsupported_tools[key] = self._clock() + 300
         self.log(f"[天依] 工具调用不可用，回退到文本指令协议: {reason}")
         return {
             "ok": True,
@@ -543,15 +655,53 @@ class TianyiAgentService:
             "pending": None,
         }
 
+    @staticmethod
+    def _compact_result(value):
+        def trim(item, depth=0):
+            if depth > 8: return '[层级已省略]'
+            if isinstance(item, dict): return {k: trim(v, depth + 1) for k, v in list(item.items())[:60]}
+            if isinstance(item, list):
+                return [trim(v, depth + 1) for v in item[:8]] + ([{'truncatedItems': len(item) - 8}] if len(item) > 8 else [])
+            return item[:600] + '…' if isinstance(item, str) and len(item) > 600 else item
+        result = trim(value)
+        if len(json.dumps(result, ensure_ascii=False)) > 6000:
+            return {'ok': value.get('ok', True), 'truncated': True, 'preview': json.dumps(result, ensure_ascii=False)[:5500], 'message': '内容较多，请用 get_settings 的 paths 查询具体字段。'}
+        return result
+
     def chat(self, config, messages) -> dict:
         history = self._history_with_agent_prompt(messages)
+        text = next((str(m.get('content') or '') for m in reversed(messages) if isinstance(m, dict) and m.get('role') == 'user'), '')
+        if len(text) > 3000:
+            return {'ok': True, 'mode': 'tools', 'reply': '这条消息过长，请拆分为较短的设置或控制请求。', 'actions': [], 'pending': None}
+        local = recognize(text) if self.local_routing else None
+        if local:
+            if local.get('reply'):
+                return {'ok': True, 'mode': 'tools', 'reply': local['reply'], 'pending': None, 'actions': []}
+            if local.get('read'):
+                status = self._status()
+                reply = '；'.join(label + ('：运行中' if status[key] else '：未启动') for label, key in [('Yatori', 'yatori_running'), ('Autovisor', 'autovisor_running'), ('ZHS', 'zhs_running'), ('题库', 'question_bank_running')])
+                return {'ok': True, 'mode': 'tools', 'reply': reply, 'pending': None, 'actions': [status]}
+            steps = local['steps']
+            for step in steps:
+                problem = self._validate(step['name'], step['args'])
+                if problem: return {'ok': True, 'mode': 'tools', 'reply': problem, 'actions': [], 'pending': None}
+            pending = self._make_pending(steps[0]['name'], steps[0]['args']) if len(steps) == 1 else self._make_pending('batch', {'steps': steps})
+            return {'ok': True, 'mode': 'tools', 'reply': '请确认：' + pending['summary'], 'actions': [], 'pending': pending}
+        tools = self._tools_for(text)
+        cache_key = hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        with self._lock:
+            unsupported = self._unsupported_tools.get(cache_key, 0) > self._clock()
+        if unsupported:
+            return {'ok': True, 'mode': 'fallback', 'fallbackReason': '此模型已确认暂不支持工具调用，跳过重复探测', 'reply': '', 'actions': [], 'pending': None}
+        allowed = {s['function']['name'] for s in tools}
+        memo = {}
         actions = []
         reply = ""
         for round_index in range(self.MAX_ROUNDS):
             result = self._ai().chat_with_tools(
                 config,
                 history,
-                self.tool_specs(),
+                tools,
             )
             if not result.get("ok"):
                 if round_index == 0:
@@ -579,6 +729,19 @@ class TianyiAgentService:
                     "pending": None,
                 }
 
+            writes = [c for c in tool_calls if c.get('name') in WRITE_TOOLS]
+            if writes:
+                steps = [{'name': c['name'], 'args': self._parse_args(c.get('arguments'))} for c in writes]
+                problem = '一次最多确认 6 步操作' if len(steps) > 6 else None
+                if not problem:
+                    for step in steps:
+                        problem = self._validate(step['name'], step['args'])
+                        if problem: break
+                if any(s['name'] not in allowed for s in steps): problem = '这次是询问或工具范围不明确，我暂未执行。请明确目标和要修改的内容。'
+                if problem:
+                    return {'ok': True, 'mode': 'tools', 'reply': problem, 'actions': actions, 'pending': None}
+                pending = self._make_pending(steps[0]['name'], steps[0]['args']) if len(steps) == 1 else self._make_pending('batch', {'steps': steps})
+                return {'ok': True, 'mode': 'tools', 'reply': '请确认：' + pending['summary'], 'actions': actions, 'pending': pending}
             assistant_message = {"role": "assistant", "content": reply}
             serialized = []
             for index, call in enumerate(tool_calls):
@@ -600,7 +763,10 @@ class TianyiAgentService:
             history.append(assistant_message)
 
             for index, call in enumerate(tool_calls):
-                outcome = self._dispatch(call)
+                signature = json.dumps([call.get('name'), self._parse_args(call.get('arguments'))], sort_keys=True, ensure_ascii=False)
+                if signature not in memo:
+                    memo[signature] = self._dispatch(call) if call.get('name') in allowed else {'ok': False, 'result': {'message': '此工具不在本轮请求范围内'}}
+                outcome = copy.deepcopy(memo[signature])
                 if outcome.get("pending"):
                     pending = outcome["pending"]
                     text = reply.strip()
@@ -620,7 +786,7 @@ class TianyiAgentService:
                         "role": "tool",
                         "tool_call_id": call_id,
                         "content": json.dumps(
-                            outcome.get("result") or {},
+                            self._compact_result(outcome.get("result") or {}),
                             ensure_ascii=False,
                         ),
                     }

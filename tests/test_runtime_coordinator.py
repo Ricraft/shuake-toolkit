@@ -269,3 +269,37 @@ def test_zhs_clean_run_triggers_auto_shutdown():
 
     assert launcher.shutdowns == [True]
     assert launcher._last_runtime_event is None
+
+
+def test_batch_uses_saved_targets_and_only_zhs_does_not_start_questionbank():
+    launcher = make_runtime_launcher()
+    calls = []
+    launcher.get_web_preferences = lambda: {"batchTargets": ["zhs"]}
+    launcher.question_bank = SimpleNamespace(available=False, running=False)
+    launcher._batch_start_skip_reason = lambda core: ""
+    launcher.start_zhs = lambda: calls.append('zhs') or True
+    result = launcher.coordinator.start_all()
+    assert result['ok'] and result['submitted'] == ['zhs']
+    assert calls == ['zhs']
+
+
+def test_unconfigured_selected_core_is_skipped_without_blocking_other_targets():
+    launcher = make_runtime_launcher()
+    calls = []
+    launcher.get_web_preferences = lambda: {"batchTargets": ["yatori", "zhs"]}
+    launcher.question_bank = SimpleNamespace(available=False, running=False)
+    launcher._batch_start_skip_reason = lambda core: "账号未配置" if core == 'yatori' else ''
+    launcher.start_yatori = lambda: calls.append('yatori') or True
+    launcher.start_zhs = lambda: calls.append('zhs') or True
+    result = launcher.coordinator.start_all()
+    assert result['ok'] and calls == ['zhs']
+    assert result['skipped'] == [{'core': 'yatori', 'message': '账号未配置'}]
+    assert '跳过 Yatori' in result['message']
+
+
+def test_no_batch_targets_never_starts_questionbank_or_cores():
+    launcher = make_runtime_launcher()
+    launcher.get_web_preferences = lambda: {"batchTargets": []}
+    result = launcher.coordinator.start_all()
+    assert result['ok'] is False and result['submitted'] == []
+    assert '未选择' in result['message']

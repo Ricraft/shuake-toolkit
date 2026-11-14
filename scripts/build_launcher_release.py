@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -31,6 +32,7 @@ import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+COMPAT_PAYLOAD = "src/legacy-zhs-payload.zip"
 
 # Paths (relative to the project root) that are part of a launcher update.
 # bootstrap.py / requirements-zhs.txt / zhs 随启动器一起更新：应用更新脚本在替换后
@@ -86,6 +88,7 @@ REQUIRED_FILES = (
     "requirements-zhs.txt",
     "src/web_action_service.py",
     "src/zhs_service.py",
+    "src/launcher_migration.py",
     "web/app.js",
     "web/现代启动器_UI_预览.html",
     "zhs/pyproject.toml",
@@ -129,7 +132,7 @@ def iter_payload(root: Path):
             for name in sorted(filenames):
                 path = Path(dirpath) / name
                 arcname = path.relative_to(root).as_posix()
-                if path.suffix in EXCLUDED_SUFFIXES or is_private_payload(arcname):
+                if arcname == COMPAT_PAYLOAD or path.suffix in EXCLUDED_SUFFIXES or is_private_payload(arcname):
                     continue
                 yield path, arcname
 
@@ -160,6 +163,15 @@ def build(version: str, out_dir: Path, *, require_version_match: bool = False) -
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path, arcname in payload:
             zf.write(path, arcname)
+        # Old clients copy only src/web/entry/requirements. Carry the missing
+        # files inside src too, covered by their existing fileList validation.
+        compatibility = io.BytesIO()
+        with zipfile.ZipFile(compatibility, "w", zipfile.ZIP_DEFLATED) as nested:
+            for path, arcname in payload:
+                if arcname in ("bootstrap.py", "requirements-zhs.txt") or arcname.startswith("zhs/"):
+                    nested.write(path, arcname)
+        zf.writestr(COMPAT_PAYLOAD, compatibility.getvalue())
+    names.add(COMPAT_PAYLOAD)
 
     digest = hashlib.sha256()
     with archive_path.open("rb") as handle:
@@ -178,7 +190,7 @@ def build(version: str, out_dir: Path, *, require_version_match: bool = False) -
         "asset": asset_name,
         "size": archive_path.stat().st_size,
         "sha256": digest.hexdigest(),
-        "files": len(payload),
+        "files": len(names),
         "legacyFiles": len(legacy_names),
         "fileList": legacy_names,
         "fullFileList": sorted(names),

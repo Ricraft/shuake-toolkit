@@ -13,6 +13,7 @@ import sys
 import re
 import webbrowser
 from datetime import datetime
+from contextlib import nullcontext
 from urllib.parse import urlsplit
 
 from src.ai_service import AIConnectivityService
@@ -104,7 +105,7 @@ class UnifiedLauncher:
     AUTOVISOR_SPEED_OPTIONS = ('1.0', '1.25', '1.5', '1.8')
     YATORI_DISPLAY_VERSION = "v2.6.2-beta.8"
     AUTOVISOR_DISPLAY_VERSION = "20260424 修复版"
-    LAUNCHER_VERSION = "v1.7.2"
+    LAUNCHER_VERSION = "v1.7.3"
     AUTOVISOR_UPDATE_CONTACT_MESSAGE = "请联系开发者进行核心更新。"
     ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     PROGRESS_LINE_RE = re.compile(r"^(?P<desc>[^|%\r\n]+?)\s*\|.*?\|\s*(?P<percent>\d+%)\s*(?P<suffix>.*)$")
@@ -292,6 +293,8 @@ class UnifiedLauncher:
         """环境缺失时才准备；已配置过 ZHS 的用户才自动下载依赖。"""
         if getattr(self, "_zhs_runtime_prepare_running", False):
             return False
+        if getattr(self, 'running', {}).get('zhs') or getattr(self, 'starting', {}).get('zhs'):
+            return False
         if not self._zhs_runtime_sources_ready():
             return False
         if force:
@@ -316,15 +319,24 @@ class UnifiedLauncher:
 
     def _request_zhs_runtime_prepare(self, *, force=False):
         """后台准备 ZHS 环境；返回是否真的启动了准备工作。"""
-        if not self._zhs_runtime_prepare_allowed(force=force):
-            return False
-        self._zhs_runtime_prepare_running = True
-        self.log_system("[ZHS] 运行环境缺失，正在后台准备（首次可能需要几分钟）...")
-        threading.Thread(
-            target=self._zhs_runtime_prepare_worker,
-            name="zhs-runtime-prepare",
-            daemon=True,
-        ).start()
+        updates = getattr(self, 'update_controller', None)
+        guard = updates.core_start_guard('zhs') if updates else nullcontext(True)
+        with guard as allowed:
+            if not allowed or not self._zhs_runtime_prepare_allowed(force=force):
+                return False
+            self._zhs_runtime_prepare_running = True
+            self._zhs_environment_status = {'phase': 'preparing', 'message': '正在准备 ZHS 环境，请等待；完成后再点击启动核心'}
+            self.log_system("[ZHS] 运行环境缺失，正在后台准备（首次可能需要几分钟）...")
+            try:
+                threading.Thread(
+                    target=self._zhs_runtime_prepare_worker,
+                    name="zhs-runtime-prepare",
+                    daemon=True,
+                ).start()
+            except Exception as exc:
+                self._zhs_runtime_prepare_running = False
+                self._zhs_environment_status = {'phase': 'failed', 'message': '无法开始准备环境', 'detail': str(exc)[-500:]}
+                raise
         return True
 
     def _zhs_runtime_prepare_worker(self):
@@ -337,7 +349,7 @@ class UnifiedLauncher:
             with open(marker, "w", encoding="utf-8") as handle:
                 handle.write(datetime.now().isoformat(timespec="seconds"))
             completed = subprocess.run(
-                [sys.executable, "-m", "src.zhs_runtime_prepare", "--quiet"],
+                [sys.executable, "-m", "src.zhs_runtime_prepare"],
                 cwd=base,
                 capture_output=True,
                 timeout=self.ZHS_PREPARE_TIMEOUT_SECONDS,
@@ -347,12 +359,24 @@ class UnifiedLauncher:
             ok = getattr(completed, "returncode", 1) == 0
             if not ok:
                 raw = completed.stderr or completed.stdout or b""
-                detail = raw.decode("utf-8", "ignore").strip()[:300]
+                detail = raw.decode("utf-8", "ignore").strip()[-500:]
+            else:
+                environment = self._get_zhs_service().environment_state(refresh=True)
+                ok = bool(environment.get('ready'))
+                if not ok:
+                    detail = environment.get('message') or '依赖安装后环境检查仍未通过'
         except subprocess.TimeoutExpired:
+            ok = False
             detail = "准备超时（超过 %d 分钟）" % (self.ZHS_PREPARE_TIMEOUT_SECONDS // 60)
         except Exception as exc:
+            ok = False
             detail = f"{type(exc).__name__}: {exc}"
         finally:
+            self._zhs_environment_status = {
+                'phase': 'ready' if ok else 'failed',
+                'message': 'ZHS 环境已就绪，可以启动核心' if ok else 'ZHS 环境准备失败，请重试',
+                'detail': detail,
+            }
             self._zhs_runtime_prepare_running = False
         if ok:
             self.log_system("[ZHS] 运行环境已就绪，可以启动 ZHS 核心")
@@ -360,7 +384,7 @@ class UnifiedLauncher:
             self.log_system(
                 "[ZHS] 运行环境准备失败："
                 + (detail or "未知错误")
-                + "；可手动运行 bootstrap.py --install 重试"
+                + "；请在 ZHS 核心卡片点击重试准备环境"
             )
 
     def _auto_prepare_zhs_runtime(self):
@@ -571,11 +595,16 @@ class UnifiedLauncher:
         missing_packages,
         ensure_playwright_browser=False,
     ):
-        return self._get_autovisor_dependency_manager().install_async(
-            python_exe,
-            missing_packages,
-            ensure_playwright_browser=ensure_playwright_browser,
-        )
+        updates = getattr(self, 'update_controller', None)
+        guard = updates.core_start_guard('autovisor') if updates else nullcontext(True)
+        with guard as allowed:
+            if not allowed:
+                return False
+            return self._get_autovisor_dependency_manager().install_async(
+                python_exe,
+                missing_packages,
+                ensure_playwright_browser=ensure_playwright_browser,
+            )
 
     def _default_yatori_user(self, index=None):
         return ConfigService.default_yatori_user(index)
@@ -668,6 +697,7 @@ class UnifiedLauncher:
 
     def auto_check_cores(self):
         """自动检查核心安装情况和更新"""
+        self._get_launcher_update_service().check_startup_async()
         if not self.core_manager:
             return
         
@@ -679,6 +709,7 @@ class UnifiedLauncher:
         else:
             # Yatori 已安装，检查更新
             self.check_yatori_update_async()
+        self.update_controller.check_zhs_async(explicit=False)
 
     def __init__(self):
         """Initialize the WebView-backed launcher state."""
@@ -1482,7 +1513,14 @@ class UnifiedLauncher:
         return {'ok': True, 'message': 'ZHS 配置已保存', 'settings': saved}
 
     def start_zhs_login_from_web(self, account_index=0):
-        return self._get_zhs_service().start_login(account_index)
+        service = self._get_zhs_service()
+        environment = service.environment_state(refresh=True)
+        if not environment.get('ready'):
+            requested = self._request_zhs_runtime_prepare(force=True)
+            if requested or getattr(self, '_zhs_runtime_prepare_running', False):
+                return {'ok': False, 'preparing': True, 'message': 'ZHS 运行环境正在后台准备，完成后请重新点击扫码登录。'}
+            return {'ok': False, 'message': environment.get('message') or 'ZHS 运行环境不可用'}
+        return service.start_login(account_index)
 
     def cancel_zhs_login_from_web(self, account_index=0):
         return self._get_zhs_service().cancel_login(account_index)
@@ -1697,6 +1735,9 @@ class UnifiedLauncher:
     def start_all(self):
         return self._get_runtime_coordinator().start_all()
 
+    def _batch_start_skip_reason(self, core):
+        return self._get_core_launch_service().batch_skip_reason(core)
+
     def stop_all(self):
         """停止所有脚本"""
         self.log_system("正在停止所有运行中的脚本...")
@@ -1706,6 +1747,7 @@ class UnifiedLauncher:
         self.stop_yatori()
         self.stop_autovisor()
         self.stop_practice_mode()
+        self.stop_zhs()
         return {'ok': True}
 
     def clear_all_logs(self):
@@ -1831,14 +1873,22 @@ class UnifiedLauncher:
             # 手动退出、再手动运行「应用更新.cmd」。有核心任务在跑时等到退出。
             self._pending_launcher_update = result
             if self._launcher_update_cores_running():
-                self.log_system("当前有核心任务在运行：更新将在退出启动器时自动应用并重启。")
+                self.log_system("当前有核心任务在运行或依赖正在安装：更新将在任务结束后退出启动器时自动应用并重启。")
                 return
             self._apply_launcher_update_and_exit()
             return
         self._show_info("统一启动器更新", message or "统一启动器更新已就绪")
 
+    def _background_install_busy(self):
+        return bool(
+            getattr(getattr(self, 'update_controller', None), 'installing', False)
+            or getattr(getattr(self, '_launcher_update_service', None), 'installing', False)
+            or getattr(getattr(self, 'autovisor_dependencies', None), 'installing', False)
+            or getattr(self, '_zhs_runtime_prepare_running', False)
+        )
+
     def _launcher_update_cores_running(self):
-        return any(
+        return self._background_install_busy() or any(
             self.running.get(name) or self.starting.get(name)
             for name in ('yatori', 'autovisor', 'practice', 'zhs')
         )
@@ -1868,7 +1918,8 @@ class UnifiedLauncher:
     def _apply_launcher_update_and_exit(self):
         if not self._spawn_pending_launcher_update():
             return False
-        self._after(500, lambda: self.on_closing(confirmed=True))
+        # Let the 1500 ms Web polling cycle render the ready state before exit.
+        self._after(1800, lambda: self.on_closing(confirmed=True))
         return True
 
     def _get_launcher_update_service(self):
@@ -1900,12 +1951,19 @@ class UnifiedLauncher:
             self._minimize_main_window()
             return
 
+        if self._background_install_busy():
+            message = "正在安装核心、准备依赖或下载启动器更新，请等待当前操作完成后再退出。"
+            self.log_system(message)
+            self._show_warning("暂时无法退出", message)
+            return
+
         if self.web_window and not confirmed:
             if self._request_web_exit_confirmation():
                 return
 
         core_task_running = any(
-            self.running.get(name) for name in ('yatori', 'autovisor', 'practice')
+            self.running.get(name) or getattr(self, 'starting', {}).get(name)
+            for name in ('yatori', 'autovisor', 'practice', 'zhs')
         )
         if core_task_running:
             if not confirmed:
@@ -1920,6 +1978,9 @@ class UnifiedLauncher:
             if course_service is not None:
                 course_service.stop_active_fetch()
         self.stop_question_bank()
+        zhs_service = getattr(self, '_zhs_service', None)
+        if zhs_service is not None:
+            zhs_service.shutdown()
         # 有核心任务运行时会推迟到这里：退出前启动更新脚本，由脚本接管重启。
         if getattr(self, '_pending_launcher_update', None):
             self._spawn_pending_launcher_update()

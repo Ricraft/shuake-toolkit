@@ -1,12 +1,14 @@
 # 统一启动器项目说明
 
+当前启动器版本：**v1.7.3**。更新内容见 [v1.7.3 发布说明](docs/releases/v1.7.3.md)。
+
 本仓库由四个边界不同的部分组成：统一启动器、自研的 Autovisor Python 核心、随包分发的 Yatori 第三方核心，以及以「零补丁」方式内置的 ZHS 第三方源码核心。运行数据、账号配置、日志和二进制依赖不属于业务源码。
 
 ## 目录职责
 
 ```text
 .
-├─ 统一启动器.py              # 仅 WebView 的桌面应用组合入口
+├─ 统一启动器.py              # WebView 桌面入口、服务门面与生命周期
 ├─ bootstrap.py               # 一键引导：venv / 依赖 / Playwright / ZHS 环境
 ├─ requirements-zhs.txt       # ZHS 独立环境依赖（由 zhs/pyproject.toml 自动生成）
 ├─ src/                       # 启动器后端、题库服务、更新与通用基础设施
@@ -33,7 +35,7 @@
 │  ├─ modules/                # 浏览器自动化、答题、配置及运行器
 │  ├─ runtime_deps/           # 自动生成/分发的二进制依赖，不作为源码维护
 │  ├─ web/                    # 可选 FastAPI Dashboard（仍为实验性）
-│  └─ tests/                  # Dashboard API 测试
+│  └─ tests/                  # 课程流程、配置、入口、Dashboard 等核心测试
 ├─ Yatori/                    # 第三方二进制核心及其资产，按供应商包管理
 ├─ zhs/                       # ZHS 上游源码的零补丁副本（GPL-3.0，独立 venv）
 ├─ scripts/                   # 安装、诊断、课程数据与 update_zhs.py 辅助脚本
@@ -139,7 +141,9 @@ ZHS 核心不在启动器进程中运行，而是由 `src/core_launch_service.py
 
 账号密码、API Key、Cookie、数据库和日志均为本地敏感运行数据；请勿提交或对外分发。请仅在平台规则和授权范围内使用自动化功能。
 
-当前实现率、已确认缺陷及后续拆分顺序见 [代码审查报告](docs/CODE_AUDIT.md)；
+当前架构、开发操作与结构精简建议见 [开发文档](docs/开发文档.md)（结构评估在 §2.6）；
+当前功能边界、验证证据与后续优先级见 [功能完整性评估](docs/功能完整性评估.md)；
+历史实现率估算、修复与验证记录见 [代码审查报告](docs/CODE_AUDIT.md)，其中测试数字和站点状态不是当前保证；
 四条更新通道、ZHS 升级步骤与依赖清单校验见 [更新指南](docs/更新指南.md)。
 
 ## 新用户一键启动
@@ -147,8 +151,12 @@ ZHS 核心不在启动器进程中运行，而是由 `src/core_launch_service.py
 从 GitHub Release 下载 `shuake-toolkit-<version>.zip`，解压后双击：
 
 ```text
-启动依赖.cmd
+统一启动器.exe
 ```
+
+EXE 带应用图标，显示启动准备窗口与日志，并自动调用同目录的 `bootstrap.py`。
+请先解压完整运行包再启动，保留包内其他文件；它仍需要本机 Python，未把全部运行环境打进单个 EXE。
+`启动依赖.cmd` 保留为排障备用入口。
 
 首次启动会自动：
 

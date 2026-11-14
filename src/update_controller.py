@@ -7,6 +7,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 
 
 def _empty_install_progress() -> dict:
@@ -137,9 +138,27 @@ class UpdateController:
         self._lock = threading.RLock()
         self._install_progress = _empty_install_progress()
 
+    @contextmanager
+    def core_start_guard(self, core: str):
+        """Serialize a start reservation against updates of the same core."""
+        target = "autovisor" if core == "practice" else core
+        with self._lock:
+            yield not (self.installing and self.installing_core == target)
+
     # ------------------------------------------------------------------ #
     # 安装进度（供 Web 端下载进度条轮询）
     # ------------------------------------------------------------------ #
+    def available_updates_snapshot(self) -> dict:
+        """Only installed cores with a newer candidate get a badge."""
+        with self._lock:
+            return {
+                core: {
+                    "hasUpdate": bool((info or {}).get("installed") and (info or {}).get("has_update")),
+                    "latestVersion": str(((info or {}).get("info") or {}).get("version") or ""),
+                }
+                for core, info in (("yatori", self.yatori_update_info), ("zhs", self.zhs_update_info))
+            }
+
     def _update_install_progress(self, **fields) -> None:
         with self._lock:
             self._install_progress.update(fields)
@@ -524,7 +543,7 @@ class UpdateController:
     # ------------------------------------------------------------------ #
     # ZHS
     # ------------------------------------------------------------------ #
-    def check_zhs_async(self) -> bool:
+    def check_zhs_async(self, *, explicit=True) -> bool:
         """后台检查 ZHS 版本（结果写入日志，不弹原生对话框）。"""
         if not self.core_manager:
             self.show_error("提示", "核心管理器初始化失败，无法检查版本。")
@@ -550,10 +569,12 @@ class UpdateController:
                     self.zhs_checking = False
                 if error:
                     self.log(f"ZHS 版本检查失败: {error}")
-                    self.show_error("ZHS 版本", f"检查版本失败：\n{error}")
+                    if explicit:
+                        self.show_error("ZHS 版本", f"检查版本失败：\n{error}")
                 elif not result:
                     self.log("ZHS 版本检查失败: 未获取到版本信息")
-                    self.show_error("ZHS 版本", "未能获取最新版本信息，请稍后重试。")
+                    if explicit:
+                        self.show_error("ZHS 版本", "未能获取最新版本信息，请稍后重试。")
                 else:
                     self.zhs_update_info = result
                     latest = (result.get("info") or {}).get("version", "未知")
@@ -671,10 +692,6 @@ class UpdateController:
         if not self.core_manager:
             self.show_error("系统错误", "核心管理器初始化失败")
             return False
-        if self.is_core_running(core):
-            self.show_warning(f"{label} 更新", f"请先停止 {label}，再执行核心更新。")
-            return False
-
         cached = {
             "yatori": self.yatori_update_info,
             "autovisor": self.autovisor_update_info,
@@ -686,6 +703,9 @@ class UpdateController:
             return False
 
         with self._lock:
+            if self.is_core_running(core):
+                self.show_warning(f"{label} 更新", f"{label} 正在运行或准备中，请停止任务并等待准备完成后再更新。")
+                return False
             if (
                 self.installing
                 or self.yatori_checking

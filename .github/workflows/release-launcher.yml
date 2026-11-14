@@ -17,7 +17,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: '1'
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,13 +43,31 @@ jobs:
           echo "value=${value}" >> "$GITHUB_OUTPUT"
           echo "Building for ${value}"
 
-      - name: Verify about-page changelog contract
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install regression dependencies
+        run: python -m pip install --quiet -r requirements-dev.txt
+
+      # Includes bootstrap, old-version migrations, both builders, native EXE,
+      # update/rollback, configuration transactions and Agent confirmations.
+      - name: Run complete Windows regression suite
         run: |
-          python -m pip install --quiet pytest
-          python -m pytest tests/test_about_changelog.py -q
+          python -m pytest -q --basetemp .runtime/pytest-release \
+            --junitxml=.runtime/test-results/launcher-release.xml
 
       - name: JavaScript syntax check
         run: node --check web/app.js
+
+      - name: Upload regression report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-regression-report
+          path: .runtime/test-results/launcher-release.xml
+          if-no-files-found: ignore
 
       # Builds launcher-<version>.zip + launcher-manifest.json and fails when the
       # tag does not match LAUNCHER_VERSION in 统一启动器.py.

@@ -1501,6 +1501,21 @@ select.input-field option {
     margin-bottom: 0.125rem;
 }
 
+.core-title { display: flex; width: fit-content; align-items: baseline; gap: 0.375rem; }
+.core-update-badge {
+    position: relative;
+    top: -0.4em;
+    display: inline-flex;
+    padding: 0.15rem 0.35rem;
+    border-radius: 0.4rem;
+    background: var(--accent, #199cf0);
+    color: #fff;
+    font: 700 0.55rem/1.1 system-ui, sans-serif;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+.core-update-badge[hidden] { display: none; }
+
 .core-info span {
     font-size: 0.6875rem;
     color: var(--text-muted);
@@ -1519,6 +1534,8 @@ select.input-field option {
     gap: 0.5rem;
     flex-wrap: wrap;
 }
+.core-actions > .btn { flex-shrink: 0; }
+.core-actions > .btn-primary { flex-basis: 120px; }
 
 /* Autovisor 运行活动面板 */
 .runtime-activity {
@@ -2730,6 +2747,23 @@ a.contributor-card:focus-visible .contributor-link-icon { opacity: 1; }
     pointer-events: none;
     transition: opacity 0.3s ease;
 }
+
+.core-environment {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+.core-environment-content { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.core-environment small { display: block; white-space: pre-wrap; margin-top: 0.25rem; }
+.core-environment[data-phase="failed"] { color: var(--danger); }
+.core-environment [hidden] { display: none; }
+#launcher-update-result[data-status="success"] { border-color: var(--success); }
+#launcher-update-result:not([data-status="success"]) { border-color: var(--warning); }
+#launcher-update-result-detail { overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .modal-overlay.active {
     opacity: 1;

@@ -80,6 +80,25 @@ class WebStateService:
     def _fallback(value):
         return value() if callable(value) else value
 
+    def _core_environment_snapshot(self, zhs_state, running, installed, dependency_installing):
+        launcher = self.launcher
+        environment = zhs_state.get('environment') or {}
+        zhs = dict(getattr(launcher, '_zhs_environment_status', {}) or {})
+        if getattr(launcher, '_zhs_runtime_prepare_running', False):
+            zhs = {'phase': 'preparing', 'message': '正在准备 ZHS 环境，完成后再点击启动核心'}
+        elif environment.get('ready'):
+            zhs = {'phase': 'ready', 'message': 'ZHS 环境已就绪'}
+        elif not zhs:
+            zhs = {'phase': 'missing', 'message': environment.get('message') or 'ZHS 独立环境尚未准备'}
+        manager = getattr(launcher, 'autovisor_dependencies', None)
+        snapshot = getattr(manager, 'environment_snapshot', None)
+        autovisor = snapshot() if callable(snapshot) else {'phase': 'unchecked', 'message': '首次启动时检查运行环境'}
+        if dependency_installing:
+            autovisor = {'phase': 'preparing', 'message': '正在安装依赖，完成后将继续启动任务'}
+        elif running.get('autovisor'):
+            autovisor = {'phase': 'ready', 'message': '运行环境已就绪'}
+        return {'zhs': zhs, 'autovisor': autovisor}
+
     def _report_issue(self, component: str, exc: Exception) -> None:
         now = self.clock()
         with self._error_log_lock:
@@ -310,6 +329,26 @@ class WebStateService:
         )
         return {
             "backend_ready": True,
+            "core_environment": self._safe(
+                "核心环境状态", lambda: self._core_environment_snapshot(zhs_state, running, installed, dependency_installing),
+                dict, issues, validator=lambda value: isinstance(value, dict),
+            ),
+            "last_launcher_update": self._safe(
+                "启动器更新结果", lambda: launcher._launcher_update_service.last_result_snapshot(),
+                dict, issues, validator=lambda value: isinstance(value, dict),
+            ) if callable(getattr(getattr(launcher, "_launcher_update_service", None), "last_result_snapshot", None)) else {},
+            "launcher_update": self._safe(
+                "启动器更新进度", lambda: launcher._launcher_update_service.install_progress_snapshot(),
+                dict, issues, validator=lambda value: isinstance(value, dict),
+            ) if callable(getattr(getattr(launcher, "_launcher_update_service", None), "install_progress_snapshot", None)) else {},
+            "available_updates": self._safe(
+                "核心可用更新", lambda: update_controller.available_updates_snapshot(),
+                dict, issues, validator=lambda value: isinstance(value, dict),
+            ) if callable(getattr(update_controller, "available_updates_snapshot", None)) else {},
+            "startup_launcher_update": self._safe(
+                "启动器启动更新", lambda: launcher._launcher_update_service.startup_update_snapshot(),
+                dict, issues, validator=lambda value: isinstance(value, dict),
+            ) if getattr(launcher, "_launcher_update_service", None) is not None else {},
             "yatori_running": bool(running.get("yatori")),
             "autovisor_running": bool(running.get("autovisor")),
             "zhs_running": bool(running.get("zhs")),

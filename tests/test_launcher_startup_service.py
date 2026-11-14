@@ -149,6 +149,15 @@ def test_compose_builds_services_in_order_and_preserves_callbacks():
     assert update_core == "core-manager"
     assert update_kwargs["is_core_running"]("yatori") is True
     assert update_kwargs["is_core_running"]("autovisor") is False
+    launcher.starting = {"zhs": True, "practice": True}
+    assert update_kwargs["is_core_running"]("zhs") is True
+    assert update_kwargs["is_core_running"]("autovisor") is True
+    launcher.starting.clear()
+    launcher._zhs_runtime_prepare_running = True
+    assert update_kwargs["is_core_running"]("zhs") is True
+    launcher._zhs_runtime_prepare_running = False
+    launcher.running["practice"] = True
+    assert update_kwargs["is_core_running"]("autovisor") is True
     assert update_kwargs["schedule"] == launcher._after
 
 

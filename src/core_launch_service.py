@@ -16,6 +16,31 @@ class CoreLaunchService:
     def __init__(self, launcher):
         self.launcher = launcher
 
+    def batch_skip_reason(self, core: str) -> str:
+        """Read saved configuration without launching a login or installing anything."""
+        launcher = self.launcher
+        if core == "yatori":
+            config = launcher._load_yatori_config_data()
+            error = launcher._validate_yatori_runtime(config.get("users") or [])
+            if error:
+                return error
+            if not launcher._get_yatori_command()[0]:
+                return "Yatori 核心尚未安装"
+        elif core == "autovisor":
+            config = launcher._load_autovisor_config_data()
+            if not launcher._get_autovisor_entry_path(bool(config.get("multi_mode")))[0]:
+                return "Autovisor 核心尚未安装完整"
+            error = launcher._validate_autovisor_runtime(
+                config.get("accounts") or [], bool(config.get("multi_mode")),
+            )
+            if error:
+                return error
+        elif core == "zhs":
+            session = launcher._get_zhs_service().session_state(verify=False)
+            if not session.get("logged_in"):
+                return "ZHS 尚未登录或登录已失效，请先扫码登录"
+        return ""
+
     def start_yatori(self) -> bool:
         launcher = self.launcher
         if launcher.running.get("yatori") or launcher.starting.get("yatori"):

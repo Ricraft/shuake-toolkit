@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,32 @@ def make_service(tmp_path):
         log=log,
     )
     return ZhsService(launcher), logs
+
+
+def test_shutdown_stops_all_qr_workers_and_preserves_saved_credentials(tmp_path, monkeypatch):
+    service, _ = make_service(tmp_path)
+    service.ensure_account_dirs(1)
+    cookie = Path(service.cookies_path(1))
+    cookie.write_text("preserve", encoding="utf-8")
+    stopped = []
+    monkeypatch.setattr(service, "_terminate", stopped.append)
+    for account in (1, 2):
+        service._login_entry(account).update(status="waiting", process=f"process-{account}")
+    service.shutdown()
+    assert stopped == ["process-1", "process-2"]
+    assert all(entry["cancelled"] and entry["status"] == "cancelled" for entry in service._logins.values())
+    assert cookie.read_text(encoding="utf-8") == "preserve"
+    assert service.start_login()["ok"] is False
+
+
+def test_shutdown_prevents_a_queued_login_worker_from_spawning(tmp_path, monkeypatch):
+    service, _ = make_service(tmp_path)
+    entry = service._login_entry(1)
+    entry["status"] = "starting"
+    service.shutdown()
+    monkeypatch.setattr("src.zhs_service.subprocess.Popen", lambda *a, **kw: pytest.fail("worker must not spawn after exit"))
+    service._login_worker(1)
+    assert entry["status"] == "cancelled"
 
 
 def zhidao(course_id, name="课程"):
